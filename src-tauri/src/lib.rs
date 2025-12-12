@@ -224,19 +224,28 @@ async fn send_message(
     let model_bg = model.clone();
     let conv_id_bg = conversation_id.clone();
 
-    // Save User Message & Capture Query
+    // Save User or Tool Message & Capture Query
     let mut query = String::new();
     if let Some(last) = messages.last() {
-        if last.role == "user" {
-            query = last.content.clone().unwrap_or_default();
+        if last.role == "user" || last.role == "tool" {
+            if last.role == "user" {
+                query = last.content.clone().unwrap_or_default();
+            }
+
             let lib = state.librarian.lock().await;
+            let tool_calls_json = if let Some(tc) = &last.tool_calls {
+                serde_json::to_string(tc).ok()
+            } else {
+                None
+            };
+
             // Save full message
             let _ = lib.save_full_message(
                 &conversation_id,
-                "user",
+                &last.role,
                 last.content.as_deref(),
-                None,
-                None,
+                tool_calls_json.as_deref(),
+                last.tool_call_id.as_deref(),
             );
         }
     }
@@ -719,6 +728,16 @@ async fn attempt_pruning(
 }
 
 #[tauri::command]
+async fn set_default_model(app: tauri::AppHandle, model_target: String) -> Result<(), String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let mut settings = Settings::load_migrated(&settings_path);
+
+    settings.default_model = Some(model_target);
+    settings.save(&settings_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn get_mcp_servers(state: State<'_, AppState>) -> Result<Vec<String>, String> {
     Ok(state.mcp_manager.list_servers().await)
 }
@@ -768,7 +787,9 @@ pub fn run() {
             delete_conversation,
             rename_conversation,
             generate_title,
-            edit_mcp_server
+            edit_mcp_server,
+            delete_message,
+            set_default_model
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
