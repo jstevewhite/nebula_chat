@@ -51,7 +51,7 @@ export default function ToolsPanel() {
         setCollapsedServers(newCollapsed);
     };
 
-    const toggleServerTools = async (server: string, serverTools: ToolStatus[], enable: boolean) => {
+    const toggleServerTools = async (_server: string, serverTools: ToolStatus[], enable: boolean) => {
         const toolNames = serverTools.map(t => t.name as string);
 
         // Optimistic Update

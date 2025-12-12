@@ -39,9 +39,59 @@ impl LlmProvider for OpenAiProvider {
             })
             .collect();
 
+        let formatted_messages: Vec<Value> = messages
+            .into_iter()
+            .map(|msg| {
+                if let Some(attachments) = &msg.attachments {
+                    let mut content_parts = Vec::new();
+                    let mut text_content = msg.content.clone().unwrap_or_default();
+
+                    // Process Text Attachments
+                    for att in attachments {
+                        if !att.is_binary {
+                            text_content.push_str(&format!(
+                                "\n\nFile: {}\n```\n{}\n```",
+                                att.name, att.data
+                            ));
+                        }
+                    }
+
+                    // Add Main Text Part (with appended text attachments)
+                    if !text_content.is_empty() {
+                        content_parts.push(json!({
+                            "type": "text",
+                            "text": text_content
+                        }));
+                    }
+
+                    // Process Image Attachments
+                    for att in attachments {
+                        if att.is_binary {
+                            content_parts.push(json!({
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": att.data
+                                }
+                            }));
+                        }
+                    }
+
+                    if !content_parts.is_empty() {
+                        return json!({
+                            "role": msg.role,
+                            "content": content_parts
+                        });
+                    }
+                }
+
+                // Default handling
+                json!(msg)
+            })
+            .collect();
+
         let mut body = json!({
             "model": self.model,
-            "messages": messages,
+            "messages": formatted_messages,
         });
 
         if !openai_tools.is_empty() {
@@ -84,6 +134,7 @@ impl LlmProvider for OpenAiProvider {
             content,
             tool_calls,
             tool_call_id: None,
+            attachments: None,
         })
     }
 }

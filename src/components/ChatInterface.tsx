@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check, Pin, FileText, Book } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
+import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check, Pin, FileText, Book, Paperclip, X, Brain } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import remarkGfm from 'remark-gfm';
+import MemoryPanel from "./MemoryPanel";
 
 interface ToolCall {
     id: string;
@@ -44,14 +46,39 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     const [loading, setLoading] = useState(false);
 
     // Model Selection State
+    // Model Selection State
     const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
     const [selectedModel, setSelectedModel] = useState<string>(""); // stored as "providerId::modelId"
+
+    interface Attachment {
+        file: File;
+        preview: string;
+        base64: string;
+        isBinary: boolean;
+        mediaType: string;
+    }
+    const [attachments, setAttachments] = useState<Attachment[]>([]);
 
     // System Prompts
     const [prompts, setPrompts] = useState<SystemPrompt[]>([]);
     const [selectedPromptId, setSelectedPromptId] = useState<string>("");
 
+    // Side Panels
+    const [activeSidePanel, setActiveSidePanel] = useState<'none' | 'memory'>('none');
+    const [recentMemories, setRecentMemories] = useState<string[]>([]);
+
     const [pendingTool, setPendingTool] = useState<{ name: string, args: any, callId: string } | null>(null);
+
+    // Listen for Memory Events
+    useEffect(() => {
+        const unlistenPromise = listen<string[]>("memory-context", (event) => {
+            console.log("Memory Context Received:", event.payload);
+            setRecentMemories(event.payload);
+        });
+        return () => {
+            unlistenPromise.then(unlisten => unlisten());
+        };
+    }, []);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const [copiedCodeVal, setCopiedCodeVal] = useState<string | null>(null); // To show 'Check' icon momentarily
 
@@ -148,10 +175,10 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 setSelectedPromptId(settings.active_system_prompt_id);
             }
         } catch (e) {
-            console.error("Failed to load settings", e);
-            setErrorMsg("Failed to load settings: " + String(e));
+            console.error("Failed to fetch models", e);
+            setErrorMsg("Failed to fetch models: " + String(e));
         }
-    }
+    };
 
     const handleSetPrompt = async (id: string) => {
         setSelectedPromptId(id);
@@ -173,19 +200,80 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         }
     };
 
+    const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files) {
+            const files = Array.from(e.target.files);
+
+            for (const file of files) {
+                const isImage = file.type.startsWith('image/');
+                const reader = new FileReader();
+
+                reader.onload = (ev) => {
+                    if (ev.target?.result) {
+                        let content = ev.target.result as string;
+                        let preview = "";
+
+                        if (isImage) {
+                            preview = content; // Data URL for preview
+                        } else {
+                            // Text file, use a placeholder icon or code snippet
+                            preview = "TEXT_FILE";
+                        }
+
+                        setAttachments(prev => [...prev, {
+                            file,
+                            preview,
+                            base64: content, // For text files this is raw text, for images it is Data URL
+                            isBinary: isImage,
+                            mediaType: file.type || "text/plain"
+                        }]);
+                    }
+                };
+
+                if (isImage) {
+                    reader.readAsDataURL(file);
+                } else {
+                    reader.readAsText(file);
+                }
+            }
+        }
+    };
+
+    const removeAttachment = (index: number) => {
+        setAttachments(prev => prev.filter((_, i) => i !== index));
+    };
+
     const sendMessage = async (currentHistory: Message[]) => {
         setLoading(true);
         setErrorMsg(null);
-        try {
-            if (!selectedModel) throw new Error("No model selected or available.");
 
-            const [providerId, modelId] = selectedModel.split("::");
+        try {
+            let [providerId, modelId] = selectedModel.split("::");
+            if (!modelId) {
+                // If no provider prefix, assume openai or map based on logic, but for now specific Logic
+                // Actually fetchModels returns just IDs for now? 
+                // Wait, logic in fetchModels returns {id, name}. 
+                // We need providerId. 
+                // Let's assume providerId is "openai" for now if not present, OR we need to track provider.
+                // Simplified: Pass modelId as is, backend finds provider? No, backend needs providerId.
+                // Fix: Frontend should track provider. For MVP, we default to "openai" if missing
+                providerId = "openai";
+                modelId = selectedModel;
+            }
+
+            const attachmentPayload = attachments.length > 0 ? attachments.map(a => ({
+                name: a.file.name,
+                media_type: a.mediaType,
+                data: a.base64,
+                is_binary: a.isBinary
+            })) : null;
 
             const response = await invoke<Message>("send_message", {
                 messages: currentHistory,
                 providerId: providerId,  // Changed from apiKey
                 model: modelId,
-                conversationId: conversationId
+                conversationId: conversationId,
+                attachments: attachmentPayload
             });
 
             const newHistory = [...currentHistory, response];
@@ -226,10 +314,16 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
     const handleSend = async () => {
         if (!input.trim()) return;
-        const userMsg: Message = { role: "user", content: input };
+        const userMsg: Message = { role: "user", content: input }; // Attachments are handled in sendMessage via separate arg for now? 
+        // Or should we add images to the message object immediately?
+        // The backend `send_message` takes `images` as a separate argument and attaches them to the last user message.
+        // But for local state display, we might want to show them?
+        // Current ChatMessage component doesn't display images yet.
+
         const newHistory = [...messages, userMsg];
         setMessages(newHistory);
         setInput("");
+        setAttachments([]); // Clear attachments after sending
         await sendMessage(newHistory);
     };
 
@@ -351,8 +445,32 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                     >
                         <Pin size={16} />
                     </button>
+
+                    <div className="h-4 w-px bg-gray-700 mx-2" />
+
+                    <button
+                        onClick={() => setActiveSidePanel(activeSidePanel === 'memory' ? 'none' : 'memory')}
+                        className={`p-2 rounded-lg transition-colors relative ${activeSidePanel === 'memory' ? 'bg-purple-500/20 text-purple-400' : 'text-gray-400 hover:text-white hover:bg-gray-800'}`}
+                        title="Memory Context"
+                    >
+                        <Brain size={18} />
+                        {recentMemories.length > 0 && (
+                            <span className="absolute -top-1 -right-1 flex h-3 w-3">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span>
+                                <span className="relative inline-flex rounded-full h-3 w-3 bg-purple-500"></span>
+                            </span>
+                        )}
+                    </button>
                 </div>
             </div>
+
+            {/* Side Panels */}
+            {activeSidePanel === 'memory' && (
+                <MemoryPanel
+                    memories={recentMemories}
+                    onClose={() => setActiveSidePanel('none')}
+                />
+            )}
 
             <div
                 className="flex-1 overflow-y-auto p-4 space-y-6 min-h-0"
@@ -405,7 +523,34 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
 
             <div className="p-4 bg-gray-900 border-t border-gray-800">
-                <div className="max-w-4xl mx-auto flex gap-3">
+                {/* Attachment Previews */}
+                {attachments.length > 0 && (
+                    <div className="flex gap-2 mb-2 overflow-x-auto pb-2">
+                        {attachments.map((att, i) => (
+                            <div key={i} className="relative group shrink-0">
+                                <img src={att.preview} alt="preview" className="h-16 w-16 object-cover rounded-lg border border-gray-700" />
+                                <button
+                                    onClick={() => removeAttachment(i)}
+                                    className="absolute -top-1 -right-1 bg-red-500 rounded-full p-0.5 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                                >
+                                    <X size={12} />
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                )}
+
+                <div className="max-w-4xl mx-auto flex gap-3 items-end">
+                    <label className="p-3 text-gray-400 hover:text-white cursor-pointer hover:bg-gray-800 rounded-xl transition-colors">
+                        <Paperclip size={20} />
+                        <input
+                            type="file"
+                            multiple
+                            className="hidden"
+                            onChange={handleFileSelect}
+                        />
+                    </label>
+
                     <input
                         className="flex-1 bg-gray-800 border border-gray-700 rounded-xl p-3 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                         value={input}
@@ -415,7 +560,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         disabled={loading}
                     />
                     <button
-                        disabled={loading}
+                        disabled={loading || (!input.trim() && attachments.length === 0)}
                         onClick={handleSend}
                         className="bg-blue-600 p-3 rounded-xl hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-lg shadow-blue-600/20"
                     >

@@ -74,6 +74,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub active_system_prompt_id: Option<String>,
+
+    #[serde(default)]
+    pub context_model: Option<String>,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]

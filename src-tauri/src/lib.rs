@@ -1,5 +1,5 @@
 use crate::llm::openai::OpenAiProvider;
-use crate::llm::provider::{LlmProvider, Message};
+use crate::llm::provider::{Attachment, LlmProvider, Message};
 use crate::mcp::config::{McpServerConfig, ModelConfig, ProviderType, Settings};
 use crate::mcp::manager::McpManager;
 use std::sync::Arc;
@@ -127,6 +127,7 @@ async fn generate_title(
         content: Some(prompt),
         tool_calls: None,
         tool_call_id: None,
+        attachments: None,
     }];
 
     let response = match provider_config.provider_type {
@@ -203,6 +204,7 @@ async fn get_chat_history(
             content,
             tool_calls,
             tool_call_id,
+            attachments: None,
         });
     }
     Ok(messages)
@@ -210,15 +212,31 @@ async fn get_chat_history(
 
 #[tauri::command]
 async fn send_message(
-    app: tauri::AppHandle,
+    app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
-    messages: Vec<Message>,
+    mut messages: Vec<Message>,
     provider_id: String,
     model: String,
-    conversation_id: String,
+    conversation_id: Option<String>,
+    attachments: Option<Vec<Attachment>>,
 ) -> Result<Message, String> {
-    // Prepare Clones for Background Task
-    let app_handle = app.clone();
+    // Create the User message to append to history (if it's not already in history??)
+    // Actually, the frontend sends the *entire* history including the latest user message.
+    // BUT, the frontend doesn't put the images in the history array it sends for the *latest* message?
+    // Wait, the frontend sends `currentHistory`. The user message is ALREADY in `currentHistory`.
+    // However, the `Message` struct on the frontend might not have `images` yet, or `send_message` adds it?
+
+    // Correction: The frontend sends the history. The user just typed a new message.
+    // The `messages` argument includes the latest user message.
+    // We need to find the LAST message (which should be the user's) and attach images to it if provided.
+
+    if let Some(atts) = attachments {
+        if let Some(last_msg) = messages.last_mut() {
+            if last_msg.role == "user" {
+                last_msg.attachments = Some(atts);
+            }
+        }
+    }
     let librarian_arc = state.librarian.clone();
     let provider_id_bg = provider_id.clone();
     let model_bg = model.clone();
@@ -232,21 +250,23 @@ async fn send_message(
                 query = last.content.clone().unwrap_or_default();
             }
 
-            let lib = state.librarian.lock().await;
-            let tool_calls_json = if let Some(tc) = &last.tool_calls {
-                serde_json::to_string(tc).ok()
-            } else {
-                None
-            };
+            if let Some(conv_id) = &conversation_id {
+                let lib = state.librarian.lock().await;
+                let tool_calls_json = if let Some(tc) = &last.tool_calls {
+                    serde_json::to_string(tc).ok()
+                } else {
+                    None
+                };
 
-            // Save full message
-            let _ = lib.save_full_message(
-                &conversation_id,
-                &last.role,
-                last.content.as_deref(),
-                tool_calls_json.as_deref(),
-                last.tool_call_id.as_deref(),
-            );
+                // Save full message
+                let _ = lib.save_full_message(
+                    conv_id,
+                    &last.role,
+                    last.content.as_deref(),
+                    tool_calls_json.as_deref(),
+                    last.tool_call_id.as_deref(),
+                );
+            }
         }
     }
 
@@ -256,9 +276,48 @@ async fn send_message(
         let lib = state.librarian.lock().await;
         if let Ok(results) = lib.search(&query) {
             if !results.is_empty() {
-                context_text = "Relevant Memories:\n".to_string();
-                for (_id, content) in results {
-                    context_text.push_str(&format!("- {}\n", content));
+                // Emit Memory Context Event (Raw for now, updated later if assembler runs)
+                let memory_list_preview: Vec<String> =
+                    results.iter().map(|(_, content)| content.clone()).collect();
+
+                // Check for Context Assembler Model
+                let config_dir = app_handle
+                    .path()
+                    .app_config_dir()
+                    .map_err(|e| e.to_string())?;
+                let settings_path = config_dir.join("settings.json");
+                let settings = Settings::load_migrated(&settings_path);
+
+                if let Some(ctx_model) = &settings.context_model {
+                    // Use intelligent assembly
+                    let assembled = crate::llm::context_assembler::ContextAssembler::assemble(
+                        &query,
+                        &memory_list_preview,
+                        &messages,
+                        ctx_model,
+                        &settings,
+                    )
+                    .await
+                    .unwrap_or_else(|_| memory_list_preview.join("\n"));
+
+                    context_text = format!("Refined Context:\n{}\n", assembled);
+
+                    // Emit REFINED context to frontend
+                    use tauri::Emitter;
+                    if let Err(e) = app_handle.emit("memory-context", &vec![assembled]) {
+                        eprintln!("Failed to emit memory-context: {}", e);
+                    }
+                } else {
+                    // Default Raw Behavior
+                    use tauri::Emitter;
+                    if let Err(e) = app_handle.emit("memory-context", &memory_list_preview) {
+                        eprintln!("Failed to emit memory-context: {}", e);
+                    }
+
+                    context_text = "Relevant Memories:\n".to_string();
+                    for (_id, content) in results {
+                        context_text.push_str(&format!("- {}\n", content));
+                    }
                 }
             }
         }
@@ -276,12 +335,16 @@ async fn send_message(
             )),
             tool_calls: None,
             tool_call_id: None,
+            attachments: None,
         };
         final_messages.insert(0, context_msg);
     }
 
     // Inject System Prompt
-    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let config_dir = app_handle
+        .path()
+        .app_config_dir()
+        .map_err(|e| e.to_string())?;
     let settings_path = config_dir.join("settings.json");
     let settings = Settings::load_migrated(&settings_path);
 
@@ -295,6 +358,7 @@ async fn send_message(
                     content: Some(prompt.content.clone()),
                     tool_call_id: None,
                     tool_calls: None,
+                    attachments: None,
                 },
             );
         }
@@ -305,7 +369,10 @@ async fn send_message(
     // Filter disabled tools
 
     // Filter disabled tools
-    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let config_dir = app_handle
+        .path()
+        .app_config_dir()
+        .map_err(|e| e.to_string())?;
     let settings_path = config_dir.join("settings.json");
     let settings = Settings::load_migrated(&settings_path);
 
@@ -315,7 +382,10 @@ async fn send_message(
         .collect();
 
     // Select Provider
-    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let config_dir = app_handle
+        .path()
+        .app_config_dir()
+        .map_err(|e| e.to_string())?;
     let settings_path = config_dir.join("settings.json");
     let settings = Settings::load_migrated(&settings_path);
 
@@ -366,35 +436,37 @@ async fn send_message(
     match response {
         Ok(msg) => {
             // Save Assistant Message
-            let lib = state.librarian.lock().await;
-            let tool_calls_json = if let Some(tc) = &msg.tool_calls {
-                serde_json::to_string(tc).ok()
-            } else {
-                None
-            };
+            if let Some(conv_id) = conversation_id {
+                let lib = state.librarian.lock().await;
+                let tool_calls_json = if let Some(tc) = &msg.tool_calls {
+                    serde_json::to_string(tc).ok()
+                } else {
+                    None
+                };
 
-            let _ = lib.save_full_message(
-                &conversation_id,
-                "assistant",
-                msg.content.as_deref(),
-                tool_calls_json.as_deref(),
-                msg.tool_call_id.as_deref(),
-            );
+                let _ = lib.save_full_message(
+                    &conv_id,
+                    "assistant",
+                    msg.content.as_deref(),
+                    tool_calls_json.as_deref(),
+                    msg.tool_call_id.as_deref(),
+                );
 
-            // Trigger Background Pruning (Fire & Forget)
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = attempt_pruning(
-                    app_handle,
-                    librarian_arc,
-                    provider_id_bg,
-                    model_bg,
-                    conv_id_bg,
-                )
-                .await
-                {
-                    eprintln!("Pruning Error: {}", e);
-                }
-            });
+                // Trigger Background Pruning (Fire & Forget)
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = attempt_pruning(
+                        app_handle,
+                        librarian_arc,
+                        provider_id_bg,
+                        model_bg,
+                        conv_id_bg.unwrap_or_default(), // Pass default if None, pruning will handle it
+                    )
+                    .await
+                    {
+                        eprintln!("Pruning Error: {}", e);
+                    }
+                });
+            }
 
             Ok(msg)
         }
@@ -710,7 +782,8 @@ async fn attempt_pruning(
                     role: "user".to_string(),
                     content: Some(format!("Summarize the following conversation segment concisely, preserving key facts:\n\n{}", text_to_summarize)),
                     tool_calls: None,
-                    tool_call_id: None
+                    tool_call_id: None,
+                    attachments: None,
                 }], vec![]).await
             }
             ProviderType::Anthropic => {
@@ -721,7 +794,8 @@ async fn attempt_pruning(
                     role: "user".to_string(),
                     content: Some(format!("Summarize the following conversation segment concisely, preserving key facts:\n\n{}", text_to_summarize)),
                     tool_calls: None,
-                    tool_call_id: None
+                    tool_call_id: None,
+                    attachments: None,
                 }], vec![]).await
             }
             ProviderType::Ollama => {
@@ -735,7 +809,8 @@ async fn attempt_pruning(
                     role: "user".to_string(),
                     content: Some(format!("Summarize the following conversation segment concisely, preserving key facts:\n\n{}", text_to_summarize)),
                     tool_calls: None,
-                    tool_call_id: None
+                    tool_call_id: None,
+                    attachments: None,
                 }], vec![]).await
             }
         };
@@ -924,6 +999,7 @@ pub fn run() {
     let mcp_manager = Arc::new(McpManager::new());
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
             let config_dir = app.path().app_config_dir().unwrap();
