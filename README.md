@@ -22,6 +22,12 @@ Nebula implements the **[Model Context Protocol (MCP)](https://modelcontextproto
 - **Model Management**: Easily toggle visibility for individual models or bulk enable/disable entire providers.
 - **Rust Core**: Heavy lifting is done in optimized Rust for maximum speed.
 
+### 💬 Rich Chat Interface
+- **Markdown Rendering**: Full GitHub Flavored Markdown support with tables, lists, and headers.
+- **Code Highlighting**: Syntax highlighting for code blocks with "Copy Code" functionality, styled to match the `vscDarkPlus` theme.
+- **Interactive Messages**: Edit, copy, delete, and regenerate messages on the fly.
+- **Aesthetic UI**: Polished, editor-like typography with custom scrollbars and clean spacing.
+
 ## Architecture
 
 Nebula acts as an orchestrator between the user, the memory sidecar, and external MCP servers.

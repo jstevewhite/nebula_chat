@@ -23,16 +23,19 @@ impl OllamaProvider {
 #[async_trait]
 impl LlmProvider for OllamaProvider {
     async fn chat(&self, messages: Vec<Message>, tools: Vec<ToolDefinition>) -> Result<Message> {
-        let openai_tools: Vec<Value> = tools.into_iter().map(|t| {
-            json!({
-                "type": "function",
-                "function": {
-                    "name": t.name,
-                    "description": t.description,
-                    "parameters": t.input_schema
-                }
+        let openai_tools: Vec<Value> = tools
+            .into_iter()
+            .map(|t| {
+                json!({
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.input_schema
+                    }
+                })
             })
-        }).collect();
+            .collect();
 
         let mut body = json!({
             "model": self.model,
@@ -41,13 +44,22 @@ impl LlmProvider for OllamaProvider {
         });
 
         if !openai_tools.is_empty() {
-             body.as_object_mut().unwrap().insert("tools".to_string(), json!(openai_tools));
-             body.as_object_mut().unwrap().insert("tool_choice".to_string(), json!("auto"));
+            body.as_object_mut()
+                .unwrap()
+                .insert("tools".to_string(), json!(openai_tools));
+            body.as_object_mut()
+                .unwrap()
+                .insert("tool_choice".to_string(), json!("auto"));
         }
 
-        let url = format!("{}/v1/chat/completions", self.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/v1/chat/completions",
+            self.base_url.trim_end_matches('/')
+        );
 
-        let resp = self.client.post(&url)
+        let resp = self
+            .client
+            .post(&url)
             .header("Authorization", "Bearer ollama") // Dummy key required by some compat layers
             .json(&body)
             .send()
@@ -61,11 +73,15 @@ impl LlmProvider for OllamaProvider {
 
         let json: Value = resp.json().await?;
         let choice = &json["choices"][0]["message"];
-        
+
         let content = choice["content"].as_str().map(|s| s.to_string());
-        let tool_calls = choice.get("tool_calls").cloned().and_then(|v| v.as_array().cloned());
+        let tool_calls = choice
+            .get("tool_calls")
+            .cloned()
+            .and_then(|v| v.as_array().cloned());
 
         Ok(Message {
+            id: None,
             role: "assistant".to_string(),
             content,
             tool_calls,

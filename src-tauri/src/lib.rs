@@ -58,6 +58,13 @@ async fn delete_conversation(
 }
 
 #[tauri::command]
+async fn delete_message(state: State<'_, AppState>, message_id: String) -> Result<(), String> {
+    let lib = state.librarian.lock().await;
+    lib.delete_messages(&[message_id])
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn rename_conversation(
     state: State<'_, AppState>,
     conversation_id: String,
@@ -91,7 +98,7 @@ async fn generate_title(
     }
 
     let mut prompt = String::new();
-    for (_, (role, content, _, _)) in history.iter().enumerate().take(6) {
+    for (_, (_, role, content, _, _)) in history.iter().enumerate().take(6) {
         if let Some(c) = content {
             prompt.push_str(&format!("{}: {}\n", role, c));
         }
@@ -115,6 +122,7 @@ async fn generate_title(
 
     let tools = vec![];
     let messages = vec![Message {
+        id: None,
         role: "user".to_string(),
         content: Some(prompt),
         tool_calls: None,
@@ -178,7 +186,7 @@ async fn get_chat_history(
         .map_err(|e| e.to_string())?;
 
     let mut messages = Vec::new();
-    for (role, content, tool_calls_json, tool_call_id) in raw {
+    for (id, role, content, tool_calls_json, tool_call_id) in raw {
         let tool_calls = if let Some(json_str) = tool_calls_json {
             if !json_str.is_empty() {
                 serde_json::from_str(&json_str).ok()
@@ -190,6 +198,7 @@ async fn get_chat_history(
         };
 
         messages.push(Message {
+            id: Some(id),
             role,
             content,
             tool_calls,
@@ -250,6 +259,7 @@ async fn send_message(
     let mut final_messages = messages.clone();
     if !context_text.is_empty() {
         let context_msg = Message {
+            id: None,
             role: "system".to_string(),
             content: Some(format!(
                 "You have access to the following long-term memories:\n{}",
@@ -655,6 +665,7 @@ async fn attempt_pruning(
                 let base_url = provider_config.base_url.clone();
                 let provider = OpenAiProvider::new(api_key, base_url, model.clone());
                 provider.chat(vec![Message {
+                    id: None,
                     role: "user".to_string(),
                     content: Some(format!("Summarize the following conversation segment concisely, preserving key facts:\n\n{}", text_to_summarize)),
                     tool_calls: None,
@@ -665,6 +676,7 @@ async fn attempt_pruning(
                 let api_key = provider_config.api_key.clone().unwrap_or_default();
                 let provider = AnthropicProvider::new(api_key, model.clone());
                 provider.chat(vec![Message {
+                    id: None,
                     role: "user".to_string(),
                     content: Some(format!("Summarize the following conversation segment concisely, preserving key facts:\n\n{}", text_to_summarize)),
                     tool_calls: None,
@@ -678,6 +690,7 @@ async fn attempt_pruning(
                     .unwrap_or("http://localhost:11434".to_string());
                 let provider = OllamaProvider::new(base_url, model.clone());
                 provider.chat(vec![Message {
+                    id: None,
                     role: "user".to_string(),
                     content: Some(format!("Summarize the following conversation segment concisely, preserving key facts:\n\n{}", text_to_summarize)),
                     tool_calls: None,

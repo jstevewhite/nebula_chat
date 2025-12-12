@@ -23,13 +23,16 @@ impl AnthropicProvider {
 #[async_trait]
 impl LlmProvider for AnthropicProvider {
     async fn chat(&self, messages: Vec<Message>, tools: Vec<ToolDefinition>) -> Result<Message> {
-        let anthropic_tools: Vec<Value> = tools.into_iter().map(|t| {
-            json!({
-                "name": t.name,
-                "description": t.description,
-                "input_schema": t.input_schema
+        let anthropic_tools: Vec<Value> = tools
+            .into_iter()
+            .map(|t| {
+                json!({
+                    "name": t.name,
+                    "description": t.description,
+                    "input_schema": t.input_schema
+                })
             })
-        }).collect();
+            .collect();
 
         // Convert messages to Anthropic format
         // System prompt is separate in Anthropic API
@@ -43,21 +46,19 @@ impl LlmProvider for AnthropicProvider {
                 }
                 system_prompt.push_str(msg.content.as_deref().unwrap_or(""));
             } else {
-
-                
                 // If there are tool call results (tool_call_id present), we need to format them correctly
                 // Anthropic expects tool_result blocks
                 if let Some(tool_call_id) = &msg.tool_call_id {
-                     // This is a tool RESULT from the user/tool
-                     filtered_messages.push(json!({
-                        "role": "user",
-                        "content": [{
-                            "type": "tool_result",
-                            "tool_use_id": tool_call_id,
-                            "content": msg.content.unwrap_or_default()
-                        }]
-                     }));
-                     continue;
+                    // This is a tool RESULT from the user/tool
+                    filtered_messages.push(json!({
+                       "role": "user",
+                       "content": [{
+                           "type": "tool_result",
+                           "tool_use_id": tool_call_id,
+                           "content": msg.content.unwrap_or_default()
+                       }]
+                    }));
+                    continue;
                 }
 
                 // If message has tool_calls (assistant requesting)
@@ -65,22 +66,22 @@ impl LlmProvider for AnthropicProvider {
                     let mut parts = Vec::new();
                     // First add text thought if any
                     if let Some(text) = &msg.content {
-                         parts.push(json!({
-                            "type": "text",
-                            "text": text
-                         }));
+                        parts.push(json!({
+                           "type": "text",
+                           "text": text
+                        }));
                     }
-                    
+
                     for call in calls {
                         let f = &call["function"];
-                         parts.push(json!({
+                        parts.push(json!({
                             "type": "tool_use",
                             "id": call["id"],
                             "name": f["name"],
                             "input": serde_json::from_str::<Value>(f["arguments"].as_str().unwrap_or("{}")).unwrap_or(json!({}))
                          }));
                     }
-                    
+
                     filtered_messages.push(json!({
                         "role": msg.role,
                         "content": parts
@@ -90,8 +91,12 @@ impl LlmProvider for AnthropicProvider {
 
                 // Normal message
                 let content = msg.content.clone().unwrap_or_default();
-                let effective_content = if content.is_empty() { " ".to_string() } else { content };
-                
+                let effective_content = if content.is_empty() {
+                    " ".to_string()
+                } else {
+                    content
+                };
+
                 filtered_messages.push(json!({
                     "role": msg.role,
                     "content": effective_content
@@ -106,17 +111,23 @@ impl LlmProvider for AnthropicProvider {
         });
 
         if !system_prompt.is_empty() {
-             body.as_object_mut().unwrap().insert("system".to_string(), json!(system_prompt));
+            body.as_object_mut()
+                .unwrap()
+                .insert("system".to_string(), json!(system_prompt));
         }
 
         if !anthropic_tools.is_empty() {
-             body.as_object_mut().unwrap().insert("tools".to_string(), json!(anthropic_tools));
+            body.as_object_mut()
+                .unwrap()
+                .insert("tools".to_string(), json!(anthropic_tools));
         }
 
         // DEBUG LOGGING
         // println!("Anthropic Request: {}", serde_json::to_string_pretty(&body).unwrap());
 
-        let resp = self.client.post("https://api.anthropic.com/v1/messages")
+        let resp = self
+            .client
+            .post("https://api.anthropic.com/v1/messages")
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
@@ -129,12 +140,16 @@ impl LlmProvider for AnthropicProvider {
             let status = resp.status();
             let error_text = resp.text().await?;
             println!("Anthropic API Error ({}): {}", status, error_text);
-            return Err(anyhow::anyhow!("Anthropic API Error ({}): {}", status, error_text));
+            return Err(anyhow::anyhow!(
+                "Anthropic API Error ({}): {}",
+                status,
+                error_text
+            ));
         }
 
         let json: Value = resp.json().await?;
         // println!("Anthropic Response: {:?}", json);
-        
+
         // Parse response to Message
         let mut final_content = String::new();
         let mut tool_calls = Vec::new();
@@ -159,9 +174,18 @@ impl LlmProvider for AnthropicProvider {
         }
 
         Ok(Message {
+            id: None,
             role: "assistant".to_string(),
-            content: if final_content.is_empty() { None } else { Some(final_content) },
-            tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
+            content: if final_content.is_empty() {
+                None
+            } else {
+                Some(final_content)
+            },
+            tool_calls: if tool_calls.is_empty() {
+                None
+            } else {
+                Some(tool_calls)
+            },
             tool_call_id: None,
         })
     }

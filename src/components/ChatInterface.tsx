@@ -1,7 +1,10 @@
 import { useState, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Send, Terminal, AlertTriangle } from "lucide-react";
+import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import remarkGfm from 'remark-gfm';
 
 interface ToolCall {
     id: string;
@@ -12,7 +15,8 @@ interface ToolCall {
 }
 
 interface Message {
-    role: "user" | "assistant" | "tool";
+    id?: string;
+    role: "user" | "assistant" | "system" | "tool";
     content: string | null;
     tool_calls?: ToolCall[];
     tool_call_id?: string;
@@ -39,6 +43,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
     const [pendingTool, setPendingTool] = useState<{ name: string, args: any, callId: string } | null>(null);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
+    const [copiedCodeVal, setCopiedCodeVal] = useState<string | null>(null); // To show 'Check' icon momentarily
 
     const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -53,6 +58,13 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             return () => clearTimeout(timer);
         }
     }, [errorMsg]);
+
+    useEffect(() => {
+        if (copiedCodeVal) {
+            const timer = setTimeout(() => setCopiedCodeVal(null), 2000);
+            return () => clearTimeout(timer);
+        }
+    }, [copiedCodeVal]);
 
     useEffect(() => {
         if (conversationId) {
@@ -199,6 +211,46 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         }
     };
 
+    const handleCopy = (text: string) => {
+        navigator.clipboard.writeText(text);
+    };
+
+    const handleCopyCode = (text: string) => {
+        navigator.clipboard.writeText(text);
+        setCopiedCodeVal(text);
+    };
+
+    const handleDelete = async (index: number, id?: string) => {
+        if (id) {
+            try {
+                await invoke("delete_message", { messageId: id });
+            } catch (e) {
+                console.error("Failed to delete message", e);
+            }
+        }
+        const newMsgs = [...messages];
+        newMsgs.splice(index, 1);
+        setMessages(newMsgs);
+    };
+
+    const handleRegenerate = async (index: number, id?: string) => {
+        // 1. Delete the assistant message
+        await handleDelete(index, id);
+
+        // 2. Capture history up to the point before this message
+        // The last message in this slice should be the User message we want to re-run
+        // NOTE: We assume the existing history is correct.
+        const historyToReplay = messages.slice(0, index);
+
+        // 3. Trigger send
+        await sendMessage(historyToReplay);
+    };
+
+    const handleEdit = (content: string) => {
+        setInput(content);
+        // Optionally focus input?
+    };
+
     return (
         <div className="flex flex-col h-screen bg-gray-950 text-white font-sans relative">
             {errorMsg && (
@@ -237,21 +289,101 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
                     >
                         <div
-                            className={`max-w-[80%] rounded-2xl p-4 ${m.role === "user"
+                            className={`max-w-[85%] rounded-xl p-4 relative group ${m.role === "user"
                                 ? "bg-blue-600 text-white rounded-br-none shadow-lg shadow-blue-900/20"
                                 : m.role === "tool"
                                     ? "bg-gray-800 text-gray-400 font-mono text-xs rounded-none border-l-2 border-yellow-500 shadow-lg"
-                                    : "bg-gray-800 text-gray-100 rounded-bl-none shadow-lg"
+                                    : "bg-[#1e1e1e] text-gray-100 rounded-bl-none shadow-lg border border-white/5"
                                 }`}
                         >
-                            <div className="text-[10px] uppercase font-bold opacity-50 mb-1 flex items-center gap-1">
-                                {m.role === "assistant" && "🤖 "}
-                                {m.role === "user" && "👤 "}
-                                {m.role}
+                            <div className="flex justify-between items-start gap-4 mb-2">
+                                <div className="text-[10px] uppercase font-bold opacity-50 flex items-center gap-1 select-none">
+                                    {m.role === "assistant" && "🤖 Assistant"}
+                                    {m.role === "user" && "👤 You"}
+                                    {m.role === "tool" && "🛠 Tool"}
+                                    {m.role === "system" && "⚙ System"}
+                                </div>
+
+                                {/* Action Buttons (Visible on Hover) */}
+                                <div className={`flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity ${m.role === "user" ? "text-blue-200" : "text-gray-400"}`}>
+                                    <button onClick={() => handleCopy(m.content || "")} className="hover:text-white" title="Copy Message">
+                                        <Copy size={13} />
+                                    </button>
+
+                                    {m.role === "user" && (
+                                        <button onClick={() => handleEdit(m.content || "")} className="hover:text-white" title="Edit">
+                                            <Edit2 size={13} />
+                                        </button>
+                                    )}
+
+                                    {(m.role === "assistant" || m.role === "user") && (
+                                        <button onClick={() => handleDelete(i, m.id)} className="hover:text-red-400" title="Delete">
+                                            <Trash2 size={13} />
+                                        </button>
+                                    )}
+
+                                    {m.role === "assistant" && (
+                                        <button onClick={() => handleRegenerate(i, m.id)} className="hover:text-green-400" title="Regenerate">
+                                            <RefreshCw size={13} />
+                                        </button>
+                                    )}
+                                </div>
                             </div>
+
                             {m.content && (
-                                <div className="prose prose-invert prose-sm">
-                                    <ReactMarkdown>{m.content}</ReactMarkdown>
+                                <div className={`prose max-w-none ${m.role === "user" ? "prose-invert text-white prose-pre:bg-blue-800" : "prose-invert text-gray-300"}`}>
+                                    <ReactMarkdown
+                                        remarkPlugins={[remarkGfm]}
+                                        components={{
+                                            // Custom Typography to match 'Editor' aesthetic
+                                            ul: ({ node, ...props }) => <ul className="list-disc pl-6 mb-4 space-y-2" {...props} />,
+                                            ol: ({ node, ...props }) => <ol className="list-decimal pl-6 mb-4 space-y-2" {...props} />,
+                                            li: ({ node, ...props }) => <li className="leading-relaxed pl-1" {...props} />,
+                                            h1: ({ node, ...props }) => <h1 className="text-2xl font-bold mb-4 mt-6 text-white pb-2 border-b border-gray-700" {...props} />,
+                                            h2: ({ node, ...props }) => <h2 className="text-xl font-bold mb-3 mt-5 text-gray-100" {...props} />,
+                                            h3: ({ node, ...props }) => <h3 className="text-lg font-semibold mb-2 mt-4 text-gray-200" {...props} />,
+                                            p: ({ node, ...props }) => <p className="leading-7 mb-4 text-gray-300" {...props} />,
+                                            strong: ({ node, ...props }) => <strong className="font-bold text-white" {...props} />,
+                                            a: ({ node, ...props }) => <a className="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer" {...props} />,
+                                            blockquote: ({ node, ...props }) => <blockquote className="border-l-4 border-gray-600 pl-4 italic text-gray-400 my-4" {...props} />,
+
+                                            code({ node, inline, className, children, ...props }: any) {
+                                                const match = /language-(\w+)/.exec(className || '')
+                                                const codeText = String(children).replace(/\n$/, '')
+                                                const isCopied = copiedCodeVal === codeText
+
+                                                return !inline && match ? (
+                                                    <div className="relative group/code my-4">
+                                                        <div className="absolute top-2 right-2 opacity-0 group-hover/code:opacity-100 transition-opacity z-10">
+                                                            <button
+                                                                onClick={() => handleCopyCode(codeText)}
+                                                                className="p-1.5 bg-gray-700/80 hover:bg-gray-600 rounded text-gray-300 transition-colors backdrop-blur-sm"
+                                                                title="Copy Code"
+                                                            >
+                                                                {isCopied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
+                                                            </button>
+                                                        </div>
+                                                        <SyntaxHighlighter
+                                                            // @ts-ignore
+                                                            style={vscDarkPlus}
+                                                            language={match[1]}
+                                                            PreTag="div"
+                                                            customStyle={{ margin: 0, borderRadius: '0.5rem', background: '#0d1117', fontSize: '14px' }}
+                                                            {...props}
+                                                        >
+                                                            {codeText}
+                                                        </SyntaxHighlighter>
+                                                    </div>
+                                                ) : (
+                                                    <code className={`${className} bg-white/10 px-1.5 py-0.5 rounded text-[0.9em] font-mono text-yellow-200`} {...props}>
+                                                        {children}
+                                                    </code>
+                                                )
+                                            }
+                                        }}
+                                    >
+                                        {m.content}
+                                    </ReactMarkdown>
                                 </div>
                             )}
                             {m.tool_calls && (
@@ -266,7 +398,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                     </div>
                 ))}
                 <div ref={scrollRef} />
-            </div>
+            </div >
 
             {pendingTool && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
@@ -317,6 +449,6 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                     </button>
                 </div>
             </div>
-        </div>
+        </div >
     );
 }
