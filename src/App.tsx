@@ -68,7 +68,7 @@ export default function App() {
           <Wrench size={20} />
         </button>
 
-        <div className="flex-1" />
+
 
         <button
           onClick={() => setActiveTab("settings")}

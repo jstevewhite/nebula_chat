@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check, Pin, FileText } from "lucide-react";
+import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check, Pin, FileText, Book } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -32,6 +32,12 @@ interface ModelOption {
     providerId: string;
 }
 
+interface SystemPrompt {
+    id: string;
+    name: string;
+    content: string;
+}
+
 export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState("");
@@ -40,6 +46,10 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     // Model Selection State
     const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
     const [selectedModel, setSelectedModel] = useState<string>(""); // stored as "providerId::modelId"
+
+    // System Prompts
+    const [prompts, setPrompts] = useState<SystemPrompt[]>([]);
+    const [selectedPromptId, setSelectedPromptId] = useState<string>("");
 
     const [pendingTool, setPendingTool] = useState<{ name: string, args: any, callId: string } | null>(null);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -130,11 +140,23 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                     }
                 }
             }
+
+            // Load Prompts
+            const promptsList = await invoke<SystemPrompt[]>("get_system_prompts");
+            setPrompts(promptsList);
+            if (settings.active_system_prompt_id) {
+                setSelectedPromptId(settings.active_system_prompt_id);
+            }
         } catch (e) {
             console.error("Failed to load settings", e);
             setErrorMsg("Failed to load settings: " + String(e));
         }
     }
+
+    const handleSetPrompt = async (id: string) => {
+        setSelectedPromptId(id);
+        await invoke("set_active_system_prompt", { id: id || null });
+    };
 
     const handleSetDefaultModel = async () => {
         if (!selectedModel) return;
@@ -305,6 +327,22 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                             </option>
                         ))}
                     </select>
+
+                    {/* Prompt Selector */}
+                    <div className="flex items-center gap-1 border-l border-gray-700 pl-3">
+                        <Book size={16} className="text-gray-400" />
+                        <select
+                            value={selectedPromptId}
+                            onChange={(e) => handleSetPrompt(e.target.value)}
+                            className="bg-gray-800 text-white text-sm rounded-lg border border-gray-700 focus:ring-blue-500 focus:border-blue-500 block p-2.5 font-medium max-w-[150px]"
+                            style={{ colorScheme: "dark" }}
+                        >
+                            <option value="">Default System</option>
+                            {prompts.map(p => (
+                                <option key={p.id} value={p.id}>{p.name}</option>
+                            ))}
+                        </select>
+                    </div>
                     <button
                         id="pin-model-btn"
                         onClick={handleSetDefaultModel}

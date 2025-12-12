@@ -280,7 +280,29 @@ async fn send_message(
         final_messages.insert(0, context_msg);
     }
 
+    // Inject System Prompt
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let settings = Settings::load_migrated(&settings_path);
+
+    if let Some(active_id) = settings.active_system_prompt_id {
+        if let Some(prompt) = settings.system_prompts.iter().find(|p| p.id == active_id) {
+            final_messages.insert(
+                0,
+                Message {
+                    id: Some(uuid::Uuid::new_v4().to_string()),
+                    role: "system".to_string(),
+                    content: Some(prompt.content.clone()),
+                    tool_call_id: None,
+                    tool_calls: None,
+                },
+            );
+        }
+    }
+
     let all_tools = state.mcp_manager.get_all_tools().await;
+
+    // Filter disabled tools
 
     // Filter disabled tools
     let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
@@ -835,6 +857,68 @@ async fn toggle_tool_list(
     settings.save(&settings_path).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn get_system_prompts(
+    app: tauri::AppHandle,
+) -> Result<Vec<crate::mcp::config::SystemPrompt>, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let settings = Settings::load_migrated(&settings_path);
+    Ok(settings.system_prompts)
+}
+
+#[tauri::command]
+async fn save_system_prompt(
+    app: tauri::AppHandle,
+    id: Option<String>,
+    name: String,
+    content: String,
+) -> Result<(), String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let mut settings = Settings::load_migrated(&settings_path);
+
+    let new_id = id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let new_prompt = crate::mcp::config::SystemPrompt {
+        id: new_id.clone(),
+        name,
+        content,
+    };
+
+    if let Some(idx) = settings.system_prompts.iter().position(|p| p.id == new_id) {
+        settings.system_prompts[idx] = new_prompt;
+    } else {
+        settings.system_prompts.push(new_prompt);
+    }
+
+    settings.save(&settings_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_system_prompt(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let mut settings = Settings::load_migrated(&settings_path);
+
+    settings.system_prompts.retain(|p| p.id != id);
+    if settings.active_system_prompt_id.as_deref() == Some(&id) {
+        settings.active_system_prompt_id = None;
+    }
+
+    settings.save(&settings_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn set_active_system_prompt(app: tauri::AppHandle, id: Option<String>) -> Result<(), String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let mut settings = Settings::load_migrated(&settings_path);
+
+    settings.active_system_prompt_id = id;
+
+    settings.save(&settings_path).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mcp_manager = Arc::new(McpManager::new());
@@ -885,7 +969,11 @@ pub fn run() {
             set_default_model,
             get_tools,
             toggle_tool,
-            toggle_tool_list
+            toggle_tool_list,
+            get_system_prompts,
+            save_system_prompt,
+            delete_system_prompt,
+            set_active_system_prompt
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
