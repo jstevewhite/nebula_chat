@@ -19,7 +19,8 @@ Nebula implements the **[Model Context Protocol (MCP)](https://modelcontextproto
 ### ⚡ Performance & Privacy
 - **Local-First**: Your memory stays on your machine.
 - **Provider Agnostic**: Unified interface for **OpenAI**, **Anthropic**, and **Ollama** (for fully local privacy).
-- **Model Management**: Easily toggle visibility for individual models or bulk enable/disable entire providers.
+- **Model Management**: Easily toggle visibility for models, bulk enable/disable providers, and **set a default model** for new chats.
+- **Smart Chat Management**: Auto-titles conversations, allows renaming/deleting, and intelligently handles chat deletion without unnecessary empty chats.
 - **Rust Core**: Heavy lifting is done in optimized Rust for maximum speed.
 
 ### 💬 Rich Chat Interface

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check } from "lucide-react";
+import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check, Pin, FileText } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -75,7 +75,17 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     }, [conversationId]);
 
     useEffect(() => {
-        scrollRef.current?.scrollIntoView({ behavior: "smooth" });
+        if (scrollRef.current) {
+            const container = scrollRef.current;
+            // Use setTimeout to allow layout to settle (e.g. images loading, markdown rendering)
+            const timer = setTimeout(() => {
+                container.scrollTo({
+                    top: container.scrollHeight,
+                    behavior: "smooth"
+                });
+            }, 100);
+            return () => clearTimeout(timer);
+        }
     }, [messages]);
 
     const loadHistory = async (id: string) => {
@@ -111,9 +121,13 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             setAvailableModels(models);
 
             if (models.length > 0) {
-                // Default to first if not set or invalid
-                if (!selectedModel || !models.find(m => `${m.providerId}::${m.id}` === selectedModel)) {
-                    setSelectedModel(`${models[0].providerId}::${models[0].id}`);
+                // Priority: State (if already set) > Default Setting > First Available
+                if (!selectedModel) {
+                    if (settings.default_model && models.find(m => `${m.providerId}::${m.id}` === settings.default_model)) {
+                        setSelectedModel(settings.default_model);
+                    } else {
+                        setSelectedModel(`${models[0].providerId}::${models[0].id}`);
+                    }
                 }
             }
         } catch (e) {
@@ -121,6 +135,21 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             setErrorMsg("Failed to load settings: " + String(e));
         }
     }
+
+    const handleSetDefaultModel = async () => {
+        if (!selectedModel) return;
+        try {
+            await invoke("set_default_model", { modelTarget: selectedModel });
+            // Optional: Show success feedback
+            const btn = document.getElementById("pin-model-btn");
+            if (btn) {
+                btn.classList.add("text-green-400");
+                setTimeout(() => btn.classList.remove("text-green-400"), 1000);
+            }
+        } catch (e) {
+            setErrorMsg("Failed to set default model: " + String(e));
+        }
+    };
 
     const sendMessage = async (currentHistory: Message[]) => {
         setLoading(true);
@@ -215,10 +244,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         navigator.clipboard.writeText(text);
     };
 
-    const handleCopyCode = (text: string) => {
-        navigator.clipboard.writeText(text);
-        setCopiedCodeVal(text);
-    };
+
 
     const handleDelete = async (index: number, id?: string) => {
         if (id) {
@@ -252,7 +278,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     };
 
     return (
-        <div className="flex flex-col h-screen bg-gray-950 text-white font-sans relative">
+        <div className="flex flex-col h-full bg-gray-950 text-white font-sans relative">
             {errorMsg && (
                 <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50 bg-red-600/90 backdrop-blur text-white px-4 py-3 rounded-xl shadow-2xl animate-fade-in-down flex items-center gap-3 border border-red-500/50">
                     <AlertTriangle size={20} className="text-white" />
@@ -279,63 +305,185 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                             </option>
                         ))}
                     </select>
+                    <button
+                        id="pin-model-btn"
+                        onClick={handleSetDefaultModel}
+                        className="p-2 text-gray-400 hover:text-white transition-colors"
+                        title="Set as Default Model"
+                    >
+                        <Pin size={16} />
+                    </button>
                 </div>
             </div>
 
-            <div className="flex-1 overflow-auto p-4 space-y-6">
+            <div
+                className="flex-1 overflow-y-auto p-4 space-y-6 min-h-0"
+                ref={scrollRef}
+            >
                 {messages.map((m, i) => (
-                    <div
+                    <ChatMessage
                         key={i}
-                        className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
-                    >
-                        <div
-                            className={`max-w-[85%] rounded-xl p-4 relative group ${m.role === "user"
-                                ? "bg-blue-600 text-white rounded-br-none shadow-lg shadow-blue-900/20"
-                                : m.role === "tool"
-                                    ? "bg-gray-800 text-gray-400 font-mono text-xs rounded-none border-l-2 border-yellow-500 shadow-lg"
-                                    : "bg-[#1e1e1e] text-gray-100 rounded-bl-none shadow-lg border border-white/5"
-                                }`}
-                        >
-                            <div className="flex justify-between items-start gap-4 mb-2">
-                                <div className="text-[10px] uppercase font-bold opacity-50 flex items-center gap-1 select-none">
-                                    {m.role === "assistant" && "🤖 Assistant"}
-                                    {m.role === "user" && "👤 You"}
-                                    {m.role === "tool" && "🛠 Tool"}
-                                    {m.role === "system" && "⚙ System"}
-                                </div>
+                        message={m}
+                        index={i}
+                        onCopy={handleCopy}
+                        onEdit={handleEdit}
+                        onDelete={handleDelete}
+                        onRegenerate={handleRegenerate}
+                    />
+                ))}
+            </div>
 
-                                {/* Action Buttons (Visible on Hover) */}
-                                <div className={`flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity ${m.role === "user" ? "text-blue-200" : "text-gray-400"}`}>
-                                    <button onClick={() => handleCopy(m.content || "")} className="hover:text-white" title="Copy Message">
-                                        <Copy size={13} />
-                                    </button>
-
-                                    {m.role === "user" && (
-                                        <button onClick={() => handleEdit(m.content || "")} className="hover:text-white" title="Edit">
-                                            <Edit2 size={13} />
-                                        </button>
-                                    )}
-
-                                    {(m.role === "assistant" || m.role === "user") && (
-                                        <button onClick={() => handleDelete(i, m.id)} className="hover:text-red-400" title="Delete">
-                                            <Trash2 size={13} />
-                                        </button>
-                                    )}
-
-                                    {m.role === "assistant" && (
-                                        <button onClick={() => handleRegenerate(i, m.id)} className="hover:text-green-400" title="Regenerate">
-                                            <RefreshCw size={13} />
-                                        </button>
-                                    )}
-                                </div>
+            {
+                pendingTool && (
+                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+                        <div className="bg-gray-900 p-6 rounded-xl max-w-lg w-full border border-gray-700 shadow-2xl ring-1 ring-white/10">
+                            <h3 className="text-lg font-bold mb-4 flex items-center gap-2 text-white">
+                                <Terminal className="text-yellow-400" /> Use Tool?
+                            </h3>
+                            <div className="bg-black/50 p-4 rounded-lg mb-6 font-mono text-sm overflow-auto max-h-60 border border-white/5">
+                                <p className="text-green-400 font-bold mb-2">$ {pendingTool.name}</p>
+                                <pre className="text-gray-400 whitespace-pre-wrap break-all">
+                                    {JSON.stringify(pendingTool.args, null, 2)}
+                                </pre>
                             </div>
+                            <div className="flex justify-end gap-3">
+                                <button
+                                    onClick={() => setPendingTool(null)}
+                                    className="px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors"
+                                >
+                                    Deny
+                                </button>
+                                <button
+                                    onClick={handleApproveTool}
+                                    className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold shadow-lg shadow-blue-500/20 transition-all hover:scale-105"
+                                >
+                                    Allow Execution
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )
+            }
 
-                            {m.content && (
+
+            <div className="p-4 bg-gray-900 border-t border-gray-800">
+                <div className="max-w-4xl mx-auto flex gap-3">
+                    <input
+                        className="flex-1 bg-gray-800 border border-gray-700 rounded-xl p-3 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
+                        placeholder="Type a message..."
+                        disabled={loading}
+                    />
+                    <button
+                        disabled={loading}
+                        onClick={handleSend}
+                        className="bg-blue-600 p-3 rounded-xl hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-lg shadow-blue-600/20"
+                    >
+                        {loading ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Send size={20} />}
+                    </button>
+                </div>
+            </div>
+        </div >
+    );
+}
+
+
+
+
+
+function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegenerate }: any) {
+    const [isExpanded, setIsExpanded] = useState(m.role !== "tool");
+    const [showRaw, setShowRaw] = useState(false);
+    const [showToolArgs, setShowToolArgs] = useState(false);
+    const [copiedCodeVal, setCopiedCodeVal] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (copiedCodeVal) {
+            const timer = setTimeout(() => setCopiedCodeVal(null), 2000);
+            return () => clearTimeout(timer);
+        }
+    }, [copiedCodeVal]);
+
+    const handleCopyCode = (text: string) => {
+        navigator.clipboard.writeText(text);
+        setCopiedCodeVal(text);
+    };
+
+    return (
+        <div className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+            <div
+                className={`max-w-[85%] rounded-xl p-4 relative group ${m.role === "user"
+                    ? "bg-blue-600 text-white rounded-br-none shadow-lg shadow-blue-900/20"
+                    : m.role === "tool"
+                        ? "bg-gray-800 text-gray-400 font-mono text-xs rounded-none border-l-2 border-yellow-500 shadow-lg"
+                        : "bg-[#1e1e1e] text-gray-100 rounded-bl-none shadow-lg border border-white/5"
+                    }`}
+            >
+                <div className="flex justify-between items-start gap-4 mb-2">
+                    <div className="text-[10px] uppercase font-bold opacity-50 flex items-center gap-1 select-none">
+                        {m.role === "assistant" && "🤖 Assistant"}
+                        {m.role === "user" && "👤 You"}
+                        {m.role === "tool" && "🛠 Tool Output"}
+                        {m.role === "system" && "⚙ System"}
+                    </div>
+
+                    <div className={`flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity ${m.role === "user" ? "text-blue-200" : "text-gray-400"}`}>
+                        <button
+                            onClick={() => setShowRaw(!showRaw)}
+                            className={`hover:text-white ${showRaw ? "text-blue-400" : ""}`}
+                            title="Toggle Raw View"
+                        >
+                            <FileText size={13} />
+                        </button>
+
+                        <button onClick={() => onCopy(m.content || "")} className="hover:text-white" title="Copy Message">
+                            <Copy size={13} />
+                        </button>
+
+                        {m.role === "user" && (
+                            <button onClick={() => onEdit(m.content || "")} className="hover:text-white" title="Edit">
+                                <Edit2 size={13} />
+                            </button>
+                        )}
+
+                        {(m.role === "assistant" || m.role === "user") && (
+                            <button onClick={() => onDelete(i, m.id)} className="hover:text-red-400" title="Delete">
+                                <Trash2 size={13} />
+                            </button>
+                        )}
+
+                        {m.role === "assistant" && (
+                            <button onClick={() => onRegenerate(i, m.id)} className="hover:text-green-400" title="Regenerate">
+                                <RefreshCw size={13} />
+                            </button>
+                        )}
+                    </div>
+                </div>
+
+                {/* Collapsible Content */}
+                {m.role === "tool" && !isExpanded ? (
+                    <div className="flex items-center gap-3 mt-2">
+                        <button
+                            onClick={() => setIsExpanded(true)}
+                            className="text-blue-400 hover:text-blue-300 underline flex items-center gap-1"
+                        >
+                            Show Output ({m.content?.length || 0} chars)
+                        </button>
+                    </div>
+                ) : (
+                    <>
+                        {showRaw ? (
+                            <pre className="whitespace-pre-wrap font-mono text-sm text-gray-300 bg-black/20 p-2 rounded border border-white/10 overflow-x-auto">
+                                {m.content}
+                            </pre>
+                        ) : (
+                            m.content && (
                                 <div className={`prose max-w-none ${m.role === "user" ? "prose-invert text-white prose-pre:bg-blue-800" : "prose-invert text-gray-300"}`}>
                                     <ReactMarkdown
                                         remarkPlugins={[remarkGfm]}
                                         components={{
-                                            // Custom Typography to match 'Editor' aesthetic
                                             ul: ({ node, ...props }) => <ul className="list-disc pl-6 mb-4 space-y-2" {...props} />,
                                             ol: ({ node, ...props }) => <ol className="list-decimal pl-6 mb-4 space-y-2" {...props} />,
                                             li: ({ node, ...props }) => <li className="leading-relaxed pl-1" {...props} />,
@@ -385,70 +533,42 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                                         {m.content}
                                     </ReactMarkdown>
                                 </div>
-                            )}
-                            {m.tool_calls && (
-                                <div className="mt-2 bg-gray-950 p-2 rounded border border-gray-700/50 font-mono text-xs">
-                                    <div className="flex items-center gap-2 text-yellow-400">
-                                        <Terminal size={14} />
-                                        <span>Tool Call: {m.tool_calls[0]?.function?.name}</span>
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                ))}
-                <div ref={scrollRef} />
-            </div >
-
-            {pendingTool && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
-                    <div className="bg-gray-900 p-6 rounded-xl max-w-lg w-full border border-gray-700 shadow-2xl ring-1 ring-white/10">
-                        <h3 className="text-lg font-bold mb-4 flex items-center gap-2 text-white">
-                            <Terminal className="text-yellow-400" /> Use Tool?
-                        </h3>
-                        <div className="bg-black/50 p-4 rounded-lg mb-6 font-mono text-sm overflow-auto max-h-60 border border-white/5">
-                            <p className="text-green-400 font-bold mb-2">$ {pendingTool.name}</p>
-                            <pre className="text-gray-400 whitespace-pre-wrap break-all">
-                                {JSON.stringify(pendingTool.args, null, 2)}
-                            </pre>
-                        </div>
-                        <div className="flex justify-end gap-3">
+                            )
+                        )}
+                        {m.role === "tool" && (
                             <button
-                                onClick={() => setPendingTool(null)}
-                                className="px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors"
+                                onClick={() => setIsExpanded(false)}
+                                className="text-gray-500 hover:text-gray-400 text-xs mt-2 underline"
                             >
-                                Deny
+                                Collapse Output
                             </button>
-                            <button
-                                onClick={handleApproveTool}
-                                className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold shadow-lg shadow-blue-500/20 transition-all hover:scale-105"
-                            >
-                                Allow Execution
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
+                        )}
+                    </>
+                )}
 
-            <div className="p-4 bg-gray-900 border-t border-gray-800">
-                <div className="max-w-4xl mx-auto flex gap-3">
-                    <input
-                        className="flex-1 bg-gray-800 border border-gray-700 rounded-xl p-3 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                        value={input}
-                        onChange={(e) => setInput(e.target.value)}
-                        onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
-                        placeholder="Type a message..."
-                        disabled={loading}
-                    />
-                    <button
-                        disabled={loading}
-                        onClick={handleSend}
-                        className="bg-blue-600 p-3 rounded-xl hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-lg shadow-blue-600/20"
-                    >
-                        {loading ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Send size={20} />}
-                    </button>
-                </div>
+                {m.tool_calls && (
+                    <div className="mt-2 text-xs">
+                        <button
+                            onClick={() => setShowToolArgs(!showToolArgs)}
+                            className="bg-gray-950 p-2 rounded border border-gray-700/50 hover:border-gray-500 transition-colors w-full text-left"
+                        >
+                            <div className="flex items-center gap-2 text-yellow-400">
+                                <Terminal size={14} />
+                                <span className="font-mono">Tool Call: {m.tool_calls[0]?.function?.name}</span>
+                                <span className="text-gray-500 ml-auto text-[10px]">{showToolArgs ? "Hide Args" : "Show Args"}</span>
+                            </div>
+                        </button>
+
+                        {showToolArgs && (
+                            <div className="mt-1 bg-black/40 p-2 rounded border-x border-b border-gray-800 font-mono overflow-x-auto animate-in fade-in zoom-in-95 duration-200">
+                                <pre className="text-gray-400 whitespace-pre-wrap break-all">
+                                    {m.tool_calls[0]?.function?.arguments}
+                                </pre>
+                            </div>
+                        )}
+                    </div>
+                )}
             </div>
-        </div >
+        </div>
     );
 }

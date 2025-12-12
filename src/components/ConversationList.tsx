@@ -56,8 +56,20 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
         if (confirm("Are you sure you want to delete this chat?")) {
             try {
                 await invoke("delete_conversation", { conversationId: id });
+
+                // If we deleted the active conversation, decide what to select next
+                if (activeId === id) {
+                    const remaining = conversations.filter(c => c.id !== id);
+                    if (remaining.length > 0) {
+                        // Select the most recent one (first in list usually) or adjacent
+                        // Since list is usually sorted by date desc, selecting 0 is fine
+                        onSelect(remaining[0].id);
+                    } else {
+                        onCreate();
+                    }
+                }
+
                 loadConversations();
-                if (activeId === id) onCreate(); // Reset if active deleted
             } catch (e) {
                 console.error(e);
             }

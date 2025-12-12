@@ -62,6 +62,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub mcp_servers: HashMap<String, McpServerConfig>,
+
+    #[serde(default)]
+    pub default_model: Option<String>,
 }
 
 impl Settings {
