@@ -68,6 +68,19 @@ pub struct Settings {
 
     #[serde(default)]
     pub disabled_tools: Vec<String>,
+
+    #[serde(default)]
+    pub system_prompts: Vec<crate::mcp::config::SystemPrompt>,
+
+    #[serde(default)]
+    pub active_system_prompt_id: Option<String>,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
+pub struct SystemPrompt {
+    pub id: String,
+    pub name: String,
+    pub content: String,
 }
 
 impl Settings {

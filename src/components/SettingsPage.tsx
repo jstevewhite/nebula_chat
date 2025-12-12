@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Server, Plus, Edit2 } from "lucide-react";
+import { Server, Plus, Edit2, Book } from "lucide-react";
 import ProvidersSettings, { ProviderConfig } from "./ProvidersSettings";
+import PromptsSettings from "./PromptsSettings";
 
 export default function SettingsPage() {
     const [servers, setServers] = useState<{ name: string, status: 'connected' | 'error', config: any }[]>([]);
@@ -136,6 +137,13 @@ export default function SettingsPage() {
 
     return (
         <div className="p-6 bg-gray-950 h-full text-white overflow-auto font-sans relative">
+            <h2 className="text-2xl font-bold mb-6 flex items-center gap-2 text-white">
+                <Book className="text-blue-500" /> System Prompts
+            </h2>
+            <div className="mb-10">
+                <PromptsSettings />
+            </div>
+
             <h2 className="text-2xl font-bold mb-6 flex items-center gap-2 text-white">
                 <Server className="text-blue-500" /> MCP Servers
             </h2>
