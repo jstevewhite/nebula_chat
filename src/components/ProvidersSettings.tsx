@@ -74,6 +74,14 @@ export default function ProvidersSettings({ providers, onChange }: ProvidersSett
         updateProvider(providerKey, { models: newModels });
     }
 
+    const toggleAllModels = (providerKey: string, visible: boolean) => {
+        const p = providers[providerKey];
+        if (!p) return;
+
+        const newModels = p.models.map(m => ({ ...m, visible }));
+        updateProvider(providerKey, { models: newModels });
+    };
+
     const deleteProvider = (key: string) => {
         if (confirm(`Are you sure you want to delete provider '${key}'?`)) {
             const newProviders = { ...providers };
@@ -165,9 +173,29 @@ export default function ProvidersSettings({ providers, onChange }: ProvidersSett
                             {/* Models */}
                             <div className="pt-2 border-t border-gray-800">
                                 <div className="flex justify-between items-center mb-2">
-                                    <label className="text-xs font-semibold text-gray-500 uppercase">
-                                        Models ({config.models.filter(m => m.visible !== false).length}/{config.models.length})
-                                    </label>
+                                    <div className="flex items-center gap-3">
+                                        <label className="text-xs font-semibold text-gray-500 uppercase">
+                                            Models ({config.models.filter(m => m.visible !== false).length}/{config.models.length})
+                                        </label>
+                                        {config.models.length > 0 && (
+                                            <div className="flex gap-1">
+                                                <button
+                                                    onClick={() => toggleAllModels(key, true)}
+                                                    className="text-[10px] px-1.5 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-400 rounded uppercase font-bold transition-colors"
+                                                    title="Enable All"
+                                                >
+                                                    All
+                                                </button>
+                                                <button
+                                                    onClick={() => toggleAllModels(key, false)}
+                                                    className="text-[10px] px-1.5 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-400 rounded uppercase font-bold transition-colors"
+                                                    title="Disable All"
+                                                >
+                                                    None
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
                                     <button
                                         onClick={() => fetchModels(key)}
                                         disabled={loading === key || !config.enabled}
