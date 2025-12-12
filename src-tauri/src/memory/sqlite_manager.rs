@@ -53,16 +53,22 @@ impl SqliteManager {
         Ok(convs)
     }
 
-    pub fn get_conversation_messages(&self, conversation_id: &str) -> Result<Vec<(String, Option<String>, Option<String>, Option<String>)>> {
-        // Returns (role, content, tool_calls_json, tool_call_id)
+    pub fn get_conversation_messages(&self, conversation_id: &str) -> Result<Vec<(String, String, Option<String>, Option<String>, Option<String>)>> {
+        // Returns (id, role, content, tool_calls_json, tool_call_id)
         let mut stmt = self.conn.prepare(
-            "SELECT role, content, tool_calls, tool_call_id FROM messages 
+            "SELECT id, role, content, tool_calls, tool_call_id FROM messages 
              WHERE conversation_id = ?1 
              ORDER BY created_at ASC"
         )?;
         
         let rows = stmt.query_map(params![conversation_id], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            Ok((
+                row.get(0)?, 
+                row.get(1)?, 
+                row.get(2)?, 
+                row.get(3)?, 
+                row.get(4)?
+            ))
         })?;
 
         let mut msgs = Vec::new();
