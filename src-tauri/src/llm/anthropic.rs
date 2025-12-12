@@ -97,6 +97,60 @@ impl LlmProvider for AnthropicProvider {
                     content
                 };
 
+                // Check for attachments
+                if let Some(attachments) = &msg.attachments {
+                    let mut parts = Vec::new();
+
+                    // Text Content (User input + Text Attachments)
+                    let mut text_content = effective_content.clone();
+                    for att in attachments {
+                        if !att.is_binary {
+                            text_content.push_str(&format!(
+                                "\n\nFile: {}\n```\n{}\n```",
+                                att.name, att.data
+                            ));
+                        }
+                    }
+
+                    parts.push(json!({
+                        "type": "text",
+                        "text": text_content
+                    }));
+
+                    // Image Attachments
+                    for att in attachments {
+                        if att.is_binary {
+                            let img = &att.data;
+                            // Extract base64. Format is data:image/png;base64,....
+                            // We need media_type and data
+                            if let Some(comma_pos) = img.find(',') {
+                                let meta = &img[0..comma_pos]; // data:image/png;base64
+                                let data = &img[comma_pos + 1..];
+
+                                let media_type =
+                                    meta.trim_start_matches("data:").trim_end_matches(";base64");
+
+                                parts.push(json!({
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": media_type,
+                                        "data": data
+                                    }
+                                }));
+                            }
+                        }
+                    }
+
+                    if !parts.is_empty() {
+                        filtered_messages.push(json!({
+                            "role": msg.role,
+                            "content": parts
+                        }));
+                        continue;
+                    }
+                }
+
                 filtered_messages.push(json!({
                     "role": msg.role,
                     "content": effective_content
@@ -187,6 +241,7 @@ impl LlmProvider for AnthropicProvider {
                 Some(tool_calls)
             },
             tool_call_id: None,
+            attachments: None,
         })
     }
 }

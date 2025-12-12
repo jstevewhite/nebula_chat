@@ -30,6 +30,9 @@ Nebula implements the **[Model Context Protocol (MCP)](https://modelcontextproto
 - **Code Highlighting**: Syntax highlighting for code blocks with "Copy Code" functionality, styled to match the `vscDarkPlus` theme.
 - **Interactive Messages**: Edit, copy, delete, and regenerate messages on the fly.
 - **Aesthetic UI**: Polished, editor-like typography with custom scrollbars and clean spacing.
+- **File Attachments**: Support for generic file attachments (Text, Code, Images) with multi-modal LLM support.
+- **Memory Panel**: Real-time transparency into what memory context is being injected into your conversation.
+- **Intelligent Context Assembly**: Configure a secondary "Strategist" model to filter and summarize memories before they reach the main chat.
 
 ## Architecture
 
