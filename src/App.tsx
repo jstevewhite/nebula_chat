@@ -2,7 +2,8 @@ import { useState, useEffect } from "react";
 import ChatInterface from "./components/ChatInterface";
 import SettingsPage from "./components/SettingsPage";
 import ConversationList from "./components/ConversationList";
-import { MessageSquare, Settings } from "lucide-react";
+import ToolsPanel from "./components/ToolsPanel";
+import { MessageSquare, Settings, Wrench } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 
 interface Conversation {
@@ -14,6 +15,7 @@ interface Conversation {
 export default function App() {
   const [activeTab, setActiveTab] = useState<"chat" | "settings">("chat");
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
+  const [showTools, setShowTools] = useState(false);
 
   useEffect(() => {
     // Initial load: Get conversations or create one
@@ -59,6 +61,16 @@ export default function App() {
         </button>
 
         <button
+          onClick={() => setShowTools(!showTools)}
+          className={`p-3 rounded-xl transition-all duration-200 ${showTools && activeTab === "chat" ? "bg-gray-800 text-blue-400" : "text-gray-500 hover:bg-gray-900 hover:text-gray-300"}`}
+          title="Tools"
+        >
+          <Wrench size={20} />
+        </button>
+
+        <div className="flex-1" />
+
+        <button
           onClick={() => setActiveTab("settings")}
           className={`p-3 rounded-xl transition-all duration-200 ${activeTab === "settings" ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20" : "text-gray-500 hover:bg-gray-900 hover:text-gray-300"}`}
           title="Settings"
@@ -79,6 +91,7 @@ export default function App() {
             <div className="flex-1 flex flex-col h-full overflow-hidden">
               <ChatInterface conversationId={activeConvId} />
             </div>
+            {showTools && <ToolsPanel />}
           </>
         ) : (
           <SettingsPage />

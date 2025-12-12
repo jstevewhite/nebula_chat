@@ -65,6 +65,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub default_model: Option<String>,
+
+    #[serde(default)]
+    pub disabled_tools: Vec<String>,
 }
 
 impl Settings {

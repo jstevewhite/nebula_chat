@@ -14,6 +14,7 @@ Unlike standard chat clients, Nebula features a **Memory Sidecar** (powered by S
 Nebula implements the **[Model Context Protocol (MCP)](https://modelcontextprotocol.io/)**, treating external tools as first-class citizens.
 - **Connect Tools**: Give the AI access to your file system, Git repositories, or browser automation via MCP servers.
 - **Security First**: Granular "Human-in-the-loop" permissions. You verify every tool execution (Allow/Deny/Always Allow).
+- **Tool Management**: Visual panel to view, search, and granularly enable/disable individual tools or entire servers.
 - **Transport Support**: Supports `stdio` and `sse` (Streamable HTTP) transports for flexible integration.
 
 ### ⚡ Performance & Privacy
