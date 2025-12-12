@@ -280,7 +280,17 @@ async fn send_message(
         final_messages.insert(0, context_msg);
     }
 
-    let tools = state.mcp_manager.get_all_tools().await;
+    let all_tools = state.mcp_manager.get_all_tools().await;
+
+    // Filter disabled tools
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let settings = Settings::load_migrated(&settings_path);
+
+    let tools: Vec<_> = all_tools
+        .into_iter()
+        .filter(|t| !settings.disabled_tools.contains(&t.name))
+        .collect();
 
     // Select Provider
     let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
@@ -737,9 +747,92 @@ async fn set_default_model(app: tauri::AppHandle, model_target: String) -> Resul
     settings.save(&settings_path).map_err(|e| e.to_string())
 }
 
+#[derive(serde::Serialize)]
+struct ToolStatus {
+    name: String,
+    description: String,
+    server: String,
+    enabled: bool,
+}
+
+#[tauri::command]
+async fn get_tools(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<ToolStatus>, String> {
+    let all_tools = state.mcp_manager.get_all_tools().await;
+
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let settings = Settings::load_migrated(&settings_path);
+
+    let mut result = Vec::new();
+    for t in all_tools {
+        let parts: Vec<&str> = t.name.splitn(2, "__").collect();
+        let server = if parts.len() == 2 {
+            parts[0]
+        } else {
+            "unknown"
+        };
+
+        result.push(ToolStatus {
+            name: t.name.clone(),
+            description: t.description,
+            server: server.to_string(),
+            enabled: !settings.disabled_tools.contains(&t.name),
+        });
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
+async fn toggle_tool(
+    app: tauri::AppHandle,
+    tool_name: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let mut settings = Settings::load_migrated(&settings_path);
+
+    if enabled {
+        settings.disabled_tools.retain(|t| t != &tool_name);
+    } else {
+        if !settings.disabled_tools.contains(&tool_name) {
+            settings.disabled_tools.push(tool_name);
+        }
+    }
+
+    settings.save(&settings_path).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn get_mcp_servers(state: State<'_, AppState>) -> Result<Vec<String>, String> {
     Ok(state.mcp_manager.list_servers().await)
+}
+
+#[tauri::command]
+async fn toggle_tool_list(
+    app: tauri::AppHandle,
+    tool_names: Vec<String>,
+    enabled: bool,
+) -> Result<(), String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let mut settings = Settings::load_migrated(&settings_path);
+
+    for tool_name in tool_names {
+        if enabled {
+            settings.disabled_tools.retain(|t| t != &tool_name);
+        } else {
+            if !settings.disabled_tools.contains(&tool_name) {
+                settings.disabled_tools.push(tool_name);
+            }
+        }
+    }
+
+    settings.save(&settings_path).map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -789,7 +882,10 @@ pub fn run() {
             generate_title,
             edit_mcp_server,
             delete_message,
-            set_default_model
+            set_default_model,
+            get_tools,
+            toggle_tool,
+            toggle_tool_list
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
