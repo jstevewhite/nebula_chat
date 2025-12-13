@@ -26,10 +26,32 @@ export default function SettingsPage() {
     }, []);
 
     const loadServers = async () => {
+        setStatus("Loading settings...");
         try {
-            const active: string[] = await invoke("get_mcp_servers");
-            const settings: any = await invoke("get_settings");
+            let active: string[] = [];
+            try {
+                active = await invoke("get_mcp_servers");
+            } catch (e) {
+                console.error("Failed to get MCP servers:", e);
+                setStatus(`Error loading MCP status: ${e}`);
+                // Don't return, try to load settings anyway
+            }
+
+            let settings: any = {};
+            try {
+                settings = await invoke("get_settings");
+            } catch (e) {
+                console.error("Failed to get settings:", e);
+                setStatus(`Error loading settings.json: ${e}`);
+                return; // Critical failure
+            }
+
             setFullSettings(settings);
+
+            // Debug empty settings
+            if (!settings.mcp_servers && !settings.providers) {
+                setStatus("Warning: Settings appear empty.");
+            }
 
             const allServers = Object.entries(settings.mcp_servers || {}).map(([key, val]: [string, any]) => ({
                 name: key,
@@ -39,8 +61,13 @@ export default function SettingsPage() {
 
             setServers(allServers as any);
             setProviders(settings.providers || {});
+
+            if (active.length > 0 || Object.keys(settings.providers || {}).length > 0) {
+                setStatus(""); // Clear loading/error if successful
+            }
         } catch (e) {
             console.error(e);
+            setStatus("Uncaught error: " + e);
         }
     };
 
@@ -137,6 +164,17 @@ export default function SettingsPage() {
 
     return (
         <div className="p-6 bg-gray-950 h-full text-white overflow-auto font-sans relative">
+            {/* Status Banner */}
+            {status && (
+                <div className={`mb-6 p-4 rounded-lg flex items-center gap-2 border ${status.includes("Error") || status.includes("Warning") || status.includes("Failed")
+                        ? "bg-red-900/20 border-red-500/50 text-red-200"
+                        : "bg-blue-900/20 border-blue-500/50 text-blue-200"
+                    }`}>
+                    <div className="flex-1 font-mono text-sm">{status}</div>
+                    <button onClick={() => setStatus("")} className="px-2 hover:bg-white/10 rounded">&times;</button>
+                </div>
+            )}
+
             <h2 className="text-2xl font-bold mb-6 flex items-center gap-2 text-white">
                 <Book className="text-blue-500" /> System Prompts
             </h2>
