@@ -13,7 +13,7 @@ export default function ToolsPanel() {
     const [tools, setTools] = useState<ToolStatus[]>([]);
     const [loading, setLoading] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
-    const [collapsedServers, setCollapsedServers] = useState<Set<string>>(new Set());
+    const [expandedServers, setExpandedServers] = useState<Set<string>>(new Set());
 
     const loadTools = async () => {
         setLoading(true);
@@ -42,13 +42,13 @@ export default function ToolsPanel() {
     };
 
     const toggleServerCollapse = (server: string) => {
-        const newCollapsed = new Set(collapsedServers);
-        if (newCollapsed.has(server)) {
-            newCollapsed.delete(server);
+        const newExpanded = new Set(expandedServers);
+        if (newExpanded.has(server)) {
+            newExpanded.delete(server);
         } else {
-            newCollapsed.add(server);
+            newExpanded.add(server);
         }
-        setCollapsedServers(newCollapsed);
+        setExpandedServers(newExpanded);
     };
 
     const toggleServerTools = async (_server: string, serverTools: ToolStatus[], enable: boolean) => {
@@ -117,7 +117,7 @@ export default function ToolsPanel() {
                 {Object.entries(groupedTools).map(([server, serverTools]) => {
                     const allEnabled = serverTools.every(t => t.enabled);
                     const someEnabled = serverTools.some(t => t.enabled);
-                    const isCollapsed = collapsedServers.has(server);
+                    const isExpanded = expandedServers.has(server);
 
                     return (
                         <div key={server} className="space-y-1">
@@ -126,7 +126,7 @@ export default function ToolsPanel() {
                                     className="flex items-center gap-2 cursor-pointer flex-1 py-1"
                                     onClick={() => toggleServerCollapse(server)}
                                 >
-                                    {isCollapsed ? <ChevronRight size={14} className="text-gray-500" /> : <ChevronDown size={14} className="text-gray-500" />}
+                                    {isExpanded ? <ChevronDown size={14} className="text-gray-500" /> : <ChevronRight size={14} className="text-gray-500" />}
                                     <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">
                                         {server}
                                     </div>
@@ -144,7 +144,7 @@ export default function ToolsPanel() {
                                 </button>
                             </div>
 
-                            {!isCollapsed && (
+                            {isExpanded && (
                                 <div className="space-y-0.5 ml-1 pl-2 border-l border-gray-800 animate-in fade-in slide-in-from-top-1 duration-200">
                                     {serverTools.map((tool) => (
                                         <div
