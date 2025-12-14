@@ -341,6 +341,7 @@ async fn send_message(
     }
 
     // Inject System Prompt
+    println!("[DEBUG] Loading settings for system prompt...");
     let config_dir = app_handle
         .path()
         .app_config_dir()
@@ -350,6 +351,7 @@ async fn send_message(
 
     if let Some(active_id) = settings.active_system_prompt_id {
         if let Some(prompt) = settings.system_prompts.iter().find(|p| p.id == active_id) {
+            println!("[DEBUG] Injecting system prompt: {}", prompt.name);
             final_messages.insert(
                 0,
                 Message {
@@ -364,9 +366,9 @@ async fn send_message(
         }
     }
 
+    println!("[DEBUG] Getting tools from MCP Manager...");
     let all_tools = state.mcp_manager.get_all_tools().await;
-
-    // Filter disabled tools
+    println!("[DEBUG] Got {} tools. Filtering...", all_tools.len());
 
     // Filter disabled tools
     let config_dir = app_handle
@@ -380,8 +382,10 @@ async fn send_message(
         .into_iter()
         .filter(|t| !settings.disabled_tools.contains(&t.name))
         .collect();
+    println!("[DEBUG] Final tool count: {}", tools.len());
 
     // Select Provider
+    println!("[DEBUG] select provider config for '{}'", provider_id);
     let config_dir = app_handle
         .path()
         .app_config_dir()
@@ -399,8 +403,10 @@ async fn send_message(
     }
 
     // Prune context
+    println!("[DEBUG] Pruning messages...");
     let pruned_messages =
         ContextManager::prune_messages(final_messages, 64000).map_err(|e| e.to_string())?;
+    println!("[DEBUG] Messages pruned. Calling provider chat...");
 
     let response = match provider_config.provider_type {
         ProviderType::OpenAI | ProviderType::OpenAICompatible => {
@@ -425,11 +431,18 @@ async fn send_message(
                 .base_url
                 .clone()
                 .unwrap_or("http://localhost:11434".to_string());
+            println!(
+                "[DEBUG] Initializing Ollama provider with URL: {}",
+                base_url
+            );
             let provider = OllamaProvider::new(base_url, model.clone());
-            provider
+            println!("[DEBUG] Awaiting Ollama chat response...");
+            let res = provider
                 .chat(pruned_messages, tools)
                 .await
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.to_string());
+            println!("[DEBUG] Ollama response received (or error)");
+            res
         }
     };
 
@@ -713,6 +726,28 @@ async fn edit_mcp_server(
         .restart_server(original_name, new_config)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_mcp_server(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<(), String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let mut settings = Settings::load_migrated(&settings_path);
+
+    if settings.mcp_servers.remove(&name).is_none() {
+        return Err(format!("Server '{}' not found", name));
+    }
+
+    settings.save(&settings_path).map_err(|e| e.to_string())?;
+
+    // Remove from runtime (best-effort; may not kill an external stdio process today).
+    state.mcp_manager.remove_server(&name).await;
+
+    Ok(())
 }
 
 async fn attempt_pruning(
@@ -1030,6 +1065,8 @@ pub fn run() {
             send_message,
             execute_tool,
             add_mcp_server,
+            edit_mcp_server,
+            delete_mcp_server,
             get_mcp_servers,
             get_settings,
             save_settings,
@@ -1040,12 +1077,11 @@ pub fn run() {
             delete_conversation,
             rename_conversation,
             generate_title,
-            edit_mcp_server,
             delete_message,
             set_default_model,
-            get_tools,
             toggle_tool,
             toggle_tool_list,
+            get_tools,
             get_system_prompts,
             save_system_prompt,
             delete_system_prompt,

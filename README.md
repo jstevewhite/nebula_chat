@@ -81,6 +81,7 @@ graph TD
    ```bash
    npm run tauri dev
    ```
+**NB** If you're on a linux nvidia machine, you may need to run `WEBKIT_DISABLE_DMABUF_RENDERER=1 npm run tauri dev` to avoid issues with the webview.
 
 ## Configuration
 

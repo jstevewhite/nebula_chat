@@ -1,11 +1,11 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Server, Plus, Edit2, Book } from "lucide-react";
+import { Server, Plus, Edit2, Book, Trash2 } from "lucide-react";
 import ProvidersSettings, { ProviderConfig } from "./ProvidersSettings";
 import PromptsSettings from "./PromptsSettings";
 
 export default function SettingsPage() {
-    const [servers, setServers] = useState<{ name: string, status: 'connected' | 'error', config: any }[]>([]);
+    const [servers, setServers] = useState<{ name: string, status: 'connected' | 'error' | 'unknown', config: any }[]>([]);
     const [providers, setProviders] = useState<Record<string, ProviderConfig>>({});
     const [fullSettings, setFullSettings] = useState<any>({});
     const [status, setStatus] = useState("");
@@ -28,15 +28,7 @@ export default function SettingsPage() {
     const loadServers = async () => {
         setStatus("Loading settings...");
         try {
-            let active: string[] = [];
-            try {
-                active = await invoke("get_mcp_servers");
-            } catch (e) {
-                console.error("Failed to get MCP servers:", e);
-                setStatus(`Error loading MCP status: ${e}`);
-                // Don't return, try to load settings anyway
-            }
-
+            // Load persisted settings first (source of truth for what exists)
             let settings: any = {};
             try {
                 settings = await invoke("get_settings");
@@ -47,23 +39,34 @@ export default function SettingsPage() {
             }
 
             setFullSettings(settings);
+            setProviders(settings.providers || {});
+
+            const baseServers = Object.entries(settings.mcp_servers || {}).map(([key, val]: [string, any]) => ({
+                name: key,
+                status: 'unknown' as const,
+                config: val
+            }));
+            setServers(baseServers as any);
+
+            // Best-effort runtime status
+            try {
+                const active: string[] = await invoke("get_mcp_servers");
+                const merged = Object.entries(settings.mcp_servers || {}).map(([key, val]: [string, any]) => ({
+                    name: key,
+                    status: active.includes(key) ? 'connected' : 'error',
+                    config: val
+                }));
+                setServers(merged as any);
+            } catch (e) {
+                console.error("Failed to get MCP servers:", e);
+                setStatus(`Warning: MCP runtime status unavailable: ${e}`);
+            }
 
             // Debug empty settings
             if (!settings.mcp_servers && !settings.providers) {
                 setStatus("Warning: Settings appear empty.");
-            }
-
-            const allServers = Object.entries(settings.mcp_servers || {}).map(([key, val]: [string, any]) => ({
-                name: key,
-                status: active.includes(key) ? 'connected' : 'error',
-                config: val
-            }));
-
-            setServers(allServers as any);
-            setProviders(settings.providers || {});
-
-            if (active.length > 0 || Object.keys(settings.providers || {}).length > 0) {
-                setStatus(""); // Clear loading/error if successful
+            } else {
+                setStatus("");
             }
         } catch (e) {
             console.error(e);
@@ -162,6 +165,22 @@ export default function SettingsPage() {
         }
     };
 
+    const handleDeleteServer = async (serverName: string) => {
+        if (!confirm(`Delete MCP server '${serverName}'? This removes it from settings.json.`)) {
+            return;
+        }
+        try {
+            setStatus(`Deleting MCP server '${serverName}'...`);
+            await invoke("delete_mcp_server", { name: serverName });
+            setStatus("Deleted.");
+            setTimeout(() => setStatus(""), 1000);
+            loadServers();
+        } catch (e: any) {
+            console.error(e);
+            setStatus("Error deleting server: " + e);
+        }
+    };
+
     return (
         <div className="p-6 bg-gray-950 h-full text-white overflow-auto font-sans relative">
             {/* Status Banner */}
@@ -219,9 +238,26 @@ export default function SettingsPage() {
 
             <div className="grid gap-4 mb-8">
                 {servers.map(s => (
-                    <div key={s.name} className={`bg-gray-900 p-4 rounded-lg border flex justify-between items-center shadow-lg ${s.status === 'connected' ? 'border-gray-800' : 'border-red-900/50 bg-red-950/10'}`}>
+                    <div
+                        key={s.name}
+                        className={`bg-gray-900 p-4 rounded-lg border flex justify-between items-center shadow-lg ${
+                            s.status === 'connected'
+                                ? 'border-gray-800'
+                                : s.status === 'unknown'
+                                    ? 'border-gray-700/50 bg-gray-950/10'
+                                    : 'border-red-900/50 bg-red-950/10'
+                        }`}
+                    >
                         <div className="flex items-center gap-3">
-                            <div className={`w-2 h-2 rounded-full ${s.status === 'connected' ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
+                            <div
+                                className={`w-2 h-2 rounded-full ${
+                                    s.status === 'connected'
+                                        ? 'bg-green-500 animate-pulse'
+                                        : s.status === 'unknown'
+                                            ? 'bg-gray-500'
+                                            : 'bg-red-500'
+                                }`}
+                            />
                             <div className="flex flex-col">
                                 <span className="font-mono font-bold text-gray-200">{s.name}</span>
                                 <span className="text-xs text-gray-500">
@@ -231,14 +267,30 @@ export default function SettingsPage() {
                             </div>
                         </div>
                         <div className="flex items-center gap-2">
-                            <div className={`text-xs font-bold px-2 py-1 rounded ${s.status === 'connected' ? 'text-green-500 bg-green-500/10' : 'text-red-400 bg-red-500/10'}`}>
+                            <div
+                                className={`text-xs font-bold px-2 py-1 rounded ${
+                                    s.status === 'connected'
+                                        ? 'text-green-500 bg-green-500/10'
+                                        : s.status === 'unknown'
+                                            ? 'text-gray-300 bg-gray-500/10'
+                                            : 'text-red-400 bg-red-500/10'
+                                }`}
+                            >
                                 {s.status.toUpperCase()}
                             </div>
                             <button
                                 onClick={() => openEditModal(s.name, s.config)}
                                 className="p-2 hover:bg-gray-800 rounded-lg text-gray-400 hover:text-white transition-colors"
+                                title="Edit"
                             >
                                 <Edit2 size={16} />
+                            </button>
+                            <button
+                                onClick={() => handleDeleteServer(s.name)}
+                                className="p-2 hover:bg-red-900/30 rounded-lg text-gray-400 hover:text-red-400 transition-colors"
+                                title="Delete"
+                            >
+                                <Trash2 size={16} />
                             </button>
                         </div>
                     </div>

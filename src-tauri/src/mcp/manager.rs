@@ -2,56 +2,32 @@ use crate::mcp::client::McpClient;
 use crate::mcp::config::{McpServerConfig, Settings};
 use anyhow::Result;
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 pub struct McpManager {
     clients: RwLock<HashMap<String, Arc<McpClient>>>,
+    starting: RwLock<HashSet<String>>,
 }
 
 impl McpManager {
     pub fn new() -> Self {
         Self {
             clients: RwLock::new(HashMap::new()),
+            starting: RwLock::new(HashSet::new()),
         }
     }
 
     pub async fn shutdown(&self) {
         let mut clients = self.clients.write().await;
         clients.clear();
+        let mut starting = self.starting.write().await;
+        starting.clear();
     }
 
-    pub async fn initialize(&self, settings: Settings) -> Result<()> {
-        let mut clients = self.clients.write().await;
-
-        for (name, config) in settings.mcp_servers {
-            if clients.contains_key(&name) {
-                continue;
-            }
-
-            println!("Starting MCP server: {}", name);
-            if let Err(e) = self
-                .start_server_internal(&mut clients, &name, &config)
-                .await
-            {
-                eprintln!("Failed to start MCP server {}: {}", name, e);
-            }
-        }
-        Ok(())
-    }
-
-    async fn start_server_internal(
-        &self,
-        clients: &mut HashMap<String, Arc<McpClient>>,
-        name: &str,
-        config: &McpServerConfig,
-    ) -> Result<()> {
-        // Create Client
-        let client = McpClient::new(&config.transport).await?;
-
-        // Perform Handshake
-        let init_params = json!({
+    fn init_params() -> serde_json::Value {
+        json!({
             "protocolVersion": "2024-11-05",
             "capabilities": {
                 "roots": {
@@ -63,7 +39,34 @@ impl McpManager {
                 "name": "Nebula",
                 "version": "0.1.0"
             }
-        });
+        })
+    }
+
+    async fn try_mark_starting(&self, name: &str) -> bool {
+        // Lock ordering: starting -> clients
+        let mut starting = self.starting.write().await;
+        if starting.contains(name) {
+            return false;
+        }
+        let clients = self.clients.read().await;
+        if clients.contains_key(name) {
+            return false;
+        }
+        starting.insert(name.to_string());
+        true
+    }
+
+    async fn clear_starting(&self, name: &str) {
+        let mut starting = self.starting.write().await;
+        starting.remove(name);
+    }
+
+    async fn start_client(&self, name: &str, config: &McpServerConfig) -> Result<McpClient> {
+        // Create Client
+        let client = McpClient::new(&config.transport).await?;
+
+        // Perform Handshake
+        let init_params = Self::init_params();
 
         match client.request("initialize", Some(init_params)).await {
             Ok(resp) => {
@@ -77,18 +80,63 @@ impl McpManager {
             }
         }
 
-        clients.insert(name.to_string(), Arc::new(client));
+        Ok(client)
+    }
+
+    pub async fn initialize(&self, settings: Settings) -> Result<()> {
+        for (name, config) in settings.mcp_servers {
+            if !self.try_mark_starting(&name).await {
+                continue;
+            }
+
+            println!("Starting MCP server: {}", name);
+
+            let start_result = self.start_client(&name, &config).await;
+            self.clear_starting(&name).await;
+
+            match start_result {
+                Ok(client) => {
+                    let mut clients = self.clients.write().await;
+                    clients.insert(name, Arc::new(client));
+                }
+                Err(e) => {
+                    eprintln!("Failed to start MCP server {}: {}", name, e);
+                }
+            }
+        }
+
         Ok(())
     }
 
     pub async fn restart_server(&self, name: String, config: McpServerConfig) -> Result<()> {
-        let mut clients = self.clients.write().await;
-        // Remove existing
-        clients.remove(&name);
+        // Prevent concurrent restarts/starts of the same server.
+        {
+            let mut starting = self.starting.write().await;
+            if starting.contains(&name) {
+                return Err(anyhow::anyhow!("Server '{}' is already starting", name));
+            }
+            starting.insert(name.clone());
+        }
+
+        // Remove existing client (short lock)
+        {
+            let mut clients = self.clients.write().await;
+            clients.remove(&name);
+        }
 
         println!("Restarting MCP server: {}", name);
-        self.start_server_internal(&mut clients, &name, &config)
-            .await
+
+        let start_result = self.start_client(&name, &config).await;
+        self.clear_starting(&name).await;
+
+        match start_result {
+            Ok(client) => {
+                let mut clients = self.clients.write().await;
+                clients.insert(name, Arc::new(client));
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
     }
 
     pub async fn get_client(&self, name: &str) -> Option<Arc<McpClient>> {
@@ -100,9 +148,20 @@ impl McpManager {
             .read()
             .await
             .iter()
-            //    .filter(|(_, client)| client.is_connected()) // Show all for now, or maybe only connected
+            .filter(|(_, client)| client.is_connected())
             .map(|(name, _)| name.clone())
             .collect()
+    }
+
+    pub async fn remove_server(&self, name: &str) {
+        {
+            let mut clients = self.clients.write().await;
+            clients.remove(name);
+        }
+        {
+            let mut starting = self.starting.write().await;
+            starting.remove(name);
+        }
     }
 
     pub async fn get_all_tools(&self) -> Vec<crate::llm::provider::ToolDefinition> {

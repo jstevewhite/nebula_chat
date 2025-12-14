@@ -286,6 +286,17 @@ impl McpClient {
     }
 
     pub async fn request(&self, method: &str, params: Option<Value>) -> Result<Value> {
+        // Default timeout to avoid hanging indefinitely (e.g. during initialize).
+        self.request_with_timeout(std::time::Duration::from_secs(30), method, params)
+            .await
+    }
+
+    pub async fn request_with_timeout(
+        &self,
+        timeout: std::time::Duration,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<Value> {
         let id_val = Uuid::new_v4().to_string();
         let req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -298,14 +309,28 @@ impl McpClient {
 
         {
             let mut map = self.pending.lock().await;
-            map.insert(id_val, resp_tx);
+            map.insert(id_val.clone(), resp_tx);
         }
 
         if let Err(e) = self.transport.send(req).await {
+            let mut map = self.pending.lock().await;
+            map.remove(&id_val);
             return Err(anyhow::anyhow!("Transport Error: {}", e));
         }
 
-        resp_rx.await.context("Response channel closed")?
+        match tokio::time::timeout(timeout, resp_rx).await {
+            Ok(r) => r.context("Response channel closed")?,
+            Err(_) => {
+                // Ensure we don't leak a pending entry on timeout.
+                let mut map = self.pending.lock().await;
+                map.remove(&id_val);
+                Err(anyhow::anyhow!(
+                    "RPC timeout after {:?} ({})",
+                    timeout,
+                    method
+                ))
+            }
+        }
     }
 
     pub async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
