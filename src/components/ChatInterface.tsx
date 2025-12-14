@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check, Pin, FileText, Book, Paperclip, X, Brain } from "lucide-react";
+import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check, Pin, FileText, Book, Paperclip, X, Brain, Square, Sliders } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -40,15 +40,28 @@ interface SystemPrompt {
     content: string;
 }
 
+interface GenerationSettings {
+    temperature: number;
+    top_p: number;
+    stream: boolean;
+}
+
 export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState("");
     const [loading, setLoading] = useState(false);
 
     // Model Selection State
-    // Model Selection State
     const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
     const [selectedModel, setSelectedModel] = useState<string>(""); // stored as "providerId::modelId"
+
+    // Generation Settings
+    const [genSettings, setGenSettings] = useState<GenerationSettings>({
+        temperature: 0.7,
+        top_p: 1.0,
+        stream: true
+    });
+    const [showSettings, setShowSettings] = useState(false);
 
     interface Attachment {
         file: File;
@@ -250,13 +263,6 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         try {
             let [providerId, modelId] = selectedModel.split("::");
             if (!modelId) {
-                // If no provider prefix, assume openai or map based on logic, but for now specific Logic
-                // Actually fetchModels returns just IDs for now? 
-                // Wait, logic in fetchModels returns {id, name}. 
-                // We need providerId. 
-                // Let's assume providerId is "openai" for now if not present, OR we need to track provider.
-                // Simplified: Pass modelId as is, backend finds provider? No, backend needs providerId.
-                // Fix: Frontend should track provider. For MVP, we default to "openai" if missing
                 providerId = "openai";
                 modelId = selectedModel;
             }
@@ -268,16 +274,57 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 is_binary: a.isBinary
             })) : null;
 
+            let unlistenTransform: (() => void) | null = null;
+            let tempMsgId = "streaming-" + Math.random().toString(36);
+
+            // Setup Streaming Listener if enabled
+            if (genSettings.stream) {
+                // Add placeholder message
+                setMessages(prev => [...prev, {
+                    id: tempMsgId,
+                    role: "assistant",
+                    content: ""
+                }]);
+
+                const unlisten = await listen<string>("stream-chunk", (event) => {
+                    setMessages(prev => {
+                        const lastIdx = prev.length - 1;
+                        const last = prev[lastIdx];
+                        if (last && last.id === tempMsgId) {
+                            const newContent = (last.content || "") + event.payload;
+                            return [...prev.slice(0, -1), { ...last, content: newContent }];
+                        }
+                        return prev;
+                    });
+                });
+                unlistenTransform = unlisten;
+            }
+
             const response = await invoke<Message>("send_message", {
                 messages: currentHistory,
-                providerId: providerId,  // Changed from apiKey
+                providerId: providerId,
                 model: modelId,
                 conversationId: conversationId,
-                attachments: attachmentPayload
+                attachments: attachmentPayload,
+                temperature: genSettings.temperature,
+                topP: genSettings.top_p,
+                stream: genSettings.stream
             });
 
-            const newHistory = [...currentHistory, response];
-            setMessages(newHistory);
+            if (unlistenTransform) {
+                unlistenTransform();
+            }
+
+            // Replace/Append Final Message
+            setMessages(prev => {
+                if (genSettings.stream) {
+                    // Replace the temp message with the final complete message
+                    // (It should roughly match, but final has tool calls etc resolved cleanly)
+                    return [...prev.slice(0, -1), response];
+                } else {
+                    return [...prev, response];
+                }
+            });
 
             // Auto-Title Trigger (If this was the first exchange)
             if (currentHistory.length === 1 && conversationId) {
@@ -308,17 +355,29 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         } catch (error) {
             console.error(error);
             setLoading(false);
+            if (String(error).includes("cancelled")) {
+                // If cancelled, we might want to keep the partial streamed content?
+                // Currently backend returns error, but we have partial content in state.
+                // We could just leave it as is or mark it as "Cancelled".
+                // For now, simple return, leaving partial content visible.
+                return;
+            }
             setErrorMsg(String(error));
+        }
+    };
+
+    const handleStop = async () => {
+        try {
+            await invoke("stop_generation");
+            setLoading(false);
+        } catch (e) {
+            console.error("Failed to stop generation", e);
         }
     };
 
     const handleSend = async () => {
         if (!input.trim()) return;
-        const userMsg: Message = { role: "user", content: input }; // Attachments are handled in sendMessage via separate arg for now? 
-        // Or should we add images to the message object immediately?
-        // The backend `send_message` takes `images` as a separate argument and attaches them to the last user message.
-        // But for local state display, we might want to show them?
-        // Current ChatMessage component doesn't display images yet.
+        const userMsg: Message = { role: "user", content: input };
 
         const newHistory = [...messages, userMsg];
         setMessages(newHistory);
@@ -402,7 +461,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 </div>
             )}
 
-            <div className="p-4 bg-gray-900 border-b border-gray-800 flex justify-between items-center shadow-md z-10">
+            <div className="p-4 bg-gray-900 border-b border-gray-800 flex justify-between items-center shadow-md z-10 relative">
                 <div className="flex items-center gap-3">
                     <div className="w-3 h-3 rounded-full bg-green-500 animate-pulse box-shadow-lg shadow-green-500/50" />
                     <select
@@ -437,6 +496,8 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                             ))}
                         </select>
                     </div>
+
+
                     <button
                         id="pin-model-btn"
                         onClick={handleSetDefaultModel}
@@ -445,6 +506,67 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                     >
                         <Pin size={16} />
                     </button>
+
+                    {/* Settings Toggle */}
+                    <div className="relative">
+                        <button
+                            onClick={() => setShowSettings(!showSettings)}
+                            className={`p-2 rounded-lg transition-colors ${showSettings ? "bg-blue-600/20 text-blue-400" : "text-gray-400 hover:text-white hover:bg-gray-800"}`}
+                            title="Generation Settings"
+                        >
+                            <Sliders size={18} />
+                        </button>
+
+                        {/* Settings Popup */}
+                        {showSettings && (
+                            <div className="absolute top-full right-0 mt-2 w-72 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl p-4 z-50 animate-in fade-in zoom-in-95 duration-100">
+                                <h4 className="text-sm font-bold text-gray-300 mb-4 uppercase tracking-wider border-b border-gray-800 pb-2">Generation Options</h4>
+
+                                <div className="space-y-4">
+                                    {/* Streaming Toggle */}
+                                    <div className="flex justify-between items-center">
+                                        <label className="text-sm text-gray-400">Streaming</label>
+                                        <button
+                                            onClick={() => setGenSettings({ ...genSettings, stream: !genSettings.stream })}
+                                            className={`w-10 h-5 rounded-full relative transition-colors ${genSettings.stream ? 'bg-blue-600' : 'bg-gray-700'}`}
+                                        >
+                                            <div className={`w-3 h-3 bg-white rounded-full absolute top-1 transition-all ${genSettings.stream ? 'left-6' : 'left-1'}`} />
+                                        </button>
+                                    </div>
+
+                                    {/* Temperature */}
+                                    <div className="space-y-1">
+                                        <div className="flex justify-between text-xs text-gray-400">
+                                            <span>Temperature</span>
+                                            <span>{genSettings.temperature}</span>
+                                        </div>
+                                        <input
+                                            type="range"
+                                            min="0" max="2" step="0.1"
+                                            value={genSettings.temperature}
+                                            onChange={(e) => setGenSettings({ ...genSettings, temperature: parseFloat(e.target.value) })}
+                                            className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                                        />
+                                    </div>
+
+                                    {/* Top P */}
+                                    <div className="space-y-1">
+                                        <div className="flex justify-between text-xs text-gray-400">
+                                            <span>Top P</span>
+                                            <span>{genSettings.top_p}</span>
+                                        </div>
+                                        <input
+                                            type="range"
+                                            min="0" max="1" step="0.05"
+                                            value={genSettings.top_p}
+                                            onChange={(e) => setGenSettings({ ...genSettings, top_p: parseFloat(e.target.value) })}
+                                            className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
 
                     <div className="h-4 w-px bg-gray-700 mx-2" />
 
@@ -551,20 +673,31 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         />
                     </label>
 
-                    <input
-                        className="flex-1 bg-gray-800 border border-gray-700 rounded-xl p-3 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                    <textarea
+                        className="flex-1 bg-gray-800 border border-gray-700 rounded-xl p-3 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all resize-none min-h-[46px] max-h-[200px]"
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
-                        onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
+                        onKeyDown={(e) => {
+                            if (e.key === "Enter" && !e.shiftKey) {
+                                e.preventDefault();
+                                handleSend();
+                            }
+                        }}
                         placeholder="Type a message..."
                         disabled={loading}
+                        rows={1}
+                        style={{ fieldSizing: "content" } as any} // Modern browser support for auto-sizing, fallback handled by rows/css
                     />
                     <button
-                        disabled={loading || (!input.trim() && attachments.length === 0)}
-                        onClick={handleSend}
-                        className="bg-blue-600 p-3 rounded-xl hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-lg shadow-blue-600/20"
+                        disabled={(!input.trim() && attachments.length === 0) && !loading}
+                        onClick={loading ? handleStop : handleSend}
+                        className={`p-3 rounded-xl transition-all shadow-lg ${loading
+                            ? "bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/50 hover:shadow-red-500/20"
+                            : "bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                            }`}
+                        title={loading ? "Stop Generating" : "Send Message"}
                     >
-                        {loading ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Send size={20} />}
+                        {loading ? <Square size={20} fill="currentColor" className="animate-pulse" /> : <Send size={20} />}
                     </button>
                 </div>
             </div>
@@ -594,163 +727,171 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
         setCopiedCodeVal(text);
     };
 
+    // Icons based on role
+    const AvatarIcon = () => {
+        if (m.role === "user") return <div className="w-8 h-8 rounded-full bg-orange-500 flex items-center justify-center text-white"><span className="text-xs font-bold">U</span></div>;
+        if (m.role === "assistant") return <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white"><Brain size={16} /></div>;
+        if (m.role === "tool") return <div className="w-8 h-8 rounded-full bg-yellow-600 flex items-center justify-center text-white"><Terminal size={14} /></div>;
+        return <div className="w-8 h-8 rounded-full bg-gray-600 flex items-center justify-center text-white"><span className="text-xs">?</span></div>;
+    };
+
     return (
-        <div className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-            <div
-                className={`max-w-[85%] rounded-xl p-4 relative group ${m.role === "user"
-                    ? "bg-blue-600 text-white rounded-br-none shadow-lg shadow-blue-900/20"
-                    : m.role === "tool"
-                        ? "bg-gray-800 text-gray-400 font-mono text-xs rounded-none border-l-2 border-yellow-500 shadow-lg"
-                        : "bg-[#1e1e1e] text-gray-100 rounded-bl-none shadow-lg border border-white/5"
-                    }`}
-            >
-                <div className="flex justify-between items-start gap-4 mb-2">
-                    <div className="text-[10px] uppercase font-bold opacity-50 flex items-center gap-1 select-none">
-                        {m.role === "assistant" && "🤖 Assistant"}
-                        {m.role === "user" && "👤 You"}
-                        {m.role === "tool" && "🛠 Tool Output"}
-                        {m.role === "system" && "⚙ System"}
+        <div className="flex gap-4 max-w-4xl mx-auto group">
+            {/* Avatar Column */}
+            <div className="shrink-0 pt-1">
+                <AvatarIcon />
+            </div>
+
+            {/* Content Column */}
+            <div className="flex-1 min-w-0">
+                {/* Name & Content wrapper */}
+                <div className="flex flex-col gap-1">
+                    {/* Role Label - minimal, maybe optional, but good for context */}
+                    {/* <div className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-1">
+                        {m.role === "assistant" ? "Nebula" : "You"}
+                    </div> */}
+
+                    {/* Message Body */}
+                    <div className={`${m.role === "user"
+                        ? "bg-gray-800 text-gray-100 rounded-2xl px-5 py-2.5 inline-block self-start border border-gray-700/50"
+                        : "text-gray-200 pl-0"
+                        }`}
+                    >
+                        {/* Tool Output Collapse */}
+                        {m.role === "tool" && !isExpanded ? (
+                            <div className="flex items-center gap-3">
+                                <span className="text-sm text-gray-400 italic">Tool output hidden</span>
+                                <button
+                                    onClick={() => setIsExpanded(true)}
+                                    className="text-blue-400 hover:text-blue-300 underline text-sm"
+                                >
+                                    Show ({m.content?.length || 0} chars)
+                                </button>
+                            </div>
+                        ) : (
+                            <>
+                                {showRaw ? (
+                                    <pre className="whitespace-pre-wrap font-mono text-sm text-gray-300 bg-black/20 p-2 rounded border border-white/10 overflow-x-auto">
+                                        {m.content}
+                                    </pre>
+                                ) : (
+                                    m.content && (
+                                        <div className={`prose prose-invert max-w-none prose-p:leading-relaxed prose-pre:bg-[#0d1117] prose-pre:rounded-lg prose-pre:border prose-pre:border-gray-800`}>
+                                            <ReactMarkdown
+                                                remarkPlugins={[remarkGfm]}
+                                                components={{
+                                                    ul: ({ node, ...props }) => <ul className="list-disc pl-6 mb-2 space-y-1" {...props} />,
+                                                    ol: ({ node, ...props }) => <ol className="list-decimal pl-6 mb-2 space-y-1" {...props} />,
+                                                    li: ({ node, ...props }) => <li className="pl-1" {...props} />,
+                                                    h1: ({ node, ...props }) => <h1 className="text-2xl font-bold mb-3 mt-4" {...props} />,
+                                                    h2: ({ node, ...props }) => <h2 className="text-xl font-bold mb-2 mt-3" {...props} />,
+                                                    h3: ({ node, ...props }) => <h3 className="text-lg font-semibold mb-2 mt-3" {...props} />,
+                                                    p: ({ node, ...props }) => <p className="mb-3 last:mb-0" {...props} />,
+                                                    a: ({ node, ...props }) => <a className="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer" {...props} />,
+                                                    code({ node, inline, className, children, ...props }: any) {
+                                                        const match = /language-(\w+)/.exec(className || '')
+                                                        const codeText = String(children).replace(/\n$/, '')
+                                                        const isCopied = copiedCodeVal === codeText
+
+                                                        return !inline && match ? (
+                                                            <div className="relative group/code my-4 rounded-lg overflow-hidden border border-gray-800">
+                                                                <div className="bg-gray-800/50 px-3 py-1.5 flex justify-between items-center border-b border-gray-800">
+                                                                    <span className="text-xs text-gray-400 font-mono">{match[1]}</span>
+                                                                    <button
+                                                                        onClick={() => handleCopyCode(codeText)}
+                                                                        className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-white transition-colors"
+                                                                    >
+                                                                        {isCopied ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+                                                                        {isCopied ? "Copied" : "Copy"}
+                                                                    </button>
+                                                                </div>
+                                                                <SyntaxHighlighter
+                                                                    // @ts-ignore
+                                                                    style={vscDarkPlus}
+                                                                    language={match[1]}
+                                                                    PreTag="div"
+                                                                    customStyle={{ margin: 0, padding: '1rem', background: '#0d1117', fontSize: '14px' }}
+                                                                    {...props}
+                                                                >
+                                                                    {codeText}
+                                                                </SyntaxHighlighter>
+                                                            </div>
+                                                        ) : (
+                                                            <code className={`${className} bg-gray-800 px-1.5 py-0.5 rounded text-[0.9em] font-mono text-gray-200 border border-gray-700/50`} {...props}>
+                                                                {children}
+                                                            </code>
+                                                        )
+                                                    }
+                                                }}
+                                            >
+                                                {m.content}
+                                            </ReactMarkdown>
+                                        </div>
+                                    )
+                                )}
+                                {m.role === "tool" && (
+                                    <button
+                                        onClick={() => setIsExpanded(false)}
+                                        className="text-gray-500 hover:text-gray-400 text-xs mt-2 underline"
+                                    >
+                                        Collapse Output
+                                    </button>
+                                )}
+                            </>
+                        )}
                     </div>
 
-                    <div className={`flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity ${m.role === "user" ? "text-blue-200" : "text-gray-400"}`}>
+                    {/* Tool Call Info */}
+                    {m.tool_calls && (
+                        <div className="mt-2 text-xs">
+                            <button
+                                onClick={() => setShowToolArgs(!showToolArgs)}
+                                className="bg-gray-900/50 p-2 rounded border border-gray-800 hover:border-gray-700 transition-colors inline-flex items-center gap-2 text-yellow-500/80 hover:text-yellow-400"
+                            >
+                                <Terminal size={12} />
+                                <span className="font-mono">Called: {m.tool_calls[0]?.function?.name}</span>
+                                <span className="opacity-50 text-[10px] ml-1">{showToolArgs ? "▼" : "▶"}</span>
+                            </button>
+
+                            {showToolArgs && (
+                                <div className="mt-2 pl-4 border-l-2 border-gray-800">
+                                    <div className="bg-black/40 p-3 rounded-lg border border-gray-800 font-mono text-gray-400 overflow-x-auto">
+                                        <pre>{m.tool_calls[0]?.function?.arguments}</pre>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Action Bar (Below message) */}
+                    <div className="flex gap-2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 select-none">
                         <button
                             onClick={() => setShowRaw(!showRaw)}
-                            className={`hover:text-white ${showRaw ? "text-blue-400" : ""}`}
+                            className={`p-1 text-gray-500 hover:text-blue-400 transition-colors ${showRaw ? "text-blue-400" : ""}`}
                             title="Toggle Raw View"
                         >
-                            <FileText size={13} />
+                            <FileText size={14} />
                         </button>
-
-                        <button onClick={() => onCopy(m.content || "")} className="hover:text-white" title="Copy Message">
-                            <Copy size={13} />
+                        <button onClick={() => onCopy(m.content || "")} className="p-1 text-gray-500 hover:text-white transition-colors" title="Copy">
+                            <Copy size={14} />
                         </button>
-
                         {m.role === "user" && (
-                            <button onClick={() => onEdit(m.content || "")} className="hover:text-white" title="Edit">
-                                <Edit2 size={13} />
+                            <button onClick={() => onEdit(m.content || "")} className="p-1 text-gray-500 hover:text-white transition-colors" title="Edit">
+                                <Edit2 size={14} />
                             </button>
                         )}
-
                         {(m.role === "assistant" || m.role === "user") && (
-                            <button onClick={() => onDelete(i, m.id)} className="hover:text-red-400" title="Delete">
-                                <Trash2 size={13} />
+                            <button onClick={() => onDelete(i, m.id)} className="p-1 text-gray-500 hover:text-red-400 transition-colors" title="Delete">
+                                <Trash2 size={14} />
                             </button>
                         )}
-
                         {m.role === "assistant" && (
-                            <button onClick={() => onRegenerate(i, m.id)} className="hover:text-green-400" title="Regenerate">
-                                <RefreshCw size={13} />
+                            <button onClick={() => onRegenerate(i, m.id)} className="p-1 text-gray-500 hover:text-green-400 transition-colors" title="Regenerate">
+                                <RefreshCw size={14} />
                             </button>
                         )}
                     </div>
                 </div>
-
-                {/* Collapsible Content */}
-                {m.role === "tool" && !isExpanded ? (
-                    <div className="flex items-center gap-3 mt-2">
-                        <button
-                            onClick={() => setIsExpanded(true)}
-                            className="text-blue-400 hover:text-blue-300 underline flex items-center gap-1"
-                        >
-                            Show Output ({m.content?.length || 0} chars)
-                        </button>
-                    </div>
-                ) : (
-                    <>
-                        {showRaw ? (
-                            <pre className="whitespace-pre-wrap font-mono text-sm text-gray-300 bg-black/20 p-2 rounded border border-white/10 overflow-x-auto">
-                                {m.content}
-                            </pre>
-                        ) : (
-                            m.content && (
-                                <div className={`prose max-w-none ${m.role === "user" ? "prose-invert text-white prose-pre:bg-blue-800" : "prose-invert text-gray-300"}`}>
-                                    <ReactMarkdown
-                                        remarkPlugins={[remarkGfm]}
-                                        components={{
-                                            ul: ({ node, ...props }) => <ul className="list-disc pl-6 mb-4 space-y-2" {...props} />,
-                                            ol: ({ node, ...props }) => <ol className="list-decimal pl-6 mb-4 space-y-2" {...props} />,
-                                            li: ({ node, ...props }) => <li className="leading-relaxed pl-1" {...props} />,
-                                            h1: ({ node, ...props }) => <h1 className="text-2xl font-bold mb-4 mt-6 text-white pb-2 border-b border-gray-700" {...props} />,
-                                            h2: ({ node, ...props }) => <h2 className="text-xl font-bold mb-3 mt-5 text-gray-100" {...props} />,
-                                            h3: ({ node, ...props }) => <h3 className="text-lg font-semibold mb-2 mt-4 text-gray-200" {...props} />,
-                                            p: ({ node, ...props }) => <p className="leading-7 mb-4 text-gray-300" {...props} />,
-                                            strong: ({ node, ...props }) => <strong className="font-bold text-white" {...props} />,
-                                            a: ({ node, ...props }) => <a className="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer" {...props} />,
-                                            blockquote: ({ node, ...props }) => <blockquote className="border-l-4 border-gray-600 pl-4 italic text-gray-400 my-4" {...props} />,
-
-                                            code({ node, inline, className, children, ...props }: any) {
-                                                const match = /language-(\w+)/.exec(className || '')
-                                                const codeText = String(children).replace(/\n$/, '')
-                                                const isCopied = copiedCodeVal === codeText
-
-                                                return !inline && match ? (
-                                                    <div className="relative group/code my-4">
-                                                        <div className="absolute top-2 right-2 opacity-0 group-hover/code:opacity-100 transition-opacity z-10">
-                                                            <button
-                                                                onClick={() => handleCopyCode(codeText)}
-                                                                className="p-1.5 bg-gray-700/80 hover:bg-gray-600 rounded text-gray-300 transition-colors backdrop-blur-sm"
-                                                                title="Copy Code"
-                                                            >
-                                                                {isCopied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
-                                                            </button>
-                                                        </div>
-                                                        <SyntaxHighlighter
-                                                            // @ts-ignore
-                                                            style={vscDarkPlus}
-                                                            language={match[1]}
-                                                            PreTag="div"
-                                                            customStyle={{ margin: 0, borderRadius: '0.5rem', background: '#0d1117', fontSize: '14px' }}
-                                                            {...props}
-                                                        >
-                                                            {codeText}
-                                                        </SyntaxHighlighter>
-                                                    </div>
-                                                ) : (
-                                                    <code className={`${className} bg-white/10 px-1.5 py-0.5 rounded text-[0.9em] font-mono text-yellow-200`} {...props}>
-                                                        {children}
-                                                    </code>
-                                                )
-                                            }
-                                        }}
-                                    >
-                                        {m.content}
-                                    </ReactMarkdown>
-                                </div>
-                            )
-                        )}
-                        {m.role === "tool" && (
-                            <button
-                                onClick={() => setIsExpanded(false)}
-                                className="text-gray-500 hover:text-gray-400 text-xs mt-2 underline"
-                            >
-                                Collapse Output
-                            </button>
-                        )}
-                    </>
-                )}
-
-                {m.tool_calls && (
-                    <div className="mt-2 text-xs">
-                        <button
-                            onClick={() => setShowToolArgs(!showToolArgs)}
-                            className="bg-gray-950 p-2 rounded border border-gray-700/50 hover:border-gray-500 transition-colors w-full text-left"
-                        >
-                            <div className="flex items-center gap-2 text-yellow-400">
-                                <Terminal size={14} />
-                                <span className="font-mono">Tool Call: {m.tool_calls[0]?.function?.name}</span>
-                                <span className="text-gray-500 ml-auto text-[10px]">{showToolArgs ? "Hide Args" : "Show Args"}</span>
-                            </div>
-                        </button>
-
-                        {showToolArgs && (
-                            <div className="mt-1 bg-black/40 p-2 rounded border-x border-b border-gray-800 font-mono overflow-x-auto animate-in fade-in zoom-in-95 duration-200">
-                                <pre className="text-gray-400 whitespace-pre-wrap break-all">
-                                    {m.tool_calls[0]?.function?.arguments}
-                                </pre>
-                            </div>
-                        )}
-                    </div>
-                )}
             </div>
         </div>
     );

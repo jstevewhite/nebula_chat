@@ -94,7 +94,7 @@ INSTRUCTIONS:
         }];
 
         // 4. Call Model
-        match provider.chat(msgs, vec![]).await {
+        match provider.chat(msgs, vec![], None).await {
             Ok(response) => {
                 let content = response.content.unwrap_or_default();
                 if content.contains("No relevant context") {
