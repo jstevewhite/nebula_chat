@@ -31,6 +31,8 @@ Nebula implements the **[Model Context Protocol (MCP)](https://modelcontextproto
 - **Interactive Messages**: Edit, copy, delete, and regenerate messages on the fly.
 - **Aesthetic UI**: Polished, editor-like typography with custom scrollbars and clean spacing.
 - **File Attachments**: Support for generic file attachments (Text, Code, Images) with multi-modal LLM support.
+- **Generation Settings**: Real-time control over **Temperature**, **Top P**, and **Streaming** directly from the chat interface.
+- **Stop Generation**: Instantly abort long-running LLM responses with a dedicated stop button.
 - **Memory Panel**: Real-time transparency into what memory context is being injected into your conversation.
 - **Intelligent Context Assembly**: Configure a secondary "Strategist" model to filter and summarize memories before they reach the main chat.
 

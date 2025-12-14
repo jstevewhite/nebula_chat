@@ -34,7 +34,37 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerationOptions {
+    pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
+    pub stream: bool,
+}
+
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
-    async fn chat(&self, messages: Vec<Message>, tools: Vec<ToolDefinition>) -> Result<Message>;
+    async fn chat(
+        &self,
+        messages: Vec<Message>,
+        tools: Vec<ToolDefinition>,
+        options: Option<GenerationOptions>,
+    ) -> Result<Message>;
+
+    // Default implementation handles standard blocking chat
+    // Providers can override this if they support streaming
+    // on_token callback is called with each text chunk
+    async fn stream(
+        &self,
+        messages: Vec<Message>,
+        tools: Vec<ToolDefinition>,
+        options: Option<GenerationOptions>,
+        on_token: Box<dyn Fn(String) + Send + Sync>,
+    ) -> Result<Message> {
+        // Fallback to chat if streaming not implemented
+        let msg = self.chat(messages, tools, options).await?;
+        if let Some(content) = &msg.content {
+            on_token(content.clone());
+        }
+        Ok(msg)
+    }
 }

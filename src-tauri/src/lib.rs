@@ -1,5 +1,5 @@
 use crate::llm::openai::OpenAiProvider;
-use crate::llm::provider::{Attachment, LlmProvider, Message};
+use crate::llm::provider::{Attachment, GenerationOptions, LlmProvider, Message};
 use crate::mcp::config::{McpServerConfig, ModelConfig, ProviderType, Settings};
 use crate::mcp::manager::McpManager;
 use std::sync::Arc;
@@ -15,9 +15,21 @@ pub mod llm;
 pub mod mcp;
 pub mod memory;
 
+#[derive(Clone)]
 struct AppState {
     mcp_manager: Arc<McpManager>,
     librarian: Arc<Mutex<crate::memory::librarian::Librarian>>,
+    active_task: Arc<Mutex<Option<tokio::task::AbortHandle>>>,
+}
+
+#[tauri::command]
+async fn stop_generation(state: State<'_, AppState>) -> Result<(), String> {
+    let mut handle_guard = state.active_task.lock().await;
+    if let Some(handle) = handle_guard.take() {
+        println!("[Backend] Stopping generation...");
+        handle.abort();
+    }
+    Ok(())
 }
 
 #[derive(serde::Serialize)]
@@ -136,7 +148,7 @@ async fn generate_title(
             let base_url = provider_config.base_url.clone();
             let provider = OpenAiProvider::new(api_key, base_url, model.clone());
             provider
-                .chat(messages, tools)
+                .chat(messages, tools, None)
                 .await
                 .map_err(|e| e.to_string())
         }
@@ -144,7 +156,7 @@ async fn generate_title(
             let api_key = provider_config.api_key.clone().unwrap_or_default();
             let provider = AnthropicProvider::new(api_key, model.clone());
             provider
-                .chat(messages, tools)
+                .chat(messages, tools, None)
                 .await
                 .map_err(|e| e.to_string())
         }
@@ -155,7 +167,7 @@ async fn generate_title(
                 .unwrap_or("http://localhost:11434".to_string());
             let provider = OllamaProvider::new(base_url, model.clone());
             provider
-                .chat(messages, tools)
+                .chat(messages, tools, None)
                 .await
                 .map_err(|e| e.to_string())
         }
@@ -214,276 +226,318 @@ async fn get_chat_history(
 async fn send_message(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
-    mut messages: Vec<Message>,
+    messages: Vec<Message>,
     provider_id: String,
     model: String,
     conversation_id: Option<String>,
     attachments: Option<Vec<Attachment>>,
+    temperature: Option<f32>,
+    top_p: Option<f32>,
+    stream: bool,
 ) -> Result<Message, String> {
-    // Create the User message to append to history (if it's not already in history??)
-    // Actually, the frontend sends the *entire* history including the latest user message.
-    // BUT, the frontend doesn't put the images in the history array it sends for the *latest* message?
-    // Wait, the frontend sends `currentHistory`. The user message is ALREADY in `currentHistory`.
-    // However, the `Message` struct on the frontend might not have `images` yet, or `send_message` adds it?
+    // Clone necessary data for the async task
+    let state_owned = state.inner().clone();
+    let app_handle_clone = app_handle.clone();
+    let provider_id_clone = provider_id.clone();
+    let model_clone = model.clone();
+    let conversation_id_clone = conversation_id.clone();
+    let messages_clone = messages.clone();
+    let attachments_clone = attachments.clone();
 
-    // Correction: The frontend sends the history. The user just typed a new message.
-    // The `messages` argument includes the latest user message.
-    // We need to find the LAST message (which should be the user's) and attach images to it if provided.
+    // Spawn the generation task
+    let task = tokio::spawn(async move {
+        // --- ORIGINAL LOGIC START ---
 
-    if let Some(atts) = attachments {
-        if let Some(last_msg) = messages.last_mut() {
-            if last_msg.role == "user" {
-                last_msg.attachments = Some(atts);
+        // We're working on clones now
+        let mut messages = messages_clone;
+        let provider_id = provider_id_clone;
+        let model = model_clone;
+        let conversation_id = conversation_id_clone;
+        let attachments = attachments_clone;
+        let state = state_owned;
+        let app_handle = app_handle_clone;
+
+        if let Some(atts) = attachments {
+            if let Some(last_msg) = messages.last_mut() {
+                if last_msg.role == "user" {
+                    last_msg.attachments = Some(atts);
+                }
             }
         }
-    }
-    let librarian_arc = state.librarian.clone();
-    let provider_id_bg = provider_id.clone();
-    let model_bg = model.clone();
-    let conv_id_bg = conversation_id.clone();
+        let librarian_arc = state.librarian.clone();
+        let provider_id_bg = provider_id.clone();
+        let model_bg = model.clone();
+        let conv_id_bg = conversation_id.clone();
 
-    // Save User or Tool Message & Capture Query
-    let mut query = String::new();
-    if let Some(last) = messages.last() {
-        if last.role == "user" || last.role == "tool" {
-            if last.role == "user" {
-                query = last.content.clone().unwrap_or_default();
-            }
+        // Save User or Tool Message & Capture Query
+        let mut query = String::new();
+        if let Some(last) = messages.last() {
+            if last.role == "user" || last.role == "tool" {
+                if last.role == "user" {
+                    query = last.content.clone().unwrap_or_default();
+                }
 
-            if let Some(conv_id) = &conversation_id {
-                let lib = state.librarian.lock().await;
-                let tool_calls_json = if let Some(tc) = &last.tool_calls {
-                    serde_json::to_string(tc).ok()
-                } else {
-                    None
-                };
+                if let Some(conv_id) = &conversation_id {
+                    let lib = state.librarian.lock().await;
+                    let tool_calls_json = if let Some(tc) = &last.tool_calls {
+                        serde_json::to_string(tc).ok()
+                    } else {
+                        None
+                    };
 
-                // Save full message
-                let _ = lib.save_full_message(
-                    conv_id,
-                    &last.role,
-                    last.content.as_deref(),
-                    tool_calls_json.as_deref(),
-                    last.tool_call_id.as_deref(),
-                );
+                    // Save full message
+                    let _ = lib.save_full_message(
+                        conv_id,
+                        &last.role,
+                        last.content.as_deref(),
+                        tool_calls_json.as_deref(),
+                        last.tool_call_id.as_deref(),
+                    );
+                }
             }
         }
-    }
 
-    // Retrieve Context
-    let mut context_text = String::new();
-    if !query.is_empty() {
-        let lib = state.librarian.lock().await;
-        if let Ok(results) = lib.search(&query) {
-            if !results.is_empty() {
-                // Emit Memory Context Event (Raw for now, updated later if assembler runs)
-                let memory_list_preview: Vec<String> =
-                    results.iter().map(|(_, content)| content.clone()).collect();
+        // Retrieve Context
+        let mut context_text = String::new();
+        if !query.is_empty() {
+            let lib = state.librarian.lock().await;
+            if let Ok(results) = lib.search(&query) {
+                if !results.is_empty() {
+                    // Emit Memory Context Event
+                    let memory_list_preview: Vec<String> =
+                        results.iter().map(|(_, content)| content.clone()).collect();
 
-                // Check for Context Assembler Model
-                let config_dir = app_handle
-                    .path()
-                    .app_config_dir()
-                    .map_err(|e| e.to_string())?;
-                let settings_path = config_dir.join("settings.json");
-                let settings = Settings::load_migrated(&settings_path);
+                    // Check for Context Assembler Model
+                    let config_dir = app_handle
+                        .path()
+                        .app_config_dir()
+                        .map_err(|e| e.to_string())?;
+                    let settings_path = config_dir.join("settings.json");
+                    let settings = Settings::load_migrated(&settings_path);
 
-                if let Some(ctx_model) = &settings.context_model {
-                    // Use intelligent assembly
-                    let assembled = crate::llm::context_assembler::ContextAssembler::assemble(
-                        &query,
-                        &memory_list_preview,
-                        &messages,
-                        ctx_model,
-                        &settings,
-                    )
-                    .await
-                    .unwrap_or_else(|_| memory_list_preview.join("\n"));
+                    if let Some(ctx_model) = &settings.context_model {
+                        let assembled = crate::llm::context_assembler::ContextAssembler::assemble(
+                            &query,
+                            &memory_list_preview,
+                            &messages,
+                            ctx_model,
+                            &settings,
+                        )
+                        .await
+                        .unwrap_or_else(|_| memory_list_preview.join("\n"));
 
-                    context_text = format!("Refined Context:\n{}\n", assembled);
+                        context_text = format!("Refined Context:\n{}\n", assembled);
+                        use tauri::Emitter;
+                        if let Err(e) = app_handle.emit("memory-context", &vec![assembled]) {
+                            eprintln!("Failed to emit memory-context: {}", e);
+                        }
+                    } else {
+                        use tauri::Emitter;
+                        if let Err(e) = app_handle.emit("memory-context", &memory_list_preview) {
+                            eprintln!("Failed to emit memory-context: {}", e);
+                        }
 
-                    // Emit REFINED context to frontend
-                    use tauri::Emitter;
-                    if let Err(e) = app_handle.emit("memory-context", &vec![assembled]) {
-                        eprintln!("Failed to emit memory-context: {}", e);
-                    }
-                } else {
-                    // Default Raw Behavior
-                    use tauri::Emitter;
-                    if let Err(e) = app_handle.emit("memory-context", &memory_list_preview) {
-                        eprintln!("Failed to emit memory-context: {}", e);
-                    }
-
-                    context_text = "Relevant Memories:\n".to_string();
-                    for (_id, content) in results {
-                        context_text.push_str(&format!("- {}\n", content));
+                        context_text = "Relevant Memories:\n".to_string();
+                        for (_id, content) in results {
+                            context_text.push_str(&format!("- {}\n", content));
+                        }
                     }
                 }
             }
         }
-    }
 
-    // Inject Context
-    let mut final_messages = messages.clone();
-    if !context_text.is_empty() {
-        let context_msg = Message {
-            id: None,
-            role: "system".to_string(),
-            content: Some(format!(
-                "You have access to the following long-term memories:\n{}",
-                context_text
-            )),
-            tool_calls: None,
-            tool_call_id: None,
-            attachments: None,
+        // Inject Context
+        let mut final_messages = messages.clone();
+        if !context_text.is_empty() {
+            let context_msg = Message {
+                id: None,
+                role: "system".to_string(),
+                content: Some(format!(
+                    "You have access to the following long-term memories:\n{}",
+                    context_text
+                )),
+                tool_calls: None,
+                tool_call_id: None,
+                attachments: None,
+            };
+            final_messages.insert(0, context_msg);
+        }
+
+        // Inject System Prompt
+        println!("[DEBUG] Loading settings for system prompt...");
+        let config_dir = app_handle
+            .path()
+            .app_config_dir()
+            .map_err(|e| e.to_string())?;
+        let settings_path = config_dir.join("settings.json");
+        let settings = Settings::load_migrated(&settings_path);
+
+        if let Some(active_id) = settings.active_system_prompt_id {
+            if let Some(prompt) = settings.system_prompts.iter().find(|p| p.id == active_id) {
+                println!("[DEBUG] Injecting system prompt: {}", prompt.name);
+                final_messages.insert(
+                    0,
+                    Message {
+                        id: Some(uuid::Uuid::new_v4().to_string()),
+                        role: "system".to_string(),
+                        content: Some(prompt.content.clone()),
+                        tool_call_id: None,
+                        tool_calls: None,
+                        attachments: None,
+                    },
+                );
+            }
+        }
+
+        println!("[DEBUG] Getting tools from MCP Manager...");
+        let all_tools = state.mcp_manager.get_all_tools().await;
+
+        let tools: Vec<_> = all_tools
+            .into_iter()
+            .filter(|t| !settings.disabled_tools.contains(&t.name))
+            .collect();
+        println!("[DEBUG] Final tool count: {}", tools.len());
+
+        // Select Provider
+        println!("[DEBUG] select provider config for '{}'", provider_id);
+        let provider_config = settings
+            .providers
+            .get(&provider_id)
+            .ok_or_else(|| format!("Provider '{}' not found in settings", provider_id))?;
+
+        if !provider_config.enabled {
+            return Err(format!("Provider '{}' is disabled", provider_id));
+        }
+
+        // Prune context
+        let pruned_messages =
+            ContextManager::prune_messages(final_messages, 64000).map_err(|e| e.to_string())?;
+        println!("[DEBUG] Messages pruned. Calling provider...");
+
+        let options = Some(GenerationOptions {
+            temperature,
+            top_p,
+            stream,
+        });
+
+        let app_handle_for_stream = app_handle.clone();
+        let on_token = Box::new(move |token: String| {
+            use tauri::Emitter;
+            // Emit standard stream chunk event
+            if let Err(e) = app_handle_for_stream.emit("stream-chunk", &token) {
+                eprintln!("Failed to emit stream chunk: {}", e);
+            }
+        });
+
+        // Provider Execution
+        let response_result = match provider_config.provider_type {
+            ProviderType::OpenAI | ProviderType::OpenAICompatible => {
+                let api_key = provider_config.api_key.clone().unwrap_or_default();
+                let base_url = provider_config.base_url.clone();
+                let provider = OpenAiProvider::new(api_key, base_url, model.clone());
+
+                if stream {
+                    provider
+                        .stream(pruned_messages, tools, options, on_token)
+                        .await
+                } else {
+                    provider.chat(pruned_messages, tools, options).await
+                }
+            }
+            ProviderType::Anthropic => {
+                let api_key = provider_config.api_key.clone().unwrap_or_default();
+                let provider = AnthropicProvider::new(api_key, model.clone());
+
+                if stream {
+                    provider
+                        .stream(pruned_messages, tools, options, on_token)
+                        .await
+                } else {
+                    provider.chat(pruned_messages, tools, options).await
+                }
+            }
+            ProviderType::Ollama => {
+                let base_url = provider_config
+                    .base_url
+                    .clone()
+                    .unwrap_or("http://localhost:11434".to_string());
+                let provider = OllamaProvider::new(base_url, model.clone());
+
+                if stream {
+                    provider
+                        .stream(pruned_messages, tools, options, on_token)
+                        .await
+                } else {
+                    provider.chat(pruned_messages, tools, options).await
+                }
+            }
         };
-        final_messages.insert(0, context_msg);
-    }
 
-    // Inject System Prompt
-    println!("[DEBUG] Loading settings for system prompt...");
-    let config_dir = app_handle
-        .path()
-        .app_config_dir()
-        .map_err(|e| e.to_string())?;
-    let settings_path = config_dir.join("settings.json");
-    let settings = Settings::load_migrated(&settings_path);
+        let response = response_result.map_err(|e| e.to_string())?;
 
-    if let Some(active_id) = settings.active_system_prompt_id {
-        if let Some(prompt) = settings.system_prompts.iter().find(|p| p.id == active_id) {
-            println!("[DEBUG] Injecting system prompt: {}", prompt.name);
-            final_messages.insert(
-                0,
-                Message {
-                    id: Some(uuid::Uuid::new_v4().to_string()),
-                    role: "system".to_string(),
-                    content: Some(prompt.content.clone()),
-                    tool_call_id: None,
-                    tool_calls: None,
-                    attachments: None,
-                },
+        // Handle Response (Save & Prune triggers)
+        if let Some(conv_id) = conversation_id {
+            let lib = state.librarian.lock().await;
+            let tool_calls_json = if let Some(tc) = &response.tool_calls {
+                serde_json::to_string(tc).ok()
+            } else {
+                None
+            };
+
+            // Note: If streaming, 'response' contains the FULL aggregated content at the end, so saving works fine.
+
+            let _ = lib.save_full_message(
+                &conv_id,
+                "assistant",
+                response.content.as_deref(),
+                tool_calls_json.as_deref(),
+                response.tool_call_id.as_deref(),
             );
+
+            // Trigger Background Pruning (Fire & Forget)
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = attempt_pruning(
+                    app_handle,
+                    librarian_arc,
+                    provider_id_bg,
+                    model_bg,
+                    conv_id_bg.unwrap_or_default(),
+                )
+                .await
+                {
+                    eprintln!("Pruning Error: {}", e);
+                }
+            });
         }
+
+        Ok(response)
+    });
+
+    // Store abort handle
+    let abort_handle = task.abort_handle();
+    {
+        let mut handle_guard = state.active_task.lock().await;
+        *handle_guard = Some(abort_handle);
     }
 
-    println!("[DEBUG] Getting tools from MCP Manager...");
-    let all_tools = state.mcp_manager.get_all_tools().await;
-    println!("[DEBUG] Got {} tools. Filtering...", all_tools.len());
-
-    // Filter disabled tools
-    let config_dir = app_handle
-        .path()
-        .app_config_dir()
-        .map_err(|e| e.to_string())?;
-    let settings_path = config_dir.join("settings.json");
-    let settings = Settings::load_migrated(&settings_path);
-
-    let tools: Vec<_> = all_tools
-        .into_iter()
-        .filter(|t| !settings.disabled_tools.contains(&t.name))
-        .collect();
-    println!("[DEBUG] Final tool count: {}", tools.len());
-
-    // Select Provider
-    println!("[DEBUG] select provider config for '{}'", provider_id);
-    let config_dir = app_handle
-        .path()
-        .app_config_dir()
-        .map_err(|e| e.to_string())?;
-    let settings_path = config_dir.join("settings.json");
-    let settings = Settings::load_migrated(&settings_path);
-
-    let provider_config = settings
-        .providers
-        .get(&provider_id)
-        .ok_or_else(|| format!("Provider '{}' not found in settings", provider_id))?;
-
-    if !provider_config.enabled {
-        return Err(format!("Provider '{}' is disabled", provider_id));
-    }
-
-    // Prune context
-    println!("[DEBUG] Pruning messages...");
-    let pruned_messages =
-        ContextManager::prune_messages(final_messages, 64000).map_err(|e| e.to_string())?;
-    println!("[DEBUG] Messages pruned. Calling provider chat...");
-
-    let response = match provider_config.provider_type {
-        ProviderType::OpenAI | ProviderType::OpenAICompatible => {
-            let api_key = provider_config.api_key.clone().unwrap_or_default();
-            let base_url = provider_config.base_url.clone();
-            let provider = OpenAiProvider::new(api_key, base_url, model.clone());
-            provider
-                .chat(pruned_messages, tools)
-                .await
-                .map_err(|e| e.to_string())
-        }
-        ProviderType::Anthropic => {
-            let api_key = provider_config.api_key.clone().unwrap_or_default();
-            let provider = AnthropicProvider::new(api_key, model.clone());
-            provider
-                .chat(pruned_messages, tools)
-                .await
-                .map_err(|e| e.to_string())
-        }
-        ProviderType::Ollama => {
-            let base_url = provider_config
-                .base_url
-                .clone()
-                .unwrap_or("http://localhost:11434".to_string());
-            println!(
-                "[DEBUG] Initializing Ollama provider with URL: {}",
-                base_url
-            );
-            let provider = OllamaProvider::new(base_url, model.clone());
-            println!("[DEBUG] Awaiting Ollama chat response...");
-            let res = provider
-                .chat(pruned_messages, tools)
-                .await
-                .map_err(|e| e.to_string());
-            println!("[DEBUG] Ollama response received (or error)");
+    // Await task
+    match task.await {
+        Ok(res) => {
+            // Clear handle
+            let mut handle_guard = state.active_task.lock().await;
+            *handle_guard = None;
             res
         }
-    };
-
-    match response {
-        Ok(msg) => {
-            // Save Assistant Message
-            if let Some(conv_id) = conversation_id {
-                let lib = state.librarian.lock().await;
-                let tool_calls_json = if let Some(tc) = &msg.tool_calls {
-                    serde_json::to_string(tc).ok()
-                } else {
-                    None
-                };
-
-                let _ = lib.save_full_message(
-                    &conv_id,
-                    "assistant",
-                    msg.content.as_deref(),
-                    tool_calls_json.as_deref(),
-                    msg.tool_call_id.as_deref(),
-                );
-
-                // Trigger Background Pruning (Fire & Forget)
-                tauri::async_runtime::spawn(async move {
-                    if let Err(e) = attempt_pruning(
-                        app_handle,
-                        librarian_arc,
-                        provider_id_bg,
-                        model_bg,
-                        conv_id_bg.unwrap_or_default(), // Pass default if None, pruning will handle it
-                    )
-                    .await
-                    {
-                        eprintln!("Pruning Error: {}", e);
-                    }
-                });
+        Err(e) => {
+            // Task fail (cancelled or panic)
+            let mut handle_guard = state.active_task.lock().await;
+            *handle_guard = None;
+            if e.is_cancelled() {
+                Err("Generation cancelled by user.".to_string())
+            } else {
+                Err(format!("Task execution failed: {}", e))
             }
-
-            Ok(msg)
         }
-        Err(e) => Err(e),
     }
 }
 
@@ -819,7 +873,7 @@ async fn attempt_pruning(
                     tool_calls: None,
                     tool_call_id: None,
                     attachments: None,
-                }], vec![]).await
+                }], vec![], None).await
             }
             ProviderType::Anthropic => {
                 let api_key = provider_config.api_key.clone().unwrap_or_default();
@@ -831,7 +885,7 @@ async fn attempt_pruning(
                     tool_calls: None,
                     tool_call_id: None,
                     attachments: None,
-                }], vec![]).await
+                }], vec![], None).await
             }
             ProviderType::Ollama => {
                 let base_url = provider_config
@@ -846,7 +900,7 @@ async fn attempt_pruning(
                     tool_calls: None,
                     tool_call_id: None,
                     attachments: None,
-                }], vec![]).await
+                }], vec![], None).await
             }
         };
 
@@ -1047,6 +1101,7 @@ pub fn run() {
             app.manage(AppState {
                 mcp_manager: mcp_manager.clone(),
                 librarian: Arc::new(Mutex::new(librarian)),
+                active_task: Arc::new(Mutex::new(None)),
             });
 
             let settings_path = config_dir.join("settings.json");
@@ -1085,7 +1140,9 @@ pub fn run() {
             get_system_prompts,
             save_system_prompt,
             delete_system_prompt,
-            set_active_system_prompt
+            delete_system_prompt,
+            set_active_system_prompt,
+            stop_generation
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
