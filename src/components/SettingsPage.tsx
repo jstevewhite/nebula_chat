@@ -217,13 +217,13 @@ export default function SettingsPage() {
                     <select
                         value={fullSettings.context_model || ""}
                         onChange={(e) => setFullSettings({ ...fullSettings, context_model: e.target.value })}
-                        className="w-full bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none text-white"
-                        style={{ backgroundColor: '#030712', color: 'white' }}
+                        className="w-full border border-gray-700 rounded-lg p-3 text-sm bg-gray-900 text-white focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none intelligence-settings-dropdown"
+                        style={{ colorScheme: "dark" }}
                     >
-                        <option value="" style={{ backgroundColor: '#030712', color: 'white' }}>None (Raw Injection)</option>
+                        <option value="">None (Raw Injection)</option>
                         {Object.entries(providers).flatMap(([pkey, pval]) =>
                             pval.models.filter(m => m.visible).map(m => (
-                                <option key={`${pkey}::${m.id}`} value={`${pkey}::${m.id}`} style={{ backgroundColor: '#030712', color: 'white' }}>
+                                <option key={`${pkey}::${m.id}`} value={`${pkey}::${m.id}`}>
                                     {pkey} - {m.name}
                                 </option>
                             ))

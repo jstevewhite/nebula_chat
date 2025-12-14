@@ -408,7 +408,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                     <select
                         value={selectedModel}
                         onChange={(e) => setSelectedModel(e.target.value)}
-                        className="bg-gray-800 text-white text-sm rounded-lg border border-gray-700 focus:ring-blue-500 focus:border-blue-500 block p-2.5 font-medium max-w-[200px]"
+                        className="bg-gray-800 text-white text-sm rounded-lg border border-gray-700 focus:ring-blue-500 focus:border-blue-500 block p-2.5 font-medium max-w-[200px] chat-model-dropdown"
                         style={{ colorScheme: "dark" }}
                     >
                         {availableModels.length === 0 && <option disabled>No enabled models</option>}
@@ -428,7 +428,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         <select
                             value={selectedPromptId}
                             onChange={(e) => handleSetPrompt(e.target.value)}
-                            className="bg-gray-800 text-white text-sm rounded-lg border border-gray-700 focus:ring-blue-500 focus:border-blue-500 block p-2.5 font-medium max-w-[150px]"
+                            className="bg-gray-800 text-white text-sm rounded-lg border border-gray-700 focus:ring-blue-500 focus:border-blue-500 block p-2.5 font-medium max-w-[150px] chat-prompt-dropdown"
                             style={{ colorScheme: "dark" }}
                         >
                             <option value="">Default System</option>
