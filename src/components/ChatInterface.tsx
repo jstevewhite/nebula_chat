@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check, Pin, FileText, Book, Paperclip, X, Brain, Square, Sliders, Download } from "lucide-react";
@@ -401,20 +402,32 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 }]);
 
                 const unlisten = await listen<string>("stream-chunk", (event) => {
-                    setMessages(prev => {
-                        const lastIdx = prev.length - 1;
-                        const last = prev[lastIdx];
-                        if (last && last.id === tempMsgId) {
-                            const newContent = (last.content || "") + event.payload;
-                            return [...prev.slice(0, -1), { ...last, content: newContent }];
-                        }
-                        return prev;
+                    console.log("📨 STREAM CHUNK:", new Date().toISOString(), event.payload.substring(0, 50));
+                    // Visual indicator - flash the window title
+                    document.title = `📨 Chunk (${event.payload.length} chars)`;
+                    setTimeout(() => document.title = "Nebula", 100);
+
+                    // Use flushSync to force immediate rendering in React 19
+                    flushSync(() => {
+                        setMessages(prev => {
+                            const lastIdx = prev.length - 1;
+                            const last = prev[lastIdx];
+                            console.log("   → Updating message, temp ID match:", last?.id === tempMsgId);
+                            if (last && last.id === tempMsgId) {
+                                const newContent = (last.content || "") + event.payload;
+                                console.log("   → New content length:", newContent.length);
+                                return [...prev.slice(0, -1), { ...last, content: newContent }];
+                            }
+                            return prev;
+                        });
                     });
                 });
                 unlistenTransform = unlisten;
             }
 
-            const response = await invoke<Message>("send_message", {
+            // Don't await immediately - let event loop process stream events
+            console.log("🚀 Starting invoke at", new Date().toISOString());
+            invoke<Message>("send_message", {
                 messages: currentHistory,
                 providerId: providerId,
                 model: modelId,
@@ -423,73 +436,80 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 temperature: genSettings.temperature,
                 topP: genSettings.top_p,
                 stream: genSettings.stream
-            });
-
-            if (unlistenTransform) {
-                unlistenTransform();
-            }
-
-            // Replace/Append Final Message
-            setMessages(prev => {
-                if (genSettings.stream) {
-                    // Replace the temp message with the final complete message
-                    // (It should roughly match, but final has tool calls etc resolved cleanly)
-                    return [...prev.slice(0, -1), response];
-                } else {
-                    return [...prev, response];
+            }).then(response => {
+                console.log("✅ Invoke completed at", new Date().toISOString());
+                if (unlistenTransform) {
+                    unlistenTransform();
                 }
-            });
 
-            // Auto-Title Trigger (If this was the first exchange)
-            if (currentHistory.length === 1 && conversationId) {
-                // Async background trigger, don't await
-                invoke("generate_title", {
-                    conversationId,
-                    providerId,
-                    model: modelId
-                }).catch(e => console.error("Auto-title failed", e));
-            }
-
-            if (response.tool_calls && response.tool_calls.length > 0) {
-                const toolsToRun = response.tool_calls.map(tc => {
-                    try {
-                        return {
-                            name: tc.function.name,
-                            args: JSON.parse(tc.function.arguments),
-                            callId: tc.id || "call_" + Math.random().toString(36).substr(2, 9)
-                        };
-                    } catch (e) {
-                        console.error("Failed to parse tool args", e);
-                        return null;
+                // Replace/Append Final Message
+                setMessages(prev => {
+                    if (genSettings.stream) {
+                        // Replace the temp message with the final complete message
+                        // (It should roughly match, but final has tool calls etc resolved cleanly)
+                        return [...prev.slice(0, -1), response];
+                    } else {
+                        return [...prev, response];
                     }
-                }).filter(t => t !== null) as { name: string, args: any, callId: string }[];
+                });
 
-                if (toolsToRun.length > 0) {
-                    setPendingTools(toolsToRun);
-                    setLoading(false); // Paused for user interaction
+                // Auto-Title Trigger (If this was the first exchange)
+                if (currentHistory.length === 1 && conversationId) {
+                    // Async background trigger, don't await
+                    invoke("generate_title", {
+                        conversationId,
+                        providerId,
+                        model: modelId
+                    }).catch(e => console.error("Auto-title failed", e));
+                }
+
+                if (response.tool_calls && response.tool_calls.length > 0) {
+                    const toolsToRun = response.tool_calls.map(tc => {
+                        try {
+                            return {
+                                name: tc.function.name,
+                                args: JSON.parse(tc.function.arguments),
+                                callId: tc.id || "call_" + Math.random().toString(36).substr(2, 9)
+                            };
+                        } catch (e) {
+                            console.error("Failed to parse tool args", e);
+                            return null;
+                        }
+                    }).filter(t => t !== null) as { name: string, args: any, callId: string }[];
+
+                    if (toolsToRun.length > 0) {
+                        setPendingTools(toolsToRun);
+                        setLoading(false); // Paused for user interaction
+                    } else {
+                        setLoading(false);
+                    }
                 } else {
                     setLoading(false);
                 }
-            } else {
+            }).catch((error: any) => {
+                console.error(error);
+                if (unlistenTransform) {
+                    unlistenTransform();
+                }
                 setLoading(false);
-            }
+
+                const errStr = String(error);
+                if (errStr.includes("cancelled")) {
+                    return;
+                }
+
+                // Handle Permission Denials nicely
+                if (errStr.includes("denylist") || errStr.includes("allowlist")) {
+                    setErrorMsg("Tool Execution Denied: " + errStr);
+                } else {
+                    setErrorMsg(errStr);
+                }
+            });
         } catch (error: any) {
-            console.error(error);
+            // This catch is for errors in setup, not in the invoke itself
+            console.error("Error setting up message send:", error);
             setLoading(false);
-
-            const errStr = String(error);
-            if (errStr.includes("cancelled")) {
-                return;
-            }
-
-            // Handle Permission Denials nicely
-            if (errStr.includes("denylist") || errStr.includes("allowlist")) {
-                setErrorMsg("Tool Execution Denied: " + errStr);
-                // Optionally add a system message to chat history so the LLM knows?
-                // For now just show error toast.
-            } else {
-                setErrorMsg(errStr);
-            }
+            setErrorMsg(String(error));
         }
     };
 
@@ -830,7 +850,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             >
                 {messages.map((m, i) => (
                     <ChatMessage
-                        key={i}
+                        key={m.id || `msg-${i}`}
                         message={m}
                         index={i}
                         onCopy={handleCopy}

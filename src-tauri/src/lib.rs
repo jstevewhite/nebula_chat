@@ -456,6 +456,7 @@ async fn send_message(
             );
             effective_stream = false;
         }
+        tracing::info!("🎬 Streaming requested: {}, effective: {}, tools count: {}", stream, effective_stream, tools.len());
 
         // 5. Instantiate Provider
         let provider_config = settings.providers.get(&provider_id).ok_or_else(|| {
@@ -486,9 +487,12 @@ async fn send_message(
         let app_handle_for_stream = app_handle.clone();
         let on_token = Box::new(move |token: String| {
             use tauri::Emitter;
+            tracing::debug!("🔊 Emitting stream chunk: {} chars", token.len());
             // Emit standard stream chunk event
             if let Err(e) = app_handle_for_stream.emit("stream-chunk", &token) {
                 tracing::error!("Failed to emit stream chunk: {}", e);
+            } else {
+                tracing::debug!("✅ Stream chunk emitted successfully");
             }
         });
 

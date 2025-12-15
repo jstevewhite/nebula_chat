@@ -34,10 +34,10 @@ pub fn get_capabilities(provider: &ProviderType, _model: &str) -> Capabilities {
             supports_multimodal: false,
         },
         ProviderType::OpenAICompatible => Capabilities {
-            supports_tools: false, // Assume basic completion unless known otherwise
+            supports_tools: true, // OpenAI-compatible APIs (like OpenRouter) support tools
             supports_streaming: true,
-            supports_streaming_tools: false,
-            supports_multimodal: false,
+            supports_streaming_tools: true, // They use the same streaming format as OpenAI
+            supports_multimodal: true, // Many support vision models
         },
     }
 }
