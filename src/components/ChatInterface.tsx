@@ -10,6 +10,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import remarkGfm from 'remark-gfm';
 import MemoryPanel from "./MemoryPanel";
+import { getProviderIcon } from "../utils/providerIcons";
 
 interface ToolCall {
     id: string;
@@ -41,6 +42,7 @@ interface ModelOption {
     id: string;
     name: string;
     providerId: string;
+    providerType: string;
 }
 
 interface SystemPrompt {
@@ -270,7 +272,8 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                                 models.push({
                                     id: m.id,
                                     name: m.name || m.id,
-                                    providerId: providerKey
+                                    providerId: providerKey,
+                                    providerType: config.provider_type // Extract provider type
                                 });
                             }
                         });
@@ -702,10 +705,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         {availableModels.length === 0 && <option disabled>No enabled models</option>}
                         {availableModels.map(m => (
                             <option key={`${m.providerId}::${m.id}`} value={`${m.providerId}::${m.id}`}>
-                                {m.providerId === "ollama" ? `🦙 ${m.name}` :
-                                    m.providerId === "openai" ? `🤖 ${m.name}` :
-                                        m.providerId === "anthropic" ? `🧠 ${m.name}` :
-                                            `${m.name}`}
+                                {getProviderIcon(m.providerType, m.providerId)} {m.name}
                             </option>
                         ))}
                     </select>
@@ -837,12 +837,14 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             </div>
 
             {/* Side Panels */}
-            {activeSidePanel === 'memory' && (
-                <MemoryPanel
-                    memories={recentMemories}
-                    onClose={() => setActiveSidePanel('none')}
-                />
-            )}
+            {
+                activeSidePanel === 'memory' && (
+                    <MemoryPanel
+                        memories={recentMemories}
+                        onClose={() => setActiveSidePanel('none')}
+                    />
+                )
+            }
 
             <div
                 className="flex-1 overflow-y-auto p-4 space-y-6 min-h-0"

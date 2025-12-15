@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Eye, EyeOff, RefreshCw, Trash2, CheckCircle, AlertCircle, Search, X } from "lucide-react";
+import { getProviderIcon } from "../utils/providerIcons";
 
 export interface ModelConfig {
     id: string;
@@ -52,8 +53,12 @@ function ProviderCard({ providerKey, config, onUpdate, onDelete, onFetch, loadin
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 transition-all hover:border-gray-700">
             <div className="flex justify-between items-start mb-4">
                 <div className="flex items-center gap-3">
-                    <div className={`w-3 h-3 rounded-full ${config.enabled ? "bg-green-500 shadow-lg shadow-green-500/50" : "bg-gray-600"}`} />
-                    <h3 className="font-bold text-lg capitalize">{providerKey}</h3>
+                    <div className={`text-2xl`} title={config.enabled ? "Enabled" : "Disabled"}>
+                        {getProviderIcon(config.provider_type, providerKey)}
+                    </div>
+                    <div>
+                        <h3 className={`font-bold text-lg capitalize ${!config.enabled && "text-gray-500 line-through decoration-gray-500"}`}>{providerKey}</h3>
+                    </div>
                     <span className="text-xs px-2 py-0.5 rounded bg-gray-800 text-gray-400 border border-gray-700">
                         {config.provider_type}
                     </span>
