@@ -210,6 +210,20 @@ interface ProvidersSettingsProps {
 export default function ProvidersSettings({ providers, onChange }: ProvidersSettingsProps) {
     const [loading, setLoading] = useState<string | null>(null);
 
+    // Add Provider Modal state
+    const [isAddOpen, setIsAddOpen] = useState(false);
+    const [newId, setNewId] = useState("");
+    const [newType, setNewType] = useState<ProviderType>("OpenAICompatible");
+    const [newBaseUrl, setNewBaseUrl] = useState("http://localhost:1234/v1");
+    const [newApiKey, setNewApiKey] = useState("");
+
+    const resetAddForm = () => {
+        setNewId("");
+        setNewType("OpenAICompatible");
+        setNewBaseUrl("http://localhost:1234/v1");
+        setNewApiKey("");
+    };
+
     const updateProvider = (key: string, updates: Partial<ProviderConfig>) => {
         const newProviders = { ...providers };
         if (!newProviders[key]) return;
@@ -255,23 +269,42 @@ export default function ProvidersSettings({ providers, onChange }: ProvidersSett
         }
     };
 
-    const addProvider = () => {
-        const id = prompt("Enter a unique ID for the new provider (e.g., 'local-vllm' or 'deepseek'):");
-        if (!id) return;
+    const openAddProvider = () => {
+        resetAddForm();
+        setIsAddOpen(true);
+    };
+
+    const confirmAddProvider = () => {
+        const id = newId.trim();
+        if (!id) {
+            alert("Please enter a provider ID.");
+            return;
+        }
         if (providers[id]) {
             alert("Provider ID already exists.");
             return;
         }
 
         const newProviders = { ...providers };
+        // Only set base_url for providers that require it (Ollama/OpenAICompatible)
+        const baseUrlForType =
+            newType === "Ollama"
+                ? (newBaseUrl || "http://localhost:11434")
+                : newType === "OpenAICompatible"
+                    ? newBaseUrl
+                    : undefined; // OpenAI / Anthropic use fixed cloud endpoints
+
+        const apiKeyForType = newType === "Ollama" ? "" : newApiKey;
+
         newProviders[id] = {
             enabled: true,
-            provider_type: "OpenAICompatible",
-            base_url: "http://localhost:1234/v1",
-            api_key: "",
+            provider_type: newType,
+            base_url: baseUrlForType,
+            api_key: apiKeyForType,
             models: []
         };
         onChange(newProviders);
+        setIsAddOpen(false);
     };
 
     return (
@@ -291,12 +324,74 @@ export default function ProvidersSettings({ providers, onChange }: ProvidersSett
             </div>
 
             <button
-                onClick={addProvider}
+                onClick={openAddProvider}
                 className="w-full py-3 border-2 border-dashed border-gray-800 rounded-xl text-gray-500 hover:border-gray-600 hover:text-gray-300 transition-colors flex items-center justify-center gap-2 font-semibold"
             >
                 <div className="w-5 h-5 rounded-full border border-current flex items-center justify-center">+</div>
                 Add Custom Provider
             </button>
+
+            {isAddOpen && (
+                <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl w-full max-w-lg overflow-hidden">
+                        <div className="p-4 border-b border-gray-800 flex items-center justify-between">
+                            <h4 className="font-bold">Add Model Provider</h4>
+                            <button className="text-gray-400 hover:text-white" onClick={() => setIsAddOpen(false)}>×</button>
+                        </div>
+                        <div className="p-4 space-y-4">
+                            <div>
+                                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Provider ID</label>
+                                <input
+                                    value={newId}
+                                    onChange={(e) => setNewId(e.target.value)}
+                                    placeholder="e.g. local-vllm or deepseek"
+                                    className="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm text-white focus:ring-1 focus:ring-blue-500 outline-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Provider Type</label>
+                                <select
+                                    value={newType}
+                                    onChange={(e) => setNewType(e.target.value as ProviderType)}
+                                    className="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm text-white focus:ring-1 focus:ring-blue-500 outline-none"
+                                >
+                                    <option value="OpenAI">OpenAI</option>
+                                    <option value="Anthropic">Anthropic</option>
+                                    <option value="Ollama">Ollama</option>
+                                    <option value="OpenAICompatible">OpenAICompatible</option>
+                                </select>
+                            </div>
+                            {(newType === "Ollama" || newType === "OpenAICompatible") && (
+                                <div>
+                                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Base URL</label>
+                                    <input
+                                        value={newBaseUrl}
+                                        onChange={(e) => setNewBaseUrl(e.target.value)}
+                                        placeholder={newType === "Ollama" ? "http://localhost:11434" : "http://localhost:1234/v1"}
+                                        className="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm text-white focus:ring-1 focus:ring-blue-500 outline-none"
+                                    />
+                                </div>
+                            )}
+                            {newType !== "Ollama" && (
+                                <div>
+                                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">API Key</label>
+                                    <input
+                                        type="password"
+                                        value={newApiKey}
+                                        onChange={(e) => setNewApiKey(e.target.value)}
+                                        placeholder="sk-..."
+                                        className="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm text-white focus:ring-1 focus:ring-blue-500 outline-none"
+                                    />
+                                </div>
+                            )}
+                        </div>
+                        <div className="p-4 border-t border-gray-800 flex justify-end gap-2">
+                            <button className="px-4 py-2 rounded-lg hover:bg-gray-800 text-gray-400 font-bold text-sm" onClick={() => setIsAddOpen(false)}>Cancel</button>
+                            <button className="px-6 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm" onClick={confirmAddProvider}>Add</button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

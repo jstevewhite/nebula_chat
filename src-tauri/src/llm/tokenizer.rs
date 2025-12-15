@@ -16,7 +16,7 @@ impl Tokenizer {
         if tokens.len() <= max_tokens {
             return Ok(text.to_string());
         }
-        
+
         let truncated_tokens = &tokens[..max_tokens];
         let decoded = bpe.decode(truncated_tokens.to_vec())?;
         Ok(decoded)

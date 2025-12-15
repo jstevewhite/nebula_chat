@@ -27,7 +27,7 @@ impl ContextManager {
         for msg in msgs_to_process.into_iter().rev() {
             let content = msg.content.as_deref().unwrap_or("");
             let count = Tokenizer::count_tokens(content)?;
-            
+
             if count <= budget {
                 history.push(msg);
                 budget -= count;
