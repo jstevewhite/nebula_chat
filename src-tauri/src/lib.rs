@@ -600,6 +600,7 @@ async fn execute_tool(
     name: String,
     args: serde_json::Value,
     conversation_id: Option<String>,
+    tool_call_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     // 1. Load Settings for Permissions
     let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
@@ -624,6 +625,7 @@ async fn execute_tool(
                 let lib = state.librarian.lock().await;
                 let _ = lib.audit.log_execution(
                     cid,
+                    tool_call_id.as_deref().unwrap_or("unknown"),
                     &name,
                     &server_name,
                     &args.to_string(),
@@ -642,6 +644,7 @@ async fn execute_tool(
                 let lib = state.librarian.lock().await;
                 let _ = lib.audit.log_execution(
                     cid,
+                    tool_call_id.as_deref().unwrap_or("unknown"),
                     &name,
                     &server_name,
                     &args.to_string(),
@@ -652,21 +655,6 @@ async fn execute_tool(
             }
             return Err(format!("Tool '{}' is not in the allowlist.", name));
         }
-
-        // Auto-approve check
-        // If auto_approve is FALSE, we need to return a special status to UI.
-        // BUT, `execute_tool` is called BY the UI when the user approves (or if the agent calls it).
-        // Wait, the agent calls `execute_tool` via the frontend loop?
-        // No, the frontend loop sees a tool call, and calls `execute_tool`.
-        // So if `auto_approve` is false, the FRONTEND should have prompted the user.
-        // However, we want SERVER-SIDE enforcement.
-        // If the frontend calls `execute_tool`, it implies the user approved it (or auto-approve logic in frontend).
-        // But we shouldn't trust the frontend blindly if we want strict security.
-        // For Phase 3, we assume `execute_tool` IS the execution.
-        // If we want to enforce "approval required", we need a way to know if it WAS approved.
-        // For now, let's assume if this command is called, it's authorized, UNLESS it violates allow/deny lists.
-        // The "Approval UI" task (3.5) will handle the UX of asking the user.
-        // The backend `execute_tool` is the "do it" command.
     }
 
     // 4. Execute
@@ -684,6 +672,7 @@ async fn execute_tool(
         let lib = state.librarian.lock().await;
         let _ = lib.audit.log_execution(
             cid,
+            tool_call_id.as_deref().unwrap_or("unknown"),
             &name,
             &server_name,
             &args.to_string(),
@@ -693,29 +682,23 @@ async fn execute_tool(
         );
     }
 
-    // Return the FULL result to the frontend (it needs it for the LLM).
-    // The frontend can decide to show the preview or full.
-    // Wait, if we want to save tokens, we should return the SHAPED result to the LLM?
-    // The plan said "Tool Output Shaping (Token Safety)".
-    // If we return the full result here, the frontend will likely feed it back to the LLM.
-    // We should probably return the SHAPED result if it was truncated,
-    // OR return a structure indicating it was truncated so the frontend knows.
-    // For now, let's return the full result but we have logged the shaped one.
-    // Actually, to save tokens, we MUST return the shaped result if we want the LLM to see the truncated version.
-    // Let's return the shaped result if it was truncated.
-    // But `result` is a Value. `preview` is a String.
-    // Let's try to parse `preview` back to Value if possible, or return it as a string value.
-
-    // If we truncated, we want the LLM to see the truncated text.
+    // Return the result
     if preview != full_json {
-        // Return the preview string as the result content
-        // But `call_tool` returns a Value which usually follows the MCP content schema.
-        // We should probably modify the content inside.
-        // For simplicity, let's just return the preview string wrapped in a Value.
         return Ok(serde_json::Value::String(preview));
     }
 
     Ok(result)
+}
+
+#[tauri::command]
+async fn get_tool_execution(
+    state: State<'_, AppState>,
+    tool_call_id: String,
+) -> Result<String, String> {
+    let lib = state.librarian.lock().await;
+    lib.audit
+        .get_execution_by_tool_call_id(&tool_call_id)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1323,7 +1306,8 @@ pub fn run() {
             set_active_system_prompt,
             set_active_system_prompt,
             stop_generation,
-            rebuild_memory_index
+            rebuild_memory_index,
+            get_tool_execution
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
