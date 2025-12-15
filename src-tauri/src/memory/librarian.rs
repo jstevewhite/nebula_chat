@@ -111,6 +111,7 @@ impl Librarian {
             Option<String>,
             Option<String>,
             String, // created_at added
+            String, // attachments
         )>,
     > {
         self.sqlite.get_conversation_messages(conversation_id)
@@ -123,6 +124,7 @@ impl Librarian {
         content: Option<&str>,
         tool_calls: Option<&str>,
         tool_call_id: Option<&str>,
+        attachments: Option<&[crate::llm::provider::Attachment]>,
     ) -> Result<()> {
         let (id, created_at) = self.sqlite.save_full_message(
             conversation_id,
@@ -131,6 +133,19 @@ impl Librarian {
             tool_calls,
             tool_call_id,
         )?;
+
+        if let Some(atts) = attachments {
+            for att in atts {
+                self.sqlite.save_attachment(
+                    &id,
+                    &att.name,
+                    &att.media_type,
+                    &att.data,
+                    att.is_binary,
+                )?;
+            }
+        }
+
         if let Some(text) = content {
             self.tantivy
                 .add_document(conversation_id, role, text, &id, &created_at)?;
