@@ -12,7 +12,8 @@ impl ContextAssembler {
     pub async fn assemble(
         query: &str,
         raw_memories: &[String],
-        _conversation_history: &[Message],
+        conversation_history: &[Message],
+        context_turns: usize,
         context_model_id: &str,
         settings: &Settings,
     ) -> Result<String> {
@@ -60,14 +61,47 @@ impl ContextAssembler {
             };
 
         // 3. Construct Prompt
-        // Minimizing context: Just the user query and the memories. History is expensive.
-        // If query is vague, maybe last 2 messages.
+        // Use recent conversation turns (if configured) to better judge relevance.
         let memory_block = raw_memories.join("\n---\n");
+
+        let recent_context = if context_turns == 0 {
+            String::new()
+        } else {
+            // Treat turns as user/assistant pairs; approximate by taking last 2*turns user/assistant messages.
+            let max_msgs = context_turns.saturating_mul(2);
+            let mut recent: Vec<String> = Vec::new();
+
+            for m in conversation_history.iter().rev() {
+                if recent.len() >= max_msgs {
+                    break;
+                }
+                if m.role != "user" && m.role != "assistant" {
+                    continue;
+                }
+                let content = m.content.clone().unwrap_or_default();
+                if content.trim().is_empty() {
+                    continue;
+                }
+                recent.push(format!("{}: {}", m.role, content.trim()));
+            }
+            recent.reverse();
+
+            if recent.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\nRECENT CONVERSATION (last {} turns max):\n---\n{}\n---\n",
+                    context_turns,
+                    recent.join("\n")
+                )
+            }
+        };
+
         let prompt = format!(
             "You are a helpful assistant acting as a Memory Manager.
 Your goal is to prepare a concise context block for the main LLM.
 
-USER QUERY: {}
+USER QUERY: {}{}
 
 RETRIEVED MEMORIES (Fragments):
 ---
@@ -75,13 +109,14 @@ RETRIEVED MEMORIES (Fragments):
 ---
 
 INSTRUCTIONS:
-1. Analyze the memories in relation to the query.
-2. Filter out duplicates or irrelevant noise.
-3. Summarize the relevant facts into a single coherent block of text.
-4. If nothing is relevant, just say 'No relevant context.'
-5. Do NOT output conversational filler. Just the facts.
+1. Use the user query AND the recent conversation to determine relevance.
+2. Analyze the memories in relation to the query.
+3. Filter out duplicates or irrelevant noise.
+4. Summarize the relevant facts into a single coherent block of text.
+5. If nothing is relevant, just say 'No relevant context.'
+6. Do NOT output conversational filler. Just the facts.
 ",
-            query, memory_block
+            query, recent_context, memory_block
         );
 
         let msgs = vec![Message {

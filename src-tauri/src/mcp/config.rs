@@ -43,6 +43,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_true_bool() -> bool {
+    true
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ProviderConfig {
     pub enabled: bool,
@@ -77,6 +81,16 @@ pub struct Settings {
 
     #[serde(default)]
     pub context_model: Option<String>,
+
+    // Number of recent conversation turns (user/assistant pairs) to include when assembling memory context.
+    // 0 preserves prior behavior (no conversation included).
+    #[serde(default)]
+    pub context_turns: usize,
+
+    // Enables long-term memory retrieval/injection (Tantivy search + context injection).
+    // Disabling does NOT disable chat history persistence.
+    #[serde(default = "default_true_bool")]
+    pub memory_enabled: bool,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
@@ -178,6 +192,12 @@ impl Settings {
         }
         if let Some(ctx_model) = val.get("context_model").and_then(|v| v.as_str()) {
             s.context_model = Some(ctx_model.to_string());
+        }
+        if let Some(ctx_turns) = val.get("context_turns").and_then(|v| v.as_u64()) {
+            s.context_turns = ctx_turns as usize;
+        }
+        if let Some(mem_enabled) = val.get("memory_enabled").and_then(|v| v.as_bool()) {
+            s.memory_enabled = mem_enabled;
         }
 
         if let Some(mcp) = val.get("mcp_servers").and_then(|v| v.as_object()) {

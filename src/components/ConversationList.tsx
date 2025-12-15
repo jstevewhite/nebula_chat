@@ -25,6 +25,8 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editTitle, setEditTitle] = useState("");
     const [hoveredId, setHoveredId] = useState<string | null>(null);
+    const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null);
+    const [error, setError] = useState<string | null>(null);
 
     const loadConversations = async () => {
         setLoading(true);
@@ -51,28 +53,33 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
         );
     }, [searchQuery, conversations]);
 
-    const handleDelete = async (e: React.MouseEvent, id: string) => {
+    const handleDelete = (e: React.MouseEvent, conv: Conversation) => {
         e.stopPropagation();
-        if (confirm("Are you sure you want to delete this chat?")) {
-            try {
-                await invoke("delete_conversation", { conversationId: id });
+        setError(null);
+        setDeleteTarget(conv);
+    };
 
-                // If we deleted the active conversation, decide what to select next
-                if (activeId === id) {
-                    const remaining = conversations.filter(c => c.id !== id);
-                    if (remaining.length > 0) {
-                        // Select the most recent one (first in list usually) or adjacent
-                        // Since list is usually sorted by date desc, selecting 0 is fine
-                        onSelect(remaining[0].id);
-                    } else {
-                        onCreate();
-                    }
+    const confirmDelete = async () => {
+        if (!deleteTarget) return;
+        const id = deleteTarget.id;
+        try {
+            await invoke("delete_conversation", { conversationId: id });
+
+            // If we deleted the active conversation, decide what to select next
+            if (activeId === id) {
+                const remaining = conversations.filter(c => c.id !== id);
+                if (remaining.length > 0) {
+                    onSelect(remaining[0].id);
+                } else {
+                    onCreate();
                 }
-
-                loadConversations();
-            } catch (e) {
-                console.error(e);
             }
+
+            setDeleteTarget(null);
+            loadConversations();
+        } catch (e) {
+            console.error(e);
+            setError("Failed to delete chat: " + String(e));
         }
     };
 
@@ -102,6 +109,11 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
     return (
         <div className="w-64 bg-gray-900 border-r border-gray-800 flex flex-col h-full select-none">
             <div className="p-4 border-b border-gray-800 space-y-3">
+                {error && (
+                    <div className="text-xs bg-red-900/20 border border-red-700/40 text-red-200 rounded-lg px-3 py-2">
+                        {error}
+                    </div>
+                )}
                 <button
                     onClick={onCreate}
                     className="w-full bg-blue-600 hover:bg-blue-500 text-white rounded-lg p-2.5 flex items-center justify-center gap-2 transition-all font-semibold text-sm shadow-md shadow-blue-900/20"
@@ -167,7 +179,7 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
                                     <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>
                                 </button>
                                 <button
-                                    onClick={(e) => handleDelete(e, conv.id)}
+                                    onClick={(e) => handleDelete(e, conv)}
                                     className="p-1 hover:bg-red-900/50 rounded text-gray-400 hover:text-red-400"
                                     title="Delete"
                                 >
@@ -184,6 +196,41 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
                     </div>
                 )}
             </div>
+
+            {/* Delete Confirmation Modal */}
+            {deleteTarget && (
+                <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl w-full max-w-md overflow-hidden shadow-2xl">
+                        <div className="p-4 border-b border-gray-800 flex items-center justify-between">
+                            <h4 className="font-bold text-white">Delete chat?</h4>
+                            <button
+                                className="text-gray-400 hover:text-white"
+                                onClick={() => setDeleteTarget(null)}
+                                title="Close"
+                            >
+                                ×
+                            </button>
+                        </div>
+                        <div className="p-4 text-sm text-gray-300">
+                            This will permanently delete <span className="font-semibold text-gray-100">{deleteTarget.title}</span> and all its messages.
+                        </div>
+                        <div className="p-4 border-t border-gray-800 flex justify-end gap-2">
+                            <button
+                                className="px-4 py-2 rounded-lg hover:bg-gray-800 text-gray-300 font-semibold"
+                                onClick={() => setDeleteTarget(null)}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white font-semibold"
+                                onClick={confirmDelete}
+                            >
+                                Delete
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

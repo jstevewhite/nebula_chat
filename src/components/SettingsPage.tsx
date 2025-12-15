@@ -19,6 +19,8 @@ export default function SettingsPage() {
     const [transportType, setTransportType] = useState<"stdio" | "sse">("stdio");
     const [command, setCommand] = useState("");
     const [args, setArgs] = useState("");
+    const [envText, setEnvText] = useState("");
+    const [envErrors, setEnvErrors] = useState<string[]>([]);
     const [url, setUrl] = useState("");
 
     useEffect(() => {
@@ -91,6 +93,8 @@ export default function SettingsPage() {
         setTransportType("stdio");
         setCommand("");
         setArgs("");
+        setEnvText("");
+        setEnvErrors([]);
         setUrl("");
         setStatus("");
         setIsModalOpen(true);
@@ -106,11 +110,20 @@ export default function SettingsPage() {
             setUrl(config.url || "");
             setCommand("");
             setArgs("");
+            setEnvText("");
+            setEnvErrors([]);
         } else {
             // Default to Stdio
             setTransportType("stdio");
             setCommand(config.command || "");
             setArgs(config.args ? config.args.join(", ") : "");
+            const envObj = (config.env || {}) as Record<string, string>;
+            const envLines = Object.entries(envObj)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([k, v]) => `${k}=${v}`)
+                .join("\n");
+            setEnvText(envLines);
+            setEnvErrors([]);
             setUrl("");
         }
 
@@ -122,6 +135,44 @@ export default function SettingsPage() {
         if (!name) return;
         setStatus("Saving...");
 
+        const parseEnvValidated = (text: string): { env: Record<string, string>, errors: string[] } => {
+            const env: Record<string, string> = {};
+            const errors: string[] = [];
+            const lines = text.split("\n");
+
+            // POSIX env var names are typically [A-Za-z_][A-Za-z0-9_]*
+            const keyRe = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+            lines.forEach((rawLine, idx) => {
+                const lineNo = idx + 1;
+                const trimmed = rawLine.trim();
+                if (!trimmed || trimmed.startsWith("#")) return;
+
+                const eq = trimmed.indexOf("=");
+                if (eq <= 0) {
+                    errors.push(`Line ${lineNo}: expected KEY=VALUE`);
+                    return;
+                }
+
+                const key = trimmed.slice(0, eq).trim();
+                const value = trimmed.slice(eq + 1); // keep value as-is (can contain '=')
+
+                if (!keyRe.test(key)) {
+                    errors.push(`Line ${lineNo}: invalid key '${key}' (use letters/digits/underscore, cannot start with digit)`);
+                    return;
+                }
+
+                if (value.includes("\u0000")) {
+                    errors.push(`Line ${lineNo}: value contains NUL (\\u0000), which is not allowed`);
+                    return;
+                }
+
+                env[key] = value;
+            });
+
+            return { env, errors };
+        };
+
         try {
             // Construct config with flattened structure
             let newConfig: any = {
@@ -129,11 +180,19 @@ export default function SettingsPage() {
             };
 
             if (transportType === "stdio") {
+                const parsed = parseEnvValidated(envText);
+                setEnvErrors(parsed.errors);
+                if (parsed.errors.length > 0) {
+                    setStatus("Error: Invalid environment variables.");
+                    return;
+                }
+
                 newConfig.type = "Stdio";
                 newConfig.command = command;
                 newConfig.args = args.split(",").map(s => s.trim()).filter(s => s);
-                newConfig.env = {};
+                newConfig.env = parsed.env;
             } else {
+                setEnvErrors([]);
                 newConfig.type = "Sse";
                 newConfig.url = url;
             }
@@ -147,12 +206,26 @@ export default function SettingsPage() {
             } else {
                 // Add
                 const argList = args.split(",").map(s => s.trim()).filter(s => s);
+                let env: Record<string, string> | null = null;
+                if (transportType === "stdio") {
+                    const parsed = parseEnvValidated(envText);
+                    setEnvErrors(parsed.errors);
+                    if (parsed.errors.length > 0) {
+                        setStatus("Error: Invalid environment variables.");
+                        return;
+                    }
+                    env = parsed.env;
+                } else {
+                    setEnvErrors([]);
+                }
+
                 // add_mcp_server takes transportType etc as args, not a full config object
                 await invoke("add_mcp_server", {
                     name,
                     transportType,
                     command: transportType === "stdio" ? command : null,
                     args: transportType === "stdio" ? argList : null,
+                    env: transportType === "stdio" ? env : null,
                     url: transportType === "sse" ? url : null
                 });
             }
@@ -207,6 +280,26 @@ export default function SettingsPage() {
                 </h3>
 
                 <div className="mb-4">
+                    <div className="flex items-center justify-between gap-4 mb-3">
+                        <div>
+                            <label className="block text-sm font-bold text-gray-400">
+                                Long-term Memory
+                            </label>
+                            <p className="text-xs text-gray-500">
+                                Enable retrieval/injection of relevant memories into chats.
+                            </p>
+                        </div>
+                        <label className="flex items-center gap-2 text-sm text-gray-300 select-none">
+                            <input
+                                type="checkbox"
+                                checked={fullSettings.memory_enabled ?? true}
+                                onChange={(e) => setFullSettings({ ...fullSettings, memory_enabled: e.target.checked })}
+                                className="h-4 w-4 rounded border-gray-700 bg-gray-950"
+                            />
+                            Enabled
+                        </label>
+                    </div>
+
                     <label className="block text-sm font-bold text-gray-400 mb-2">
                         Memory Strategy Model
                     </label>
@@ -215,9 +308,10 @@ export default function SettingsPage() {
                         A smaller model (e.g., Llama 3 8B) is recommended for speed.
                     </p>
                     <select
+                        disabled={!(fullSettings.memory_enabled ?? true)}
                         value={fullSettings.context_model || ""}
                         onChange={(e) => setFullSettings({ ...fullSettings, context_model: e.target.value })}
-                        className="w-full border border-gray-700 rounded-lg p-3 text-sm bg-gray-900 text-white focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none intelligence-settings-dropdown"
+                        className={`w-full border border-gray-700 rounded-lg p-3 text-sm bg-gray-900 text-white focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none intelligence-settings-dropdown ${(fullSettings.memory_enabled ?? true) ? "" : "opacity-50 cursor-not-allowed"}`}
                         style={{ colorScheme: "dark" }}
                     >
                         <option value="">None (Raw Injection)</option>
@@ -229,6 +323,29 @@ export default function SettingsPage() {
                             ))
                         )}
                     </select>
+
+                    <div className="mt-4">
+                        <label className="block text-sm font-bold text-gray-400 mb-2">
+                            Conversation Turns Included
+                        </label>
+                        <p className="text-xs text-gray-500 mb-2">
+                            How many recent turns (user/assistant pairs) to include when deciding which memories are relevant.
+                            Set to 0 to disable.
+                        </p>
+                        <select
+                            disabled={!(fullSettings.memory_enabled ?? true)}
+                            value={String(fullSettings.context_turns ?? 0)}
+                            onChange={(e) => setFullSettings({ ...fullSettings, context_turns: Number(e.target.value) })}
+                            className={`w-full border border-gray-700 rounded-lg p-3 text-sm bg-gray-900 text-white focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none intelligence-settings-dropdown ${(fullSettings.memory_enabled ?? true) ? "" : "opacity-50 cursor-not-allowed"}`}
+                            style={{ colorScheme: "dark" }}
+                        >
+                            {[0, 1, 2, 3, 4, 6, 8, 10].map(n => (
+                                <option key={n} value={String(n)}>
+                                    {n}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
                 </div>
             </div>
 
@@ -373,16 +490,35 @@ export default function SettingsPage() {
                                                 placeholder="e.g. npx"
                                             />
                                         </div>
-                                        <div>
-                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Arguments</label>
-                                            <input
-                                                className="w-full bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
-                                                value={args}
-                                                onChange={e => setArgs(e.target.value)}
-                                                placeholder="-y, @modelcontextprotocol/server..."
-                                            />
-                                        </div>
-                                    </>
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Arguments</label>
+                                        <input
+                                            className="w-full bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                                            value={args}
+                                            onChange={e => setArgs(e.target.value)}
+                                            placeholder="-y, @modelcontextprotocol/server..."
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Environment (KEY=VALUE)</label>
+                                        <textarea
+                                            className={`w-full bg-gray-950 border rounded-lg p-3 text-sm font-mono focus:ring-1 outline-none min-h-[120px] ${envErrors.length > 0 ? "border-red-600 focus:border-red-500 focus:ring-red-500" : "border-gray-700 focus:border-blue-500 focus:ring-blue-500"}`}
+                                            value={envText}
+                                            onChange={e => {
+                                                setEnvText(e.target.value);
+                                                if (envErrors.length) setEnvErrors([]);
+                                            }}
+                                            placeholder={"FOO=bar\nOPENAI_API_KEY=...\n# comments allowed"}
+                                        />
+                                        {envErrors.length > 0 && (
+                                            <div className="mt-2 text-xs text-red-300 bg-red-900/20 border border-red-700/40 rounded-lg p-2 space-y-1">
+                                                {envErrors.map((err, i) => (
+                                                    <div key={i}>{err}</div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                </>
                                 ) : (
                                     <div>
                                         <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">SSE URL</label>

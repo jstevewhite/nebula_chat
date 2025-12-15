@@ -145,7 +145,10 @@ async fn generate_title(
     let response = match provider_config.provider_type {
         ProviderType::OpenAI | ProviderType::OpenAICompatible => {
             let api_key = provider_config.api_key.clone().unwrap_or_default();
-            let base_url = provider_config.base_url.clone();
+            let base_url = match provider_config.provider_type {
+                ProviderType::OpenAI => None,
+                _ => provider_config.base_url.clone(),
+            };
             let provider = OpenAiProvider::new(api_key, base_url, model.clone());
             provider
                 .chat(messages, tools, None)
@@ -297,9 +300,17 @@ async fn send_message(
             }
         }
 
-        // Retrieve Context
+        // Load settings once for this request
+        let config_dir = app_handle
+            .path()
+            .app_config_dir()
+            .map_err(|e| e.to_string())?;
+        let settings_path = config_dir.join("settings.json");
+        let settings = Settings::load_migrated(&settings_path);
+
+        // Retrieve Context (Long-term memory)
         let mut context_text = String::new();
-        if !query.is_empty() {
+        if settings.memory_enabled && !query.is_empty() {
             let lib = state.librarian.lock().await;
             if let Ok(results) = lib.search(&query) {
                 if !results.is_empty() {
@@ -307,19 +318,12 @@ async fn send_message(
                     let memory_list_preview: Vec<String> =
                         results.iter().map(|(_, content)| content.clone()).collect();
 
-                    // Check for Context Assembler Model
-                    let config_dir = app_handle
-                        .path()
-                        .app_config_dir()
-                        .map_err(|e| e.to_string())?;
-                    let settings_path = config_dir.join("settings.json");
-                    let settings = Settings::load_migrated(&settings_path);
-
                     if let Some(ctx_model) = &settings.context_model {
                         let assembled = crate::llm::context_assembler::ContextAssembler::assemble(
                             &query,
                             &memory_list_preview,
                             &messages,
+                            settings.context_turns,
                             ctx_model,
                             &settings,
                         )
@@ -365,12 +369,6 @@ async fn send_message(
 
         // Inject System Prompt
         println!("[DEBUG] Loading settings for system prompt...");
-        let config_dir = app_handle
-            .path()
-            .app_config_dir()
-            .map_err(|e| e.to_string())?;
-        let settings_path = config_dir.join("settings.json");
-        let settings = Settings::load_migrated(&settings_path);
 
         if let Some(active_id) = settings.active_system_prompt_id {
             if let Some(prompt) = settings.system_prompts.iter().find(|p| p.id == active_id) {
@@ -433,7 +431,10 @@ async fn send_message(
         let response_result = match provider_config.provider_type {
             ProviderType::OpenAI | ProviderType::OpenAICompatible => {
                 let api_key = provider_config.api_key.clone().unwrap_or_default();
-                let base_url = provider_config.base_url.clone();
+                let base_url = match provider_config.provider_type {
+                    ProviderType::OpenAI => None, // always use official base
+                    _ => provider_config.base_url.clone(),
+                };
                 let provider = OpenAiProvider::new(api_key, base_url, model.clone());
 
                 if stream {
@@ -579,12 +580,21 @@ async fn fetch_models(
 
     match provider_type {
         ProviderType::OpenAI | ProviderType::OpenAICompatible => {
-            let url = format!(
-                "{}/v1/models",
-                base_url
-                    .unwrap_or_else(|| "https://api.openai.com".to_string())
-                    .trim_end_matches('/')
-            );
+            // For OpenAI, always use the official base URL; ignore any provided base_url.
+            // For OpenAICompatible, use provided base_url if present (caller should supply it).
+            let mut base = match provider_type {
+                ProviderType::OpenAI => "https://api.openai.com".to_string(),
+                _ => base_url.unwrap_or_else(|| "https://api.openai.com".to_string()),
+            };
+            // Sanitize: remove trailing slashes and a trailing /v1 if present
+            while base.ends_with('/') {
+                base.pop();
+            }
+            if base.ends_with("/v1") {
+                base.truncate(base.len() - 3);
+            }
+
+            let url = format!("{}/v1/models", base);
             let key = api_key.unwrap_or_default();
 
             let resp = client
@@ -595,7 +605,9 @@ async fn fetch_models(
                 .map_err(|e| e.to_string())?;
 
             if !resp.status().is_success() {
-                return Err(format!("Failed to fetch models: {}", resp.status()));
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                return Err(format!("Failed to fetch models: {} — {}", status, body));
             }
 
             let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
@@ -711,6 +723,7 @@ async fn add_mcp_server(
     transport_type: String, // "stdio" or "sse"
     command: Option<String>,
     args: Option<Vec<String>>,
+    env: Option<HashMap<String, String>>,
     url: Option<String>,
 ) -> Result<(), String> {
     use crate::mcp::config::McpTransport;
@@ -719,7 +732,7 @@ async fn add_mcp_server(
         "stdio" => McpTransport::Stdio {
             command: command.ok_or("Command required for Stdio")?,
             args: args.unwrap_or_default(),
-            env: HashMap::new(),
+            env: env.unwrap_or_default(),
         },
         "sse" => McpTransport::Sse {
             url: url.ok_or("URL required for SSE")?,
@@ -864,7 +877,10 @@ async fn attempt_pruning(
         let provider_response = match provider_config.provider_type {
             ProviderType::OpenAI | ProviderType::OpenAICompatible => {
                 let api_key = provider_config.api_key.clone().unwrap_or_default();
-                let base_url = provider_config.base_url.clone();
+                let base_url = match provider_config.provider_type {
+                    ProviderType::OpenAI => None,
+                    _ => provider_config.base_url.clone(),
+                };
                 let provider = OpenAiProvider::new(api_key, base_url, model.clone());
                 provider.chat(vec![Message {
                     id: None,
