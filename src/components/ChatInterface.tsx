@@ -97,6 +97,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
     // Tool Execution State
     const [pendingTools, setPendingTools] = useState<{ name: string, args: any, callId: string }[]>([]);
+    const [toolPolicies, setToolPolicies] = useState<Record<string, boolean>>({});
 
     // Listen for Memory Events
     useEffect(() => {
@@ -115,6 +116,14 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
     useEffect(() => {
         loadSettings();
+
+        const unlistenPromise = listen("tools-updated", () => {
+            loadSettings();
+        });
+
+        return () => {
+            unlistenPromise.then(unlisten => unlisten());
+        };
     }, []);
 
     // Auto-clear error after 5s
@@ -300,6 +309,10 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             if (settings.active_system_prompt_id) {
                 setSelectedPromptId(settings.active_system_prompt_id);
             }
+
+            // Load Tool Policies
+            const policies = await invoke<Record<string, boolean>>("get_tool_policies");
+            setToolPolicies(policies);
         } catch (e) {
             console.error("Failed to fetch models", e);
             setErrorMsg("Failed to fetch models: " + String(e));
@@ -310,6 +323,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         setSelectedPromptId(id);
         await invoke("set_active_system_prompt", { id: id || null });
     };
+
 
     const handleSetDefaultModel = async () => {
         if (!selectedModel) return;
@@ -371,6 +385,46 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
     const removeAttachment = (index: number) => {
         setAttachments(prev => prev.filter((_, i) => i !== index));
+    };
+
+    const runTools = async (tools: { name: string, args: any, callId: string }[], baseHistory: Message[]) => {
+        setLoading(true);
+        let currentHistory = [...baseHistory];
+
+        for (const tool of tools) {
+            try {
+                const result = await invoke("execute_tool", {
+                    name: tool.name,
+                    args: tool.args,
+                    conversationId: conversationId,
+                    toolCallId: tool.callId
+                });
+
+                const toolMsg: Message = {
+                    role: "tool",
+                    content: JSON.stringify(result),
+                    tool_call_id: tool.callId
+                };
+                currentHistory.push(toolMsg);
+                setMessages([...currentHistory]); // Update UI sequentially
+            } catch (e: any) {
+                console.error(e);
+                const errStr = String(e);
+                setErrorMsg("Tool Execution Failed: " + errStr);
+
+                // Add error message to history
+                const errorMsg: Message = {
+                    role: "tool",
+                    content: JSON.stringify({ error: errStr }),
+                    tool_call_id: tool.callId
+                };
+                currentHistory.push(errorMsg);
+                setMessages([...currentHistory]);
+            }
+        }
+
+        // Continue conversation after ALL tools have run
+        await sendMessage(currentHistory);
     };
 
     const sendMessage = async (currentHistory: Message[]) => {
@@ -481,8 +535,18 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                     }).filter(t => t !== null) as { name: string, args: any, callId: string }[];
 
                     if (toolsToRun.length > 0) {
-                        setPendingTools(toolsToRun);
-                        setLoading(false); // Paused for user interaction
+                        // Check for Auto-Approval
+                        const allAuto = toolsToRun.every(t => toolPolicies[t.name]);
+
+                        if (allAuto) {
+                            // Execute immediately
+                            // We need to pass the FULL history including the assistant's tool call message
+                            // The assistant message is 'response'.
+                            runTools(toolsToRun, [...currentHistory, response]);
+                        } else {
+                            setPendingTools(toolsToRun);
+                            setLoading(false); // Paused for user interaction
+                        }
                     } else {
                         setLoading(false);
                     }
@@ -552,49 +616,13 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         await sendMessage(newHistory);
     };
 
+
+
     const handleApproveAllTools = async () => {
         if (pendingTools.length === 0) return;
-        setLoading(true);
-        // Copy tools to avoid state issues during async loop
         const tools = [...pendingTools];
-        setPendingTools([]); // Clear UI immediately
-
-        let currentHistory = [...messages];
-
-        for (const tool of tools) {
-            try {
-                const result = await invoke("execute_tool", {
-                    name: tool.name,
-                    args: tool.args,
-                    conversationId: conversationId, // pass if you want audit log to have it
-                    toolCallId: tool.callId
-                });
-
-                const toolMsg: Message = {
-                    role: "tool",
-                    content: JSON.stringify(result),
-                    tool_call_id: tool.callId
-                };
-                currentHistory.push(toolMsg);
-                setMessages([...currentHistory]); // Update UI sequentially
-            } catch (e: any) {
-                console.error(e);
-                const errStr = String(e);
-                setErrorMsg("Tool Execution Failed: " + errStr);
-
-                // Add error message to history
-                const errorMsg: Message = {
-                    role: "tool",
-                    content: JSON.stringify({ error: errStr }),
-                    tool_call_id: tool.callId
-                };
-                currentHistory.push(errorMsg);
-                setMessages([...currentHistory]);
-            }
-        }
-
-        // Continue conversation after ALL tools have run
-        await sendMessage(currentHistory);
+        setPendingTools([]);
+        await runTools(tools, messages);
     };
 
     const handleDenyAllTools = () => {

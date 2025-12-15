@@ -1,6 +1,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { Plus, MessageSquare, Trash2, Search, Upload } from "lucide-react";
 
 interface Conversation {
@@ -54,8 +55,19 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
         }
     };
 
+
+
     useEffect(() => {
         loadConversations();
+
+        const unlistenPromise = listen("conversations-updated", () => {
+            console.log("Conversations updated event received");
+            loadConversations();
+        });
+
+        return () => {
+            unlistenPromise.then((unlisten: () => void) => unlisten());
+        };
     }, [activeId]);
 
     useEffect(() => {

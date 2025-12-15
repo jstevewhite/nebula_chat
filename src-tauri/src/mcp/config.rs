@@ -30,6 +30,8 @@ pub struct McpServerConfig {
     #[serde(default)]
     pub auto_approve: bool,
     #[serde(default)]
+    pub auto_approve_tools: Vec<String>,
+    #[serde(default)]
     pub permissions: ServerPermissions,
 }
 
@@ -245,6 +247,7 @@ impl Settings {
                                 env,
                             },
                             auto_approve,
+                            auto_approve_tools: vec![],
                             permissions: ServerPermissions::default(),
                         };
                         s.mcp_servers.insert(name.clone(), config);

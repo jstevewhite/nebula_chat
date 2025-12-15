@@ -19,6 +19,7 @@ Nebula implements the **[Model Context Protocol (MCP)](https://modelcontextproto
 - **Connect Tools**: Give the AI access to your file system, Git repositories, or browser automation via MCP servers.
 - **Security First**: Granular "Human-in-the-loop" permissions. You verify every tool execution (Allow/Deny/Always Allow).
 - **Permission Policy**: Configure allowlists and denylists per server to restrict tool access automatically. server-side enforcement ensures tools never run without approval.
+- **Auto-Approval**: Toggle "Auto-Approve" for trusted servers or specific tools. Auto-approved tools run immediately without interrupting the chat flow, while others fallback to manual confirmation.
 - **Audit Logging**: Every tool execution is logged to a local SQLite database for transparency, including full inputs and outputs.
 - **Token Safety**: Large tool outputs are automatically truncated for the LLM to save tokens, but you can always view the full output in the UI.
 - **Tool Management**: Visual panel to view, search, and granularly enable/disable individual tools or entire servers.

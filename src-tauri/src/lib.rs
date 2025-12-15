@@ -192,6 +192,9 @@ async fn generate_title(
     lib.rename_conversation(&conversation_id, &new_title)
         .map_err(|e| e.to_string())?;
 
+    use tauri::Emitter;
+    let _ = app.emit("conversations-updated", ());
+
     Ok(new_title)
 }
 
@@ -456,7 +459,12 @@ async fn send_message(
             );
             effective_stream = false;
         }
-        tracing::info!("🎬 Streaming requested: {}, effective: {}, tools count: {}", stream, effective_stream, tools.len());
+        tracing::info!(
+            "🎬 Streaming requested: {}, effective: {}, tools count: {}",
+            stream,
+            effective_stream,
+            tools.len()
+        );
 
         // 5. Instantiate Provider
         let provider_config = settings.providers.get(&provider_id).ok_or_else(|| {
@@ -882,6 +890,7 @@ async fn add_mcp_server(
     args: Option<Vec<String>>,
     env: Option<HashMap<String, String>>,
     url: Option<String>,
+    auto_approve: Option<bool>,
 ) -> Result<(), String> {
     use crate::mcp::config::McpTransport;
 
@@ -899,7 +908,8 @@ async fn add_mcp_server(
 
     let config = McpServerConfig {
         transport,
-        auto_approve: false,
+        auto_approve: auto_approve.unwrap_or(false),
+        auto_approve_tools: vec![],
         permissions: Default::default(),
     };
 
@@ -1330,6 +1340,90 @@ async fn get_tools(
 }
 
 #[tauri::command]
+async fn get_tool_policies(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<HashMap<String, bool>, String> {
+    let all_tools = state.mcp_manager.get_all_tools().await;
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let settings = Settings::load_migrated(&settings_path);
+
+    let mut policies = HashMap::new();
+    for t in all_tools {
+        // Extract server name from tool name "server__tool"
+        let parts: Vec<&str> = t.name.splitn(2, "__").collect();
+        let auto_approve = if parts.len() == 2 {
+            let server_name = parts[0];
+            let tool_name = parts[1];
+            settings
+                .mcp_servers
+                .get(server_name)
+                .map(|c| c.auto_approve || c.auto_approve_tools.contains(&tool_name.to_string()))
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        policies.insert(t.name.clone(), auto_approve);
+    }
+
+    Ok(policies)
+}
+
+#[tauri::command]
+async fn toggle_mcp_server_auto_approve(
+    app: tauri::AppHandle,
+    _state: State<'_, AppState>,
+    server_name: String,
+    auto_approve: bool,
+) -> Result<(), String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let mut settings = Settings::load_migrated(&settings_path);
+
+    if let Some(config) = settings.mcp_servers.get_mut(&server_name) {
+        config.auto_approve = auto_approve;
+        settings.save(&settings_path).map_err(|e| e.to_string())?;
+
+        use tauri::Emitter;
+        let _ = app.emit("tools-updated", ());
+        Ok(())
+    } else {
+        Err(format!("Server '{}' not found", server_name))
+    }
+}
+
+#[tauri::command]
+async fn toggle_tool_auto_approve(
+    app: tauri::AppHandle,
+    _state: State<'_, AppState>,
+    server_name: String,
+    tool_name: String,
+    auto_approve: bool,
+) -> Result<(), String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let mut settings = Settings::load_migrated(&settings_path);
+
+    if let Some(config) = settings.mcp_servers.get_mut(&server_name) {
+        if auto_approve {
+            if !config.auto_approve_tools.contains(&tool_name) {
+                config.auto_approve_tools.push(tool_name);
+            }
+        } else {
+            config.auto_approve_tools.retain(|t| t != &tool_name);
+        }
+        settings.save(&settings_path).map_err(|e| e.to_string())?;
+
+        use tauri::Emitter;
+        let _ = app.emit("tools-updated", ());
+        Ok(())
+    } else {
+        Err(format!("Server '{}' not found", server_name))
+    }
+}
+
+#[tauri::command]
 async fn toggle_tool(
     app: tauri::AppHandle,
     tool_name: String,
@@ -1533,6 +1627,9 @@ pub fn run() {
             rebuild_memory_index,
             search_messages,
             export_conversation,
+            get_tool_policies,
+            toggle_mcp_server_auto_approve,
+            toggle_tool_auto_approve,
             import_conversation
         ])
         .run(tauri::generate_context!())
