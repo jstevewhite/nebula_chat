@@ -31,6 +31,22 @@ impl SqliteManager {
             [],
         )?;
 
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS tool_executions (
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT,
+                tool_call_id TEXT,
+                tool_name TEXT,
+                server_name TEXT,
+                args_json TEXT,
+                result_preview TEXT,
+                result_full_json TEXT,
+                status TEXT,
+                created_at TEXT
+            )",
+            [],
+        )?;
+
         Ok(Self { conn })
     }
 

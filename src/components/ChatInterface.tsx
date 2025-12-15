@@ -80,7 +80,8 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     const [activeSidePanel, setActiveSidePanel] = useState<'none' | 'memory'>('none');
     const [recentMemories, setRecentMemories] = useState<string[]>([]);
 
-    const [pendingTool, setPendingTool] = useState<{ name: string, args: any, callId: string } | null>(null);
+    // Tool Execution State
+    const [pendingTools, setPendingTools] = useState<{ name: string, args: any, callId: string }[]>([]);
 
     // Listen for Memory Events
     useEffect(() => {
@@ -337,18 +338,25 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             }
 
             if (response.tool_calls && response.tool_calls.length > 0) {
-                const toolCall = response.tool_calls[0];
-                try {
-                    const args = JSON.parse(toolCall.function.arguments);
-                    setPendingTool({
-                        name: toolCall.function.name,
-                        args: args,
-                        callId: toolCall.id || "call_" + Math.random().toString(36).substr(2, 9)
-                    });
-                } catch (e) {
-                    console.error("Failed to parse tool args", e);
+                const toolsToRun = response.tool_calls.map(tc => {
+                    try {
+                        return {
+                            name: tc.function.name,
+                            args: JSON.parse(tc.function.arguments),
+                            callId: tc.id || "call_" + Math.random().toString(36).substr(2, 9)
+                        };
+                    } catch (e) {
+                        console.error("Failed to parse tool args", e);
+                        return null;
+                    }
+                }).filter(t => t !== null) as { name: string, args: any, callId: string }[];
+
+                if (toolsToRun.length > 0) {
+                    setPendingTools(toolsToRun);
+                    setLoading(false); // Paused for user interaction
+                } else {
+                    setLoading(false);
                 }
-                setLoading(false); // Paused for user
             } else {
                 setLoading(false);
             }
@@ -392,53 +400,59 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         await sendMessage(newHistory);
     };
 
-    const handleApproveTool = async () => {
-        if (!pendingTool) return;
+    const handleApproveAllTools = async () => {
+        if (pendingTools.length === 0) return;
         setLoading(true);
-        try {
-            const result = await invoke("execute_tool", {
-                name: pendingTool.name,
-                args: pendingTool.args
-            });
+        // Copy tools to avoid state issues during async loop
+        const tools = [...pendingTools];
+        setPendingTools([]); // Clear UI immediately
 
-            const toolMsg: Message = {
-                role: "tool",
-                content: JSON.stringify(result),
-                tool_call_id: pendingTool.callId
-            };
+        let currentHistory = [...messages];
 
-            const newHistory = [...messages, toolMsg];
-            setMessages(newHistory);
-            setPendingTool(null);
+        for (const tool of tools) {
+            try {
+                const result = await invoke("execute_tool", {
+                    name: tool.name,
+                    args: tool.args,
+                    conversationId: conversationId, // pass if you want audit log to have it
+                    toolCallId: tool.callId
+                });
 
-            // Continue conversation
-            await sendMessage(newHistory);
-        } catch (e: any) {
-            console.error(e);
-            setLoading(false);
-            setPendingTool(null);
+                const toolMsg: Message = {
+                    role: "tool",
+                    content: JSON.stringify(result),
+                    tool_call_id: tool.callId
+                };
+                currentHistory.push(toolMsg);
+                setMessages([...currentHistory]); // Update UI sequentially
+            } catch (e: any) {
+                console.error(e);
+                const errStr = String(e);
+                setErrorMsg("Tool Execution Failed: " + errStr);
 
-            const errStr = String(e);
-            if (errStr.includes("denylist") || errStr.includes("allowlist")) {
-                setErrorMsg("Tool Execution Denied: " + errStr);
-                // Add a "Tool Error" message to history so user sees it failed
+                // Add error message to history
                 const errorMsg: Message = {
                     role: "tool",
                     content: JSON.stringify({ error: errStr }),
-                    tool_call_id: pendingTool.callId
+                    tool_call_id: tool.callId
                 };
-                setMessages([...messages, errorMsg]);
-            } else {
-                setErrorMsg("Tool Execution Failed: " + errStr);
+                currentHistory.push(errorMsg);
+                setMessages([...currentHistory]);
             }
         }
+
+        // Continue conversation after ALL tools have run
+        await sendMessage(currentHistory);
+    };
+
+    const handleDenyAllTools = () => {
+        setPendingTools([]);
+        setLoading(false);
     };
 
     const handleCopy = (text: string) => {
         navigator.clipboard.writeText(text);
     };
-
-
 
     const handleDelete = async (index: number, id?: string) => {
         if (id) {
@@ -631,30 +645,39 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             </div>
 
             {
-                pendingTool && (
+                pendingTools.length > 0 && (
                     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
-                        <div className="bg-gray-900 p-6 rounded-xl max-w-lg w-full border border-gray-700 shadow-2xl ring-1 ring-white/10">
-                            <h3 className="text-lg font-bold mb-4 flex items-center gap-2 text-white">
-                                <Terminal className="text-yellow-400" /> Use Tool?
+                        <div className="bg-gray-900 p-6 rounded-xl max-w-lg w-full border border-gray-700 shadow-2xl ring-1 ring-white/10 max-h-[80vh] flex flex-col">
+                            <h3 className="text-lg font-bold mb-4 flex items-center gap-2 text-white shrink-0">
+                                <Terminal className="text-yellow-400" /> Use Tools? ({pendingTools.length})
                             </h3>
-                            <div className="bg-black/50 p-4 rounded-lg mb-6 font-mono text-sm overflow-auto max-h-60 border border-white/5">
-                                <p className="text-green-400 font-bold mb-2">$ {pendingTool.name}</p>
-                                <pre className="text-gray-400 whitespace-pre-wrap break-all">
-                                    {JSON.stringify(pendingTool.args, null, 2)}
-                                </pre>
+
+                            <div className="flex-1 overflow-y-auto space-y-4 mb-6 custom-scrollbar pr-2">
+                                {pendingTools.map((tool, idx) => (
+                                    <div key={tool.callId || idx} className="bg-black/50 p-4 rounded-lg border border-white/5">
+                                        <div className="flex justify-between items-start mb-2">
+                                            <p className="text-green-400 font-bold font-mono">$ {tool.name}</p>
+                                            <span className="text-xs text-gray-500 font-mono">{tool.callId?.slice(0, 8)}...</span>
+                                        </div>
+                                        <pre className="text-gray-400 whitespace-pre-wrap break-all text-xs font-mono bg-black/30 p-2 rounded">
+                                            {JSON.stringify(tool.args, null, 2)}
+                                        </pre>
+                                    </div>
+                                ))}
                             </div>
-                            <div className="flex justify-end gap-3">
+
+                            <div className="flex justify-end gap-3 shrink-0 pt-4 border-t border-gray-800">
                                 <button
-                                    onClick={() => setPendingTool(null)}
+                                    onClick={handleDenyAllTools}
                                     className="px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors"
                                 >
-                                    Deny
+                                    Deny All
                                 </button>
                                 <button
-                                    onClick={handleApproveTool}
+                                    onClick={handleApproveAllTools}
                                     className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold shadow-lg shadow-blue-500/20 transition-all hover:scale-105"
                                 >
-                                    Allow Execution
+                                    Approve All
                                 </button>
                             </div>
                         </div>
@@ -734,6 +757,14 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
     const [showToolArgs, setShowToolArgs] = useState(false);
     const [copiedCodeVal, setCopiedCodeVal] = useState<string | null>(null);
 
+    // Local state for content to allow "Show Full" updates without mutating props
+    const [displayContent, setDisplayContent] = useState(m.content);
+
+    // Sync if prop changes (e.g. streaming update)
+    useEffect(() => {
+        setDisplayContent(m.content);
+    }, [m.content]);
+
     useEffect(() => {
         if (copiedCodeVal) {
             const timer = setTimeout(() => setCopiedCodeVal(null), 2000);
@@ -784,17 +815,17 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
                                     onClick={() => setIsExpanded(true)}
                                     className="text-blue-400 hover:text-blue-300 underline text-sm"
                                 >
-                                    Show ({m.content?.length || 0} chars)
+                                    Show ({displayContent?.length || 0} chars)
                                 </button>
                             </div>
                         ) : (
                             <>
                                 {showRaw ? (
                                     <pre className="whitespace-pre-wrap font-mono text-sm text-gray-300 bg-black/20 p-2 rounded border border-white/10 overflow-x-auto">
-                                        {m.content}
+                                        {displayContent}
                                     </pre>
                                 ) : (
-                                    m.content && (
+                                    displayContent && (
                                         <div className={`prose prose-invert max-w-none prose-p:leading-relaxed prose-pre:bg-[#0d1117] prose-pre:rounded-lg prose-pre:border prose-pre:border-gray-800`}>
                                             <ReactMarkdown
                                                 remarkPlugins={[remarkGfm]}
@@ -843,8 +874,27 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
                                                     }
                                                 }}
                                             >
-                                                {m.content}
+                                                {displayContent}
                                             </ReactMarkdown>
+
+                                            {/* Show Full Logic */}
+                                            {m.role === "tool" && displayContent && displayContent.endsWith("... (truncated)") && (
+                                                <button
+                                                    onClick={async () => {
+                                                        if (m.tool_call_id) {
+                                                            try {
+                                                                const fullResponse = await invoke<string>("get_tool_execution", { toolCallId: m.tool_call_id });
+                                                                setDisplayContent(fullResponse);
+                                                            } catch (e) {
+                                                                console.error("Failed to fetch full tool output", e);
+                                                            }
+                                                        }
+                                                    }}
+                                                    className="mt-2 text-xs text-blue-400 hover:text-blue-300 underline block"
+                                                >
+                                                    Show Full Output (fetch from audit log)
+                                                </button>
+                                            )}
                                         </div>
                                     )
                                 )}

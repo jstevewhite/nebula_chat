@@ -712,7 +712,7 @@
       "args": [
         "-y",
         "@modelcontextprotocol/server-filesystem",
-        "/mnt/t7/stwhite/nebula"
+        "/mnt/t7/stwhite/nebula_chat"
       ],
       "env": {},
       "auto_approve": false
