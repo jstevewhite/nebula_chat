@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check, Pin, FileText, Book, Paperclip, X, Brain, Square, Sliders } from "lucide-react";
+import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check, Pin, FileText, Book, Paperclip, X, Brain, Square, Sliders, Download } from "lucide-react";
+import { save } from "@tauri-apps/plugin-dialog";
+import { writeTextFile } from "@tauri-apps/plugin-fs";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -485,6 +487,39 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         // Optionally focus input?
     };
 
+    const handleExport = async (format: "json" | "md") => {
+        console.log("Handle export clicked", format, conversationId);
+        if (!conversationId) {
+            setErrorMsg("No conversation ID selected");
+            return;
+        }
+        try {
+            setErrorMsg("Exporting..."); // Temporary feedback
+            const content = await invoke<string>("export_conversation", { conversationId, format });
+            console.log("Export content received, length:", content.length);
+
+            const defaultName = `conversation_${conversationId}.${format}`;
+            const filePath = await save({
+                defaultPath: defaultName,
+                filters: [{
+                    name: format === 'json' ? 'JSON' : 'Markdown',
+                    extensions: [format]
+                }]
+            });
+
+            if (filePath) {
+                await writeTextFile(filePath, content);
+                setErrorMsg("Export saved to: " + filePath); // Success feedback
+            } else {
+                setErrorMsg("Export cancelled");
+            }
+            setTimeout(() => setErrorMsg(null), 3000);
+        } catch (e) {
+            console.error("Export failed", e);
+            setErrorMsg("Export failed: " + String(e));
+        }
+    };
+
     return (
         <div className="flex flex-col h-full bg-gray-950 text-white font-sans relative">
             {errorMsg && (
@@ -599,6 +634,27 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                                 </div>
                             </div>
                         )}
+                    </div>
+
+                    {/* Export Button */}
+                    <div className="relative group">
+                        <button className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors" title="Export Conversation">
+                            <Download size={18} />
+                        </button>
+                        <div className="absolute right-0 top-full mt-2 w-32 bg-gray-900 border border-gray-700 rounded-lg shadow-xl overflow-hidden invisible group-hover:visible opacity-0 group-hover:opacity-100 transition-all z-50">
+                            <button
+                                onClick={() => handleExport('json')}
+                                className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
+                            >
+                                JSON
+                            </button>
+                            <button
+                                onClick={() => handleExport('md')}
+                                className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
+                            >
+                                Markdown
+                            </button>
+                        </div>
                     </div>
 
                     <div className="h-4 w-px bg-gray-700 mx-2" />

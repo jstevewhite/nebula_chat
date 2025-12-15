@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use futures::StreamExt;
 use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -39,29 +39,46 @@ pub struct JsonRpcError {
 #[async_trait::async_trait]
 trait Transport: Send + Sync {
     async fn send(&self, req: JsonRpcRequest) -> Result<()>;
-    // Optional: for manual shutdown or checks
+    // Synchronous check is preferred to avoid complexity in filters
     fn is_connected(&self) -> bool {
         true
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum TransportStatus {
+    Connected,
+    Disconnected(String),
+    Reconnecting,
+}
+
 struct StdioTransport {
     tx: tokio::sync::mpsc::Sender<JsonRpcRequest>,
+    status: Arc<Mutex<TransportStatus>>,
+    #[allow(dead_code)] // Logs kept for diagnostics/future UI
+    stderr_log: Arc<Mutex<Vec<String>>>,
 }
 
 #[async_trait::async_trait]
 impl Transport for StdioTransport {
     async fn send(&self, req: JsonRpcRequest) -> Result<()> {
+        if let TransportStatus::Disconnected(reason) = &*self.status.lock().await {
+            return Err(anyhow::anyhow!("Transport disconnected: {}", reason));
+        }
         self.tx.send(req).await.context("Transport closed")?;
         Ok(())
     }
     fn is_connected(&self) -> bool {
-        !self.tx.is_closed()
+        if let Ok(status) = self.status.try_lock() {
+            matches!(*status, TransportStatus::Connected)
+        } else {
+            !self.tx.is_closed()
+        }
     }
 }
 
 struct SseTransport {
-    url: String, // Base URL
+    url: String,
     client: HttpClient,
     session_id: Arc<Mutex<Option<String>>>,
     sse_handle: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
@@ -73,55 +90,84 @@ impl SseTransport {
         let client = self.client.clone();
         let url = self.url.clone();
         let pending = self.pending.clone();
+        let session_id_str = session_id_val.clone(); // Keep for retries
 
-        let mut handle_guard = self.sse_handle.lock().unwrap(); // specific tokio mutex might be better but std is fine here for simple guard or just use async mutex if deeper
-                                                                // actually we are in async context, let's use the one from struct
-                                                                // But to call blocking lock we need std::sync::Mutex or await.
-                                                                // Let's use synchronous mutex for the handle option as it's quick.
-                                                                // For simplicity, let's just spawn and overwrite.
+        let mut handle_guard = self.sse_handle.lock().unwrap();
         if handle_guard.is_some() {
-            // Already running? Maybe we should abort old one if session ID changed?
-            // For now, assume one session per transport lifetime for simplicity.
             return;
         }
 
         let handle = tokio::spawn(async move {
-            let req_builder = client
-                .get(&url)
-                .header("Accept", "text/event-stream")
-                .header("mcp-session-id", session_id_val);
+            let mut retry_delay = std::time::Duration::from_millis(500);
+            let max_delay = std::time::Duration::from_secs(15);
 
-            // Retry logic could go here
-            let response = match req_builder.send().await {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("Failed to connect to SSE endpoint: {}", e);
-                    return;
-                }
-            };
+            loop {
+                let req_builder = client
+                    .get(&url)
+                    .header("Accept", "text/event-stream")
+                    .header("mcp-session-id", &session_id_str);
 
-            if !response.status().is_success() {
-                eprintln!("SSE connection failed: {}", response.status());
-                return;
-            }
+                match req_builder.send().await {
+                    Ok(response) => {
+                        if !response.status().is_success() {
+                            tracing::error!("SSE connection failed: {}", response.status());
+                        } else {
+                            // Reset backoff on successful connection
+                            retry_delay = std::time::Duration::from_millis(500);
 
-            let mut event_source = response.bytes_stream();
+                            let mut event_source = response.bytes_stream();
+                            let mut buffer = Vec::new();
 
-            while let Some(item) = event_source.next().await {
-                match item {
-                    Ok(bytes) => {
-                        let s = String::from_utf8_lossy(&bytes);
-                        for line in s.lines() {
-                            if line.starts_with("data: ") {
-                                let data = &line[6..];
-                                if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(data) {
-                                    McpClient::handle_response(resp, &pending).await;
+                            loop {
+                                match event_source.next().await {
+                                    Some(Ok(bytes)) => {
+                                        buffer.extend_from_slice(&bytes);
+
+                                        // Process buffer for events delimited by \n\n
+                                        while let Some(idx) =
+                                            buffer.windows(2).position(|w| w == b"\n\n")
+                                        {
+                                            let event_bytes =
+                                                buffer.drain(0..idx + 2).collect::<Vec<u8>>();
+                                            let s = String::from_utf8_lossy(&event_bytes);
+
+                                            // Naive parser for "data: " lines within the chunk
+                                            for line in s.lines() {
+                                                if line.starts_with("data: ") {
+                                                    let data = &line[6..];
+                                                    // Handle [DONE] or other messages if relevant, mostly JSON
+                                                    if let Ok(resp) =
+                                                        serde_json::from_str::<JsonRpcResponse>(
+                                                            data,
+                                                        )
+                                                    {
+                                                        McpClient::handle_response(resp, &pending)
+                                                            .await;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Some(Err(e)) => {
+                                        tracing::warn!("SSE stream error: {}", e);
+                                        break; // Break inner loop to reconnect
+                                    }
+                                    None => {
+                                        tracing::warn!("SSE stream ended");
+                                        break; // Break inner loop to reconnect
+                                    }
                                 }
                             }
                         }
                     }
-                    Err(_) => break,
+                    Err(e) => {
+                        tracing::error!("Failed to connect to SSE endpoint: {}", e);
+                    }
                 }
+
+                // Delay before retry
+                tokio::time::sleep(retry_delay).await;
+                retry_delay = std::cmp::min(retry_delay * 2, max_delay);
             }
         });
         *handle_guard = Some(handle);
@@ -161,30 +207,26 @@ impl Transport for SseTransport {
             }
         }
 
-        // We can't return the response body here because `send` returns Result<()>.
-        // But McpClient::request waits for the response via the `pending` channel.
-        // IF the response is a standard JSON-RPC response in the body (which it is for POST),
-        // we must process it here!
         if response.status().is_success() {
-            // For "Streamable HTTP", the POST response might be empty (202 Accepted) if it's processing async?
-            // Or it might be the actual JSON-RPC response (application/json).
-            // The spec says: "Content-Type: application/json, to return one JSON object."
             if let Some(ct) = response.headers().get("content-type") {
                 if ct.to_str().unwrap_or("").contains("application/json") {
-                    // It's a direct response
                     if let Ok(resp) = response.json::<JsonRpcResponse>().await {
                         McpClient::handle_response(resp, &self.pending).await;
                     }
                 }
             }
         }
-
         Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        let guard = self.sse_handle.lock().unwrap();
+        guard.is_some()
     }
 }
 
 pub struct McpClient {
-    transport: Box<dyn Transport>,
+    transport: Arc<dyn Transport>,
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value>>>>>,
 }
 
@@ -195,14 +237,14 @@ impl McpClient {
         ));
         let pending_clone = pending.clone();
 
-        let transport: Box<dyn Transport> = match config {
+        let transport: Arc<dyn Transport> = match config {
             McpTransport::Stdio { command, args, env } => {
                 let mut cmd = Command::new(command);
                 cmd.args(args);
                 cmd.envs(env);
                 cmd.stdin(Stdio::piped());
                 cmd.stdout(Stdio::piped());
-                cmd.stderr(Stdio::inherit());
+                cmd.stderr(Stdio::piped()); // Capture stderr
 
                 let mut child = cmd
                     .spawn()
@@ -210,8 +252,11 @@ impl McpClient {
 
                 let mut stdin = child.stdin.take().context("Failed to open stdin")?;
                 let stdout = child.stdout.take().context("Failed to open stdout")?;
+                let stderr = child.stderr.take().context("Failed to open stderr")?;
 
                 let (tx, mut rx) = tokio::sync::mpsc::channel::<JsonRpcRequest>(32);
+                let status = Arc::new(Mutex::new(TransportStatus::Connected));
+                let stderr_log = Arc::new(Mutex::new(Vec::new()));
 
                 // Writer Loop
                 tokio::spawn(async move {
@@ -239,14 +284,40 @@ impl McpClient {
                     }
                 });
 
-                Box::new(StdioTransport { tx })
+                // Stderr Loop
+                let stderr_log_clone = stderr_log.clone();
+                tokio::spawn(async move {
+                    let reader = BufReader::new(stderr);
+                    let mut lines = reader.lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        let mut log = stderr_log_clone.lock().await;
+                        if log.len() >= 100 {
+                            log.remove(0);
+                        } // Keep last 100 lines
+                        log.push(line);
+                    }
+                });
+
+                // Exit Monitor
+                let status_clone = status.clone();
+                tokio::spawn(async move {
+                    let _ = child.wait().await;
+                    let mut s = status_clone.lock().await;
+                    *s = TransportStatus::Disconnected("Process exited".to_string());
+                });
+
+                Arc::new(StdioTransport {
+                    tx,
+                    status,
+                    stderr_log,
+                })
             }
             McpTransport::Sse { url } => {
                 let client = HttpClient::new();
                 let session_id = Arc::new(Mutex::new(None));
-                let sse_handle = Arc::new(std::sync::Mutex::new(None)); // Use std mutex for handle option
+                let sse_handle = Arc::new(std::sync::Mutex::new(None));
 
-                Box::new(SseTransport {
+                Arc::new(SseTransport {
                     url: url.clone(),
                     client,
                     session_id,
@@ -286,7 +357,6 @@ impl McpClient {
     }
 
     pub async fn request(&self, method: &str, params: Option<Value>) -> Result<Value> {
-        // Default timeout to avoid hanging indefinitely (e.g. during initialize).
         self.request_with_timeout(std::time::Duration::from_secs(30), method, params)
             .await
     }
@@ -306,7 +376,6 @@ impl McpClient {
         };
 
         let (resp_tx, resp_rx) = oneshot::channel();
-
         {
             let mut map = self.pending.lock().await;
             map.insert(id_val.clone(), resp_tx);
@@ -318,10 +387,41 @@ impl McpClient {
             return Err(anyhow::anyhow!("Transport Error: {}", e));
         }
 
+        struct CancelGuard {
+            id: String,
+            transport: Arc<dyn Transport>,
+            completed: bool,
+        }
+        impl Drop for CancelGuard {
+            fn drop(&mut self) {
+                if !self.completed {
+                    let id = self.id.clone();
+                    let t = self.transport.clone();
+                    tokio::spawn(async move {
+                        let req = JsonRpcRequest {
+                            jsonrpc: "2.0".to_string(),
+                            id: None,
+                            method: "notifications/cancelled".to_string(),
+                            params: Some(json!({"requestId": id})),
+                        };
+                        let _ = t.send(req).await;
+                    });
+                }
+            }
+        }
+
+        let mut guard = CancelGuard {
+            id: id_val.clone(),
+            transport: self.transport.clone(),
+            completed: false,
+        };
+
         match tokio::time::timeout(timeout, resp_rx).await {
-            Ok(r) => r.context("Response channel closed")?,
+            Ok(r) => {
+                guard.completed = true;
+                r.context("Response channel closed")?
+            }
             Err(_) => {
-                // Ensure we don't leak a pending entry on timeout.
                 let mut map = self.pending.lock().await;
                 map.remove(&id_val);
                 Err(anyhow::anyhow!(

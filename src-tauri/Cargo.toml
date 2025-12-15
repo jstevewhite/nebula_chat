@@ -37,3 +37,5 @@ tiktoken-rs = "0.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 keyring = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
