@@ -9,6 +9,7 @@ use tokio::sync::RwLock;
 pub struct McpManager {
     clients: RwLock<HashMap<String, Arc<McpClient>>>,
     starting: RwLock<HashSet<String>>,
+    tool_cache: RwLock<HashMap<String, Vec<crate::llm::provider::ToolDefinition>>>,
 }
 
 impl McpManager {
@@ -16,6 +17,7 @@ impl McpManager {
         Self {
             clients: RwLock::new(HashMap::new()),
             starting: RwLock::new(HashSet::new()),
+            tool_cache: RwLock::new(HashMap::new()),
         }
     }
 
@@ -24,6 +26,8 @@ impl McpManager {
         clients.clear();
         let mut starting = self.starting.write().await;
         starting.clear();
+        let mut tool_cache = self.tool_cache.write().await;
+        tool_cache.clear();
     }
 
     fn init_params() -> serde_json::Value {
@@ -97,7 +101,8 @@ impl McpManager {
             match start_result {
                 Ok(client) => {
                     let mut clients = self.clients.write().await;
-                    clients.insert(name, Arc::new(client));
+                    clients.insert(name.clone(), Arc::new(client));
+                    // Check if we need to clear cache? New server, no cache yet.
                 }
                 Err(e) => {
                     eprintln!("Failed to start MCP server {}: {}", name, e);
@@ -122,6 +127,9 @@ impl McpManager {
         {
             let mut clients = self.clients.write().await;
             clients.remove(&name);
+            // Invalidate cache
+            let mut cache = self.tool_cache.write().await;
+            cache.remove(&name);
         }
 
         println!("Restarting MCP server: {}", name);
@@ -162,34 +170,53 @@ impl McpManager {
             let mut starting = self.starting.write().await;
             starting.remove(name);
         }
+        {
+            let mut cache = self.tool_cache.write().await;
+            cache.remove(name);
+        }
     }
 
     pub async fn get_all_tools(&self) -> Vec<crate::llm::provider::ToolDefinition> {
-        let clients = self.clients.read().await;
+        // Snapshots keys to avoid holding lock while iterating/fetching
+        let client_map: HashMap<String, Arc<McpClient>> = self.clients.read().await.clone();
         let mut all_tools = Vec::new();
 
-        for (name, client) in clients.iter() {
+        for (name, client) in client_map {
             if !client.is_connected() {
                 continue;
             }
-            // Mcp lists tools via tools/list
+
+            // Check Cache
+            {
+                let cache = self.tool_cache.read().await;
+                if let Some(tools) = cache.get(&name) {
+                    all_tools.extend(tools.clone());
+                    continue;
+                }
+            }
+
+            // Fetch
             if let Ok(resp) = client.request("tools/list", None).await {
-                // Parse resp
                 if let Some(tools) = resp.get("tools").and_then(|t| t.as_array()) {
+                    let mut server_tools = Vec::new();
                     for tool in tools {
                         let t_name = tool["name"].as_str().unwrap_or("unknown");
                         let t_desc = tool["description"].as_str().unwrap_or("").to_string();
                         let t_schema = tool["inputSchema"].clone();
 
-                        // Namesmace tools: server__toolname
                         let unique_name = format!("{}__{}", name, t_name);
-
-                        all_tools.push(crate::llm::provider::ToolDefinition {
+                        server_tools.push(crate::llm::provider::ToolDefinition {
                             name: unique_name,
                             description: t_desc,
                             input_schema: t_schema,
                         });
                     }
+
+                    // Update cache
+                    let mut cache = self.tool_cache.write().await;
+                    cache.insert(name.clone(), server_tools.clone());
+
+                    all_tools.extend(server_tools);
                 }
             }
         }

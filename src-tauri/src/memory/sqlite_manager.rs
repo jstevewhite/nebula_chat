@@ -83,11 +83,12 @@ impl SqliteManager {
             Option<String>,
             Option<String>,
             Option<String>,
+            String, // created_at
         )>,
     > {
-        // Returns (id, role, content, tool_calls_json, tool_call_id)
+        // Returns (id, role, content, tool_calls_json, tool_call_id, created_at)
         let mut stmt = self.conn.prepare(
-            "SELECT id, role, content, tool_calls, tool_call_id FROM messages 
+            "SELECT id, role, content, tool_calls, tool_call_id, created_at FROM messages 
              WHERE conversation_id = ?1 
              ORDER BY created_at ASC",
         )?;
@@ -99,6 +100,7 @@ impl SqliteManager {
                 row.get(2)?,
                 row.get(3)?,
                 row.get(4)?,
+                row.get(5)?,
             ))
         })?;
 

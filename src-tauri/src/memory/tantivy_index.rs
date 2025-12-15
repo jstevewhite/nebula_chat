@@ -4,6 +4,16 @@ use tantivy::query::QueryParser;
 use tantivy::schema::*;
 use tantivy::{doc, Index, ReloadPolicy, TantivyDocument};
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SearchResult {
+    pub message_id: String,
+    pub conversation_id: String,
+    pub role: String,
+    pub content: String,
+    pub created_at: String,
+    pub score: f32,
+}
+
 pub struct TantivyIndex {
     index: Index,
     reader: tantivy::IndexReader,
@@ -84,11 +94,14 @@ impl TantivyIndex {
         Ok(())
     }
 
-    pub fn search(&self, query_str: &str, limit: usize) -> Result<Vec<(String, String)>> {
+    pub fn search(&self, query_str: &str, limit: usize) -> Result<Vec<SearchResult>> {
         let searcher = self.reader.searcher();
         let schema = self.index.schema();
         let content_field = schema.get_field("content").expect("schema");
         let conv_id_field = schema.get_field("conversation_id").expect("schema");
+        let role_field = schema.get_field("role").expect("schema");
+        let msg_id_field = schema.get_field("message_id").expect("schema");
+        let created_at_field = schema.get_field("created_at").expect("schema");
 
         let query_parser = QueryParser::for_index(&self.index, vec![content_field]);
         let query = query_parser.parse_query(query_str)?;
@@ -96,21 +109,52 @@ impl TantivyIndex {
         let top_docs = searcher.search(&query, &TopDocs::with_limit(limit))?;
 
         let mut results = Vec::new();
-        for (_score, doc_address) in top_docs {
+        for (score, doc_address) in top_docs {
             let retrieved_doc: TantivyDocument = searcher.doc(doc_address)?;
+
+            let conversation_id = retrieved_doc
+                .get_first(conv_id_field)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            let role = retrieved_doc
+                .get_first(role_field)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
             let content = retrieved_doc
                 .get_first(content_field)
                 .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let id = retrieved_doc
-                .get_first(conv_id_field)
+                .unwrap_or("")
+                .to_string();
+
+            let message_id = retrieved_doc
+                .get_first(msg_id_field)
                 .and_then(|v| v.as_str())
-                .unwrap_or("");
-            results.push((id.to_string(), content.to_string()));
+                .unwrap_or("")
+                .to_string();
+
+            let created_at = retrieved_doc
+                .get_first(created_at_field)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            results.push(SearchResult {
+                message_id,
+                conversation_id,
+                role,
+                content,
+                created_at,
+                score,
+            });
         }
 
         Ok(results)
     }
+
     pub fn delete_by_message_id(&self, message_id: &str) -> Result<()> {
         let mut index_writer = self.index.writer::<TantivyDocument>(50_000_000)?;
         let schema = self.index.schema();
@@ -132,6 +176,7 @@ impl TantivyIndex {
         self.reader.reload()?;
         Ok(())
     }
+
     pub fn clear_index(&self) -> Result<()> {
         let mut index_writer = self.index.writer::<TantivyDocument>(50_000_000)?;
         index_writer.delete_all_documents()?;

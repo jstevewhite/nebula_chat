@@ -1,12 +1,21 @@
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Plus, MessageSquare, Trash2, Search } from "lucide-react";
+import { Plus, MessageSquare, Trash2, Search, Upload } from "lucide-react";
 
 interface Conversation {
     id: string;
     title: string;
     created_at: string;
+}
+
+interface SearchResult {
+    message_id: string;
+    conversation_id: string;
+    role: string;
+    content: string;
+    created_at: string;
+    score: number;
 }
 
 interface ConversationListProps {
@@ -18,8 +27,10 @@ interface ConversationListProps {
 export default function ConversationList({ activeId, onSelect, onCreate }: ConversationListProps) {
     const [conversations, setConversations] = useState<Conversation[]>([]);
     const [filteredConversations, setFilteredConversations] = useState<Conversation[]>([]);
+    const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
     const [loading, setLoading] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
+    const importRef = useRef<HTMLInputElement>(null);
 
     // Rename/Delete State
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -48,10 +59,46 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
     }, [activeId]);
 
     useEffect(() => {
-        setFilteredConversations(
-            conversations.filter(c => c.title.toLowerCase().includes(searchQuery.toLowerCase()))
-        );
+        const performSearch = async () => {
+            // Local Title Search
+            setFilteredConversations(
+                conversations.filter(c => c.title.toLowerCase().includes(searchQuery.toLowerCase()))
+            );
+
+            // Global Content Search (Debounced ideally, but here direct for now)
+            if (searchQuery.length > 2) {
+                try {
+                    const results = await invoke<SearchResult[]>("search_messages", { query: searchQuery });
+                    setSearchResults(results);
+                } catch (e) {
+                    console.error("Search failed", e);
+                }
+            } else {
+                setSearchResults([]);
+            }
+        };
+        performSearch();
     }, [searchQuery, conversations]);
+
+    const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = async (ev) => {
+            const content = ev.target?.result as string;
+            try {
+                const newId = await invoke<string>("import_conversation", { jsonContent: content });
+                await loadConversations();
+                onSelect(newId);
+                // Clear input
+                if (importRef.current) importRef.current.value = "";
+            } catch (err) {
+                console.error(err);
+                setError("Import failed: " + String(err));
+            }
+        };
+        reader.readAsText(file);
+    };
 
     const handleDelete = (e: React.MouseEvent, conv: Conversation) => {
         e.stopPropagation();
@@ -108,18 +155,28 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
 
     return (
         <div className="w-64 bg-gray-900 border-r border-gray-800 flex flex-col h-full select-none">
+            <input type="file" ref={importRef} onChange={handleImport} className="hidden" accept=".json" />
             <div className="p-4 border-b border-gray-800 space-y-3">
                 {error && (
                     <div className="text-xs bg-red-900/20 border border-red-700/40 text-red-200 rounded-lg px-3 py-2">
                         {error}
                     </div>
                 )}
-                <button
-                    onClick={onCreate}
-                    className="w-full bg-blue-600 hover:bg-blue-500 text-white rounded-lg p-2.5 flex items-center justify-center gap-2 transition-all font-semibold text-sm shadow-md shadow-blue-900/20"
-                >
-                    <Plus size={18} /> New Chat
-                </button>
+                <div className="flex gap-2">
+                    <button
+                        onClick={onCreate}
+                        className="flex-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg p-2.5 flex items-center justify-center gap-2 transition-all font-semibold text-sm shadow-md shadow-blue-900/20"
+                    >
+                        <Plus size={18} /> New Chat
+                    </button>
+                    <button
+                        onClick={() => importRef.current?.click()}
+                        className="bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white rounded-lg p-2.5 flex items-center justify-center transition-all shadow-md"
+                        title="Import JSON"
+                    >
+                        <Upload size={18} />
+                    </button>
+                </div>
 
                 <div className="relative">
                     <Search className="absolute left-2.5 top-2.5 text-gray-500 w-4 h-4" />
@@ -133,7 +190,34 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
                 </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-2 space-y-1">
+            <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
+                {/* Search Results Section */}
+                {searchResults.length > 0 && (
+                    <div className="mb-4">
+                        <div className="px-2 text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Message Matches</div>
+                        {searchResults.map(res => (
+                            <div
+                                key={res.message_id}
+                                onClick={() => onSelect(res.conversation_id)}
+                                className="group w-full p-2.5 rounded-lg flex flex-col gap-1 cursor-pointer hover:bg-gray-800/50 border border-transparent hover:border-gray-700/50 transition-all mb-1"
+                            >
+                                <div className="flex items-center gap-2 text-gray-300 text-xs font-medium">
+                                    <MessageSquare size={12} className="text-gray-500" />
+                                    <span className="truncate">Match in Chat ...{res.conversation_id.slice(-4)}</span>
+                                </div>
+                                <div className="text-gray-500 text-[10px] line-clamp-2">
+                                    "{res.content}"
+                                </div>
+                            </div>
+                        ))}
+                        <div className="h-px bg-gray-800 my-2 mx-2" />
+                    </div>
+                )}
+
+                {/* Conversations List */}
+                {filteredConversations.length > 0 && searchResults.length > 0 && (
+                    <div className="px-2 text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Conversations</div>
+                )}
                 {filteredConversations.map(conv => (
                     <div
                         key={conv.id}

@@ -1,5 +1,5 @@
 use crate::memory::sqlite_manager::SqliteManager;
-use crate::memory::tantivy_index::TantivyIndex;
+use crate::memory::tantivy_index::{SearchResult, TantivyIndex};
 use anyhow::Result;
 use std::sync::Arc;
 
@@ -110,6 +110,7 @@ impl Librarian {
             Option<String>,
             Option<String>,
             Option<String>,
+            String, // created_at added
         )>,
     > {
         self.sqlite.get_conversation_messages(conversation_id)
@@ -153,7 +154,7 @@ impl Librarian {
         self.tantivy.clear_index()
     }
 
-    pub fn search(&self, query: &str) -> Result<Vec<(String, String)>> {
-        self.tantivy.search(query, 5)
+    pub fn search(&self, query: &str) -> Result<Vec<SearchResult>> {
+        self.tantivy.search(query, 10)
     }
 }

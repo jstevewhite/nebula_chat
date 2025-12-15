@@ -47,6 +47,8 @@ pub struct ModelConfig {
     pub name: String,
     #[serde(default = "default_true")]
     pub visible: bool,
+    pub context_window: Option<usize>,
+    pub max_tokens: Option<usize>,
 }
 
 fn default_true() -> bool {

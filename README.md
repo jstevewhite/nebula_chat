@@ -11,6 +11,8 @@ Unlike standard chat clients, Nebula features a **Memory Sidecar** (powered by S
 - **Smart Pruning**: Automatically summarizes and compresses old conversations to maintain context without blowing up token budgets.
 - **Index Maintenance**: Built-in tools to rebuild and optimize the search index if data gets out of sync.
 - **Deletion Support**: Full support for deleting messages and conversations from both the database and search index.
+- **Global Search**: Instantly find any past message across all conversations using query-based full-text search.
+- **Data Portability**: JSON (lossless) and Markdown export options, plus JSON import support to restore or migrate conversations.
 
 ### 🔌 Native MCP Host
 Nebula implements the **[Model Context Protocol (MCP)](https://modelcontextprotocol.io/)**, treating external tools as first-class citizens.
@@ -22,12 +24,14 @@ Nebula implements the **[Model Context Protocol (MCP)](https://modelcontextproto
 - **Tool Management**: Visual panel to view, search, and granularly enable/disable individual tools or entire servers.
 - **System Message Management**: Create, edit, and switch between reusable system prompts to guide the AI's behavior.
 - **Transport Support**: Supports `stdio` and `sse` (Streamable HTTP) transports for flexible integration.
+- **Reliability**: Built-in auto-reconnection with exponential backoff and connection status monitoring.
 
 ### ⚡ Performance & Privacy
 - **Local-First**: Your memory stays on your machine.
 - **Provider Agnostic**: Unified interface for **OpenAI**, **Anthropic**, and **Ollama** (for fully local privacy).
 - **Model Management**: Easily toggle visibility for models, bulk enable/disable providers, **filter large model lists (typedown search)**, and **set a default model** for new chats.
 - **Smart Chat Management**: Auto-titles conversations, allows renaming/deleting, and intelligently handles chat deletion without unnecessary empty chats.
+- **Searchable History**: Filter conversations by title or search deep into message content directly from the sidebar.
 - **Rust Core**: Heavy lifting is done in optimized Rust for maximum speed.
 
 ### 💬 Rich Chat Interface

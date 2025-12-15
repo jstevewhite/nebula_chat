@@ -3,6 +3,8 @@ use crate::llm::provider::{Attachment, GenerationOptions, LlmProvider, Message};
 use crate::mcp::config::Settings;
 use crate::mcp::config::{McpServerConfig, ModelConfig, ProviderType};
 use crate::mcp::manager::McpManager;
+use crate::memory::tantivy_index::SearchResult;
+use anyhow::Result;
 use std::sync::Arc;
 use tauri::{Manager, State};
 use tokio::sync::Mutex;
@@ -16,7 +18,6 @@ pub mod llm;
 pub use llm::capabilities;
 pub mod mcp;
 pub mod memory;
-use crate::memory::maintenance::rebuild_memory_index;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -113,7 +114,7 @@ async fn generate_title(
     }
 
     let mut prompt = String::new();
-    for (_, (_, role, content, _, _)) in history.iter().enumerate().take(6) {
+    for (_, (_, role, content, _, _, _)) in history.iter().enumerate().take(6) {
         if let Some(c) = content {
             prompt.push_str(&format!("{}: {}\n", role, c));
         }
@@ -205,7 +206,7 @@ async fn get_chat_history(
         .map_err(|e| e.to_string())?;
 
     let mut messages = Vec::new();
-    for (id, role, content, tool_calls_json, tool_call_id) in raw {
+    for (id, role, content, tool_calls_json, tool_call_id, _) in raw {
         let tool_calls = if let Some(json_str) = tool_calls_json {
             if !json_str.is_empty() {
                 serde_json::from_str(&json_str).ok()
@@ -348,7 +349,7 @@ async fn send_message(
                 if !results.is_empty() {
                     // Emit Memory Context Event
                     let memory_list_preview: Vec<String> =
-                        results.iter().map(|(_, content)| content.clone()).collect();
+                        results.iter().map(|res| res.content.clone()).collect();
 
                     if let Some(ctx_model) = &settings.context_model {
                         let assembled = crate::llm::context_assembler::ContextAssembler::assemble(
@@ -374,8 +375,8 @@ async fn send_message(
                         }
 
                         context_text = "Relevant Memories:\n".to_string();
-                        for (_id, content) in results {
-                            context_text.push_str(&format!("- {}\n", content));
+                        for res in results {
+                            context_text.push_str(&format!("- {}\n", res.content));
                         }
                     }
                 }
@@ -458,9 +459,15 @@ async fn send_message(
             return Err(format!("Provider '{}' is disabled", provider_id));
         }
 
+        // Determine context limit
+        let model_config = provider_config.models.iter().find(|m| m.id == model);
+        let context_limit = model_config
+            .and_then(|m| m.context_window)
+            .unwrap_or(128000); // Default to 128k (standard for modern models), fallback was 64k
+
         // Prune context
-        let pruned_messages =
-            ContextManager::prune_messages(final_messages, 64000).map_err(|e| e.to_string())?;
+        let pruned_messages = ContextManager::prune_messages(final_messages, context_limit)
+            .map_err(|e| e.to_string())?;
         tracing::debug!("[DEBUG] Messages pruned. Calling provider...");
 
         let options = Some(GenerationOptions {
@@ -764,6 +771,8 @@ async fn fetch_models(
                             id: id.to_string(),
                             name: id.to_string(),
                             visible: true,
+                            context_window: None,
+                            max_tokens: None,
                         });
                     }
                 }
@@ -792,42 +801,30 @@ async fn fetch_models(
                                 id: id.to_string(),
                                 name,
                                 visible: true,
+                                context_window: None,
+                                max_tokens: None,
                             });
                         }
                     }
                 }
             } else {
                 // Fallback if fetch fails (e.g. key invalid or network issue), but updated with latest models
-                models.push(ModelConfig {
-                    id: "claude-3-5-sonnet-20241022".to_string(),
-                    name: "Claude 3.5 Sonnet (New)".to_string(),
-                    visible: true,
-                });
-                models.push(ModelConfig {
-                    id: "claude-3-5-haiku-20241022".to_string(),
-                    name: "Claude 3.5 Haiku".to_string(),
-                    visible: true,
-                });
-                models.push(ModelConfig {
-                    id: "claude-3-5-sonnet-20240620".to_string(),
-                    name: "Claude 3.5 Sonnet (Old)".to_string(),
-                    visible: true,
-                });
-                models.push(ModelConfig {
-                    id: "claude-3-opus-20240229".to_string(),
-                    name: "Claude 3 Opus".to_string(),
-                    visible: true,
-                });
-                models.push(ModelConfig {
-                    id: "claude-3-sonnet-20240229".to_string(),
-                    name: "Claude 3 Sonnet".to_string(),
-                    visible: true,
-                });
-                models.push(ModelConfig {
-                    id: "claude-3-haiku-20240307".to_string(),
-                    name: "Claude 3 Haiku".to_string(),
-                    visible: true,
-                });
+                // This ensures the dropdown isn't empty even if the API call fails.
+                let fallback_models = vec![
+                    "claude-3-opus-20240229",
+                    "claude-3-sonnet-20240229",
+                    "claude-3-haiku-20240307",
+                    "claude-3-5-sonnet-20240620",
+                ];
+                for id in fallback_models {
+                    models.push(ModelConfig {
+                        id: id.to_string(),
+                        name: id.to_string(),
+                        visible: true,
+                        context_window: None,
+                        max_tokens: None,
+                    });
+                }
             }
         }
         ProviderType::Ollama => {
@@ -851,6 +848,8 @@ async fn fetch_models(
                             id: name.to_string(),
                             name: name.to_string(),
                             visible: true,
+                            context_window: None,
+                            max_tokens: None,
                         });
                     }
                 }
@@ -964,6 +963,173 @@ async fn delete_mcp_server(
     Ok(())
 }
 
+#[tauri::command]
+async fn rebuild_memory_index(state: State<'_, AppState>) -> Result<(), String> {
+    let lib = state.librarian.lock().await;
+
+    // 1. Clear Tantivy
+    lib.clear_search_index().map_err(|e| e.to_string())?;
+
+    // 2. Read all messages from SQLite
+    // We need a method to iterate all messages, or just list convs and get messages for each
+    let conversations = lib.list_conversations().map_err(|e| e.to_string())?;
+
+    for (conv_id, _, _) in conversations {
+        let messages = lib
+            .get_complete_history(&conv_id)
+            .map_err(|e| e.to_string())?;
+
+        for (msg_id, role, content, _, _, created_at) in messages {
+            if let Some(text) = content {
+                lib.index_existing_message(&conv_id, &role, &text, &msg_id, &created_at)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn search_messages(
+    state: State<'_, AppState>,
+    query: String,
+) -> Result<Vec<SearchResult>, String> {
+    let lib = state.librarian.lock().await;
+    lib.search(&query).map_err(|e| e.to_string())
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ExportData {
+    conversation_id: String,
+    title: String,
+    created_at: String,
+    messages: Vec<Message>,
+}
+
+#[tauri::command]
+async fn export_conversation(
+    state: State<'_, AppState>,
+    conversation_id: String,
+    format: String, // "json" or "md"
+) -> Result<String, String> {
+    tracing::info!(
+        "Exporting conversation: {} format: {}",
+        conversation_id,
+        format
+    );
+    let lib = state.librarian.lock().await;
+
+    // Get metadata
+    let convs = lib.list_conversations().map_err(|e| e.to_string())?;
+    let (_, title, created_at) = convs
+        .into_iter()
+        .find(|(id, _, _)| id == &conversation_id)
+        .ok_or("Conversation not found")?;
+
+    // Get messages
+    let raw_msgs = lib
+        .get_complete_history(&conversation_id)
+        .map_err(|e| e.to_string())?;
+
+    let mut messages = Vec::new();
+    for (id, role, content, tool_calls_txt, tool_call_id, _created) in raw_msgs {
+        let tool_calls = if let Some(json) = tool_calls_txt {
+            if !json.is_empty() {
+                serde_json::from_str(&json).ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let attachments = None; // Not stored in DB yet, Phase 7
+
+        messages.push(Message {
+            id: Some(id),
+            role,
+            content,
+            tool_calls,
+            tool_call_id,
+            attachments,
+        });
+    }
+
+    match format.as_str() {
+        "json" => {
+            let export = ExportData {
+                conversation_id,
+                title,
+                created_at,
+                messages,
+            };
+            serde_json::to_string_pretty(&export).map_err(|e| e.to_string())
+        }
+        "md" => {
+            let mut md = String::new();
+            md.push_str(&format!("# {}\n\n", title));
+            for msg in messages {
+                let role_title = match msg.role.as_str() {
+                    "user" => "User",
+                    "assistant" => "Assistant",
+                    "system" => "System",
+                    "tool" => "Tool Output",
+                    _ => &msg.role,
+                };
+                md.push_str(&format!("## {}\n", role_title));
+
+                if let Some(content) = msg.content {
+                    md.push_str(&content);
+                    md.push_str("\n\n");
+                }
+
+                if let Some(tool_calls) = msg.tool_calls {
+                    md.push_str("```json\n");
+                    md.push_str(&serde_json::to_string_pretty(&tool_calls).unwrap_or_default());
+                    md.push_str("\n```\n\n");
+                }
+            }
+            Ok(md)
+        }
+        _ => Err("Unsupported format".to_string()),
+    }
+}
+
+#[tauri::command]
+async fn import_conversation(
+    state: State<'_, AppState>,
+    json_content: String,
+) -> Result<String, String> {
+    let data: ExportData = serde_json::from_str(&json_content).map_err(|e| e.to_string())?;
+
+    // We create a NEW conversation to allow re-importing without ID collision logic for now
+    // Or we could try to preserve ID if checking existing. Let's create new to be safe.
+    let lib = state.librarian.lock().await;
+    let new_id = lib
+        .create_conversation(&data.title)
+        .map_err(|e| e.to_string())?;
+
+    for msg in data.messages {
+        // Save using current logic which generates new message IDs
+        // Ignoring msg.id from JSON to ensure unique IDs in our DB
+        let valid_tool_calls = msg
+            .tool_calls
+            .map(|tc| serde_json::to_string(&tc).unwrap_or_default());
+        let tool_calls_str = valid_tool_calls.as_deref();
+
+        lib.save_full_message(
+            &new_id,
+            &msg.role,
+            msg.content.as_deref(),
+            tool_calls_str,
+            msg.tool_call_id.as_deref(),
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    Ok(new_id)
+}
 async fn attempt_pruning(
     app: tauri::AppHandle,
     librarian: Arc<Mutex<crate::memory::librarian::Librarian>>,
@@ -1246,68 +1412,87 @@ async fn set_active_system_prompt(app: tauri::AppHandle, id: Option<String>) -> 
     settings.save(&settings_path).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn get_active_mcp_servers(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    Ok(state.mcp_manager.list_servers().await)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mcp_manager = Arc::new(McpManager::new());
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
-            let config_dir = app.path().app_config_dir().unwrap();
+            let app_handle = app.handle().clone();
+            let mcp_manager = mcp_manager.clone();
 
-            // Init Memory
-            let memory_dir = config_dir.join("memory");
-            let librarian = crate::memory::librarian::Librarian::new(&memory_dir)
-                .expect("Failed to initialize memory");
+            // Initialize AppState with real dependencies
+            tauri::async_runtime::block_on(async move {
+                let config_dir = app_handle.path().app_config_dir().unwrap();
+                std::fs::create_dir_all(&config_dir).unwrap();
 
-            app.manage(AppState {
-                mcp_manager: mcp_manager.clone(),
-                librarian: Arc::new(Mutex::new(librarian)),
-                active_task: Arc::new(Mutex::new(None)),
+                // 1. Librarian
+                let librarian = crate::memory::librarian::Librarian::new(&config_dir).unwrap();
+                let librarian_arc = Arc::new(Mutex::new(librarian));
+
+                // 2. AppState
+                let state = AppState {
+                    mcp_manager: mcp_manager.clone(),
+                    librarian: librarian_arc.clone(),
+                    active_task: Arc::new(Mutex::new(None)),
+                };
+                app_handle.manage(state);
+
+                // 3. Initialize Context & MCP
+                let settings_path = config_dir.join("settings.json");
+                let settings = Settings::load_migrated(&settings_path);
+
+                // Start MCP Servers (background)
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = mcp_manager.initialize(settings).await {
+                        eprintln!("Failed to initialize MCP servers: {}", e);
+                    }
+                });
             });
 
-            let settings_path = config_dir.join("settings.json");
-
-            let settings = Settings::load_migrated(&settings_path);
-
-            let manager = mcp_manager.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = manager.initialize(settings).await {
-                    tracing::error!("Failed to initialize from settings: {}", e);
-                }
-            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            stop_generation,
+            list_conversations,
+            create_conversation,
+            delete_conversation,
+            rename_conversation,
+            delete_message,
+            generate_title,
+            get_chat_history,
             send_message,
+            get_settings,
+            save_settings,
+            fetch_models,
             execute_tool,
+            get_tool_execution,
             add_mcp_server,
             edit_mcp_server,
             delete_mcp_server,
             get_mcp_servers,
-            get_settings,
-            save_settings,
-            fetch_models,
-            list_conversations,
-            create_conversation,
-            get_chat_history,
-            delete_conversation,
-            rename_conversation,
-            generate_title,
-            delete_message,
+            get_active_mcp_servers,
             set_default_model,
+            get_tools,
             toggle_tool,
             toggle_tool_list,
-            get_tools,
             get_system_prompts,
             save_system_prompt,
             delete_system_prompt,
             set_active_system_prompt,
-            set_active_system_prompt,
-            stop_generation,
             rebuild_memory_index,
-            get_tool_execution
+            search_messages,
+            export_conversation,
+            import_conversation
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
