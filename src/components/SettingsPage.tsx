@@ -254,13 +254,28 @@ export default function SettingsPage() {
         }
     };
 
+    const handleRebuildIndex = async () => {
+        if (!confirm("Rebuild memory index? This may take a moment.")) {
+            return;
+        }
+        setStatus("Rebuilding memory index...");
+        try {
+            await invoke("rebuild_memory_index");
+            setStatus("Memory index rebuilt successfully.");
+            setTimeout(() => setStatus(""), 2000);
+        } catch (e: any) {
+            console.error(e);
+            setStatus("Error rebuilding index: " + e);
+        }
+    };
+
     return (
         <div className="p-6 bg-gray-950 h-full text-white overflow-auto font-sans relative">
             {/* Status Banner */}
             {status && (
                 <div className={`mb-6 p-4 rounded-lg flex items-center gap-2 border ${status.includes("Error") || status.includes("Warning") || status.includes("Failed")
-                        ? "bg-red-900/20 border-red-500/50 text-red-200"
-                        : "bg-blue-900/20 border-blue-500/50 text-blue-200"
+                    ? "bg-red-900/20 border-red-500/50 text-red-200"
+                    : "bg-blue-900/20 border-blue-500/50 text-blue-200"
                     }`}>
                     <div className="flex-1 font-mono text-sm">{status}</div>
                     <button onClick={() => setStatus("")} className="px-2 hover:bg-white/10 rounded">&times;</button>
@@ -345,6 +360,24 @@ export default function SettingsPage() {
                                 </option>
                             ))}
                         </select>
+
+                    </div>
+
+                    <div className="mt-6 border-t border-gray-800 pt-4">
+                        <button
+                            onClick={handleRebuildIndex}
+                            disabled={!(fullSettings.memory_enabled ?? true)}
+                            className={`w-full py-2 px-4 rounded-lg border border-gray-700 text-sm font-bold transition-colors flex items-center justify-center gap-2
+                                ${(fullSettings.memory_enabled ?? true)
+                                    ? "bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white"
+                                    : "opacity-50 cursor-not-allowed text-gray-500"
+                                }`}
+                        >
+                            <Trash2 className="w-4 h-4" /> Rebuild Memory Index
+                        </button>
+                        <p className="text-xs text-gray-500 mt-2 text-center">
+                            Use this if search results seem stale or incorrect.
+                        </p>
                     </div>
                 </div>
             </div>
@@ -357,23 +390,21 @@ export default function SettingsPage() {
                 {servers.map(s => (
                     <div
                         key={s.name}
-                        className={`bg-gray-900 p-4 rounded-lg border flex justify-between items-center shadow-lg ${
-                            s.status === 'connected'
+                        className={`bg-gray-900 p-4 rounded-lg border flex justify-between items-center shadow-lg ${s.status === 'connected'
                                 ? 'border-gray-800'
                                 : s.status === 'unknown'
                                     ? 'border-gray-700/50 bg-gray-950/10'
                                     : 'border-red-900/50 bg-red-950/10'
-                        }`}
+                            }`}
                     >
                         <div className="flex items-center gap-3">
                             <div
-                                className={`w-2 h-2 rounded-full ${
-                                    s.status === 'connected'
+                                className={`w-2 h-2 rounded-full ${s.status === 'connected'
                                         ? 'bg-green-500 animate-pulse'
                                         : s.status === 'unknown'
                                             ? 'bg-gray-500'
                                             : 'bg-red-500'
-                                }`}
+                                    }`}
                             />
                             <div className="flex flex-col">
                                 <span className="font-mono font-bold text-gray-200">{s.name}</span>
@@ -385,13 +416,12 @@ export default function SettingsPage() {
                         </div>
                         <div className="flex items-center gap-2">
                             <div
-                                className={`text-xs font-bold px-2 py-1 rounded ${
-                                    s.status === 'connected'
+                                className={`text-xs font-bold px-2 py-1 rounded ${s.status === 'connected'
                                         ? 'text-green-500 bg-green-500/10'
                                         : s.status === 'unknown'
                                             ? 'text-gray-300 bg-gray-500/10'
                                             : 'text-red-400 bg-red-500/10'
-                                }`}
+                                    }`}
                             >
                                 {s.status.toUpperCase()}
                             </div>
@@ -490,35 +520,35 @@ export default function SettingsPage() {
                                                 placeholder="e.g. npx"
                                             />
                                         </div>
-                                    <div>
-                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Arguments</label>
-                                        <input
-                                            className="w-full bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
-                                            value={args}
-                                            onChange={e => setArgs(e.target.value)}
-                                            placeholder="-y, @modelcontextprotocol/server..."
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Environment (KEY=VALUE)</label>
-                                        <textarea
-                                            className={`w-full bg-gray-950 border rounded-lg p-3 text-sm font-mono focus:ring-1 outline-none min-h-[120px] ${envErrors.length > 0 ? "border-red-600 focus:border-red-500 focus:ring-red-500" : "border-gray-700 focus:border-blue-500 focus:ring-blue-500"}`}
-                                            value={envText}
-                                            onChange={e => {
-                                                setEnvText(e.target.value);
-                                                if (envErrors.length) setEnvErrors([]);
-                                            }}
-                                            placeholder={"FOO=bar\nOPENAI_API_KEY=...\n# comments allowed"}
-                                        />
-                                        {envErrors.length > 0 && (
-                                            <div className="mt-2 text-xs text-red-300 bg-red-900/20 border border-red-700/40 rounded-lg p-2 space-y-1">
-                                                {envErrors.map((err, i) => (
-                                                    <div key={i}>{err}</div>
-                                                ))}
-                                            </div>
-                                        )}
-                                    </div>
-                                </>
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Arguments</label>
+                                            <input
+                                                className="w-full bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                                                value={args}
+                                                onChange={e => setArgs(e.target.value)}
+                                                placeholder="-y, @modelcontextprotocol/server..."
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Environment (KEY=VALUE)</label>
+                                            <textarea
+                                                className={`w-full bg-gray-950 border rounded-lg p-3 text-sm font-mono focus:ring-1 outline-none min-h-[120px] ${envErrors.length > 0 ? "border-red-600 focus:border-red-500 focus:ring-red-500" : "border-gray-700 focus:border-blue-500 focus:ring-blue-500"}`}
+                                                value={envText}
+                                                onChange={e => {
+                                                    setEnvText(e.target.value);
+                                                    if (envErrors.length) setEnvErrors([]);
+                                                }}
+                                                placeholder={"FOO=bar\nOPENAI_API_KEY=...\n# comments allowed"}
+                                            />
+                                            {envErrors.length > 0 && (
+                                                <div className="mt-2 text-xs text-red-300 bg-red-900/20 border border-red-700/40 rounded-lg p-2 space-y-1">
+                                                    {envErrors.map((err, i) => (
+                                                        <div key={i}>{err}</div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </>
                                 ) : (
                                     <div>
                                         <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">SSE URL</label>
