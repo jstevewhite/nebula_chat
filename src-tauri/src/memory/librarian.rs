@@ -3,9 +3,12 @@ use crate::memory::tantivy_index::TantivyIndex;
 use anyhow::Result;
 use std::sync::Arc;
 
+use crate::memory::audit_logger::AuditLogger;
+
 pub struct Librarian {
     sqlite: SqliteManager,
     tantivy: Arc<TantivyIndex>,
+    pub audit: Arc<AuditLogger>,
 }
 
 impl Librarian {
@@ -20,10 +23,12 @@ impl Librarian {
         let _ = sqlite.migrate_v2();
 
         let tantivy = TantivyIndex::new(idx_path.to_str().unwrap())?;
+        let audit = AuditLogger::new(&db_path)?;
 
         Ok(Self {
             sqlite,
             tantivy: Arc::new(tantivy),
+            audit: Arc::new(audit),
         })
     }
 

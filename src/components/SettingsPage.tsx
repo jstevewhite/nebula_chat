@@ -22,6 +22,8 @@ export default function SettingsPage() {
     const [envText, setEnvText] = useState("");
     const [envErrors, setEnvErrors] = useState<string[]>([]);
     const [url, setUrl] = useState("");
+    const [allowlist, setAllowlist] = useState("");
+    const [denylist, setDenylist] = useState("");
 
     useEffect(() => {
         loadServers();
@@ -96,6 +98,8 @@ export default function SettingsPage() {
         setEnvText("");
         setEnvErrors([]);
         setUrl("");
+        setAllowlist("");
+        setDenylist("");
         setStatus("");
         setIsModalOpen(true);
     };
@@ -126,6 +130,11 @@ export default function SettingsPage() {
             setEnvErrors([]);
             setUrl("");
         }
+
+        // Permissions
+        const perms = config.permissions || {};
+        setAllowlist((perms.allowlist || []).join(", "));
+        setDenylist((perms.denylist || []).join(", "));
 
         setStatus("");
         setIsModalOpen(true);
@@ -176,7 +185,11 @@ export default function SettingsPage() {
         try {
             // Construct config with flattened structure
             let newConfig: any = {
-                auto_approve: false
+                auto_approve: false,
+                permissions: {
+                    allowlist: allowlist.split(",").map(s => s.trim()).filter(s => s),
+                    denylist: denylist.split(",").map(s => s.trim()).filter(s => s)
+                }
             };
 
             if (transportType === "stdio") {
@@ -391,19 +404,19 @@ export default function SettingsPage() {
                     <div
                         key={s.name}
                         className={`bg-gray-900 p-4 rounded-lg border flex justify-between items-center shadow-lg ${s.status === 'connected'
-                                ? 'border-gray-800'
-                                : s.status === 'unknown'
-                                    ? 'border-gray-700/50 bg-gray-950/10'
-                                    : 'border-red-900/50 bg-red-950/10'
+                            ? 'border-gray-800'
+                            : s.status === 'unknown'
+                                ? 'border-gray-700/50 bg-gray-950/10'
+                                : 'border-red-900/50 bg-red-950/10'
                             }`}
                     >
                         <div className="flex items-center gap-3">
                             <div
                                 className={`w-2 h-2 rounded-full ${s.status === 'connected'
-                                        ? 'bg-green-500 animate-pulse'
-                                        : s.status === 'unknown'
-                                            ? 'bg-gray-500'
-                                            : 'bg-red-500'
+                                    ? 'bg-green-500 animate-pulse'
+                                    : s.status === 'unknown'
+                                        ? 'bg-gray-500'
+                                        : 'bg-red-500'
                                     }`}
                             />
                             <div className="flex flex-col">
@@ -417,10 +430,10 @@ export default function SettingsPage() {
                         <div className="flex items-center gap-2">
                             <div
                                 className={`text-xs font-bold px-2 py-1 rounded ${s.status === 'connected'
-                                        ? 'text-green-500 bg-green-500/10'
-                                        : s.status === 'unknown'
-                                            ? 'text-gray-300 bg-gray-500/10'
-                                            : 'text-red-400 bg-red-500/10'
+                                    ? 'text-green-500 bg-green-500/10'
+                                    : s.status === 'unknown'
+                                        ? 'text-gray-300 bg-gray-500/10'
+                                        : 'text-red-400 bg-red-500/10'
                                     }`}
                             >
                                 {s.status.toUpperCase()}
@@ -560,6 +573,25 @@ export default function SettingsPage() {
                                         />
                                     </div>
                                 )}
+
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Allowlist (Comma separated)</label>
+                                    <input
+                                        className="w-full bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                                        value={allowlist}
+                                        onChange={e => setAllowlist(e.target.value)}
+                                        placeholder="tool_a, tool_b (Leave empty to allow all)"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Denylist (Comma separated)</label>
+                                    <input
+                                        className="w-full bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
+                                        value={denylist}
+                                        onChange={e => setDenylist(e.target.value)}
+                                        placeholder="dangerous_tool, delete_all"
+                                    />
+                                </div>
 
                                 {status && (
                                     <div className={`text-sm p-3 rounded ${status.startsWith("Error") ? "bg-red-500/10 text-red-400" : "bg-green-500/10 text-green-400"}`}>
