@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { Wrench, CheckCircle2, XCircle, RefreshCw, Search, ChevronDown, ChevronRight, CheckSquare, Square } from "lucide-react";
 
 interface ToolStatus {
@@ -29,6 +30,15 @@ export default function ToolsPanel() {
 
     useEffect(() => {
         loadTools();
+
+        const unlistenPromise = listen("tools-updated", () => {
+            console.log("Tools updated event received, reloading tools...");
+            loadTools();
+        });
+
+        return () => {
+            unlistenPromise.then(unlisten => unlisten());
+        };
     }, []);
 
     const toggleTool = async (name: string, enabled: boolean) => {

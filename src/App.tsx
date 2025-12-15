@@ -15,7 +15,7 @@ interface Conversation {
 export default function App() {
   const [activeTab, setActiveTab] = useState<"chat" | "settings">("chat");
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
-  const [showTools, setShowTools] = useState(false);
+  const [showTools, setShowTools] = useState(true);
 
   useEffect(() => {
     // Initial load: Get conversations or create one
