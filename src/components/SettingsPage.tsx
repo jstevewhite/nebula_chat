@@ -23,7 +23,9 @@ export default function SettingsPage() {
     const [envErrors, setEnvErrors] = useState<string[]>([]);
     const [url, setUrl] = useState("");
     const [allowlist, setAllowlist] = useState("");
+
     const [denylist, setDenylist] = useState("");
+    const [autoApprove, setAutoApprove] = useState(false);
 
     useEffect(() => {
         loadServers();
@@ -99,7 +101,9 @@ export default function SettingsPage() {
         setEnvErrors([]);
         setUrl("");
         setAllowlist("");
+
         setDenylist("");
+        setAutoApprove(false);
         setStatus("");
         setIsModalOpen(true);
     };
@@ -134,7 +138,9 @@ export default function SettingsPage() {
         // Permissions
         const perms = config.permissions || {};
         setAllowlist((perms.allowlist || []).join(", "));
+
         setDenylist((perms.denylist || []).join(", "));
+        setAutoApprove(config.auto_approve || false);
 
         setStatus("");
         setIsModalOpen(true);
@@ -185,7 +191,7 @@ export default function SettingsPage() {
         try {
             // Construct config with flattened structure
             let newConfig: any = {
-                auto_approve: false,
+                auto_approve: autoApprove,
                 permissions: {
                     allowlist: allowlist.split(",").map(s => s.trim()).filter(s => s),
                     denylist: denylist.split(",").map(s => s.trim()).filter(s => s)
@@ -239,7 +245,9 @@ export default function SettingsPage() {
                     command: transportType === "stdio" ? command : null,
                     args: transportType === "stdio" ? argList : null,
                     env: transportType === "stdio" ? env : null,
-                    url: transportType === "sse" ? url : null
+
+                    url: transportType === "sse" ? url : null,
+                    auto_approve: autoApprove
                 });
             }
 
