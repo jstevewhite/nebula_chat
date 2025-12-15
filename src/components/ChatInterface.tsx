@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check, Pin, FileText, Book, Paperclip, X, Brain, Square, Sliders, Download } from "lucide-react";
 import { save } from "@tauri-apps/plugin-dialog";
-import { writeTextFile } from "@tauri-apps/plugin-fs";
+import { writeTextFile, readFile, readTextFile } from "@tauri-apps/plugin-fs";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -24,6 +24,12 @@ interface Message {
     content: string | null;
     tool_calls?: ToolCall[];
     tool_call_id?: string;
+    attachments?: {
+        name: string;
+        media_type: string;
+        data: string;
+        is_binary: boolean;
+    }[];
 }
 
 interface ChatInterfaceProps {
@@ -52,6 +58,10 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState("");
     const [loading, setLoading] = useState(false);
+
+    const [isDragging, setIsDragging] = useState(false);
+
+
 
     // Model Selection State
     const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
@@ -141,6 +151,102 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         }
     }, [messages]);
 
+    // Tauri File Drop Listeners
+    useEffect(() => {
+        let unlistenHover: (() => void) | Promise<(() => void)>;
+        let unlistenDrop: (() => void) | Promise<(() => void)>;
+        let unlistenCancelled: (() => void) | Promise<(() => void)>;
+
+        const setupListeners = async () => {
+            console.log("Setting up Tauri File Drop listeners...");
+            unlistenHover = listen("tauri://file-drop-hover", () => {
+                console.log("Event: tauri://file-drop-hover");
+                setIsDragging(true);
+            });
+
+            unlistenDrop = listen<string[]>("tauri://file-drop", async (event) => {
+                console.log("Event: tauri://file-drop", event);
+                setIsDragging(false);
+                if (event.payload && event.payload.length > 0) {
+                    await processDroppedPaths(event.payload);
+                }
+            });
+
+            unlistenCancelled = listen("tauri://file-drop-cancelled", () => {
+                console.log("Event: tauri://file-drop-cancelled");
+                setIsDragging(false);
+            });
+
+            console.log("Listeners initiated.");
+        };
+
+        setupListeners();
+
+        return () => {
+            if (unlistenHover) Promise.resolve(unlistenHover).then(u => u());
+            if (unlistenDrop) Promise.resolve(unlistenDrop).then(u => u());
+            if (unlistenCancelled) Promise.resolve(unlistenCancelled).then(u => u());
+        };
+    }, []);
+
+    function uint8ArrayToBase64(bytes: Uint8Array): string {
+        let binary = '';
+        const len = bytes.byteLength;
+        for (let i = 0; i < len; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        return window.btoa(binary);
+    }
+
+    // Process paths from Tauri Drop
+    const processDroppedPaths = async (paths: string[]) => {
+        console.log("Processing dropped paths:", paths);
+        for (const path of paths) {
+            try {
+                // Heuristic for mime type based on extension
+                const name = path.split(/[\\/]/).pop() || "unknown";
+                const ext = name.split('.').pop()?.toLowerCase();
+
+                let isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].includes(ext || "");
+                let content = "";
+                let preview = "";
+                let mediaType = "application/octet-stream";
+
+                if (isImage) {
+                    const data = await readFile(path);
+                    const base64 = uint8ArrayToBase64(data);
+
+                    if (ext === 'png') mediaType = 'image/png';
+                    else if (ext === 'jpg' || ext === 'jpeg') mediaType = 'image/jpeg';
+                    else if (ext === 'webp') mediaType = 'image/webp';
+                    else if (ext === 'gif') mediaType = 'image/gif';
+
+                    content = `data:${mediaType};base64,${base64}`;
+                    preview = content;
+                } else {
+                    // Assume text for other files for now, or read as text
+                    const text = await readTextFile(path);
+                    content = text;
+                    preview = "TEXT_FILE";
+                    mediaType = "text/plain";
+                    // If we wanted binary non-image, we'd need generic handling. 
+                    // For now, assume text unless image.
+                }
+
+                setAttachments(prev => [...prev, {
+                    file: new File([""], name, { type: mediaType }), // Dummy File object for interface compatibility
+                    preview,
+                    base64: content, // Data URL or Text
+                    isBinary: isImage,
+                    mediaType: mediaType
+                }]);
+            } catch (e) {
+                console.error("Failed to read file", path, e);
+                setErrorMsg(`Failed to read file ${path}: ${String(e)}`);
+            }
+        }
+    };
+
     const loadHistory = async (id: string) => {
         try {
             const history = await invoke<Message[]>("get_chat_history", { conversationId: id });
@@ -218,42 +324,46 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
     const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files) {
-            const files = Array.from(e.target.files);
+            processFiles(Array.from(e.target.files));
+        }
+    };
 
-            for (const file of files) {
-                const isImage = file.type.startsWith('image/');
-                const reader = new FileReader();
+    const processFiles = (files: File[]) => {
+        console.log("Processing dropped files:", files.length);
+        for (const file of files) {
+            console.log("File:", file.name, file.type, file.size);
+            const isImage = file.type.startsWith('image/');
+            const reader = new FileReader();
 
-                reader.onload = (ev) => {
-                    if (ev.target?.result) {
-                        let content = ev.target.result as string;
-                        let preview = "";
+            reader.onload = (ev) => {
+                if (ev.target?.result) {
+                    let content = ev.target.result as string;
+                    let preview = "";
 
-                        if (isImage) {
-                            preview = content; // Data URL for preview
-                        } else {
-                            // Text file, use a placeholder icon or code snippet
-                            preview = "TEXT_FILE";
-                        }
-
-                        setAttachments(prev => [...prev, {
-                            file,
-                            preview,
-                            base64: content, // For text files this is raw text, for images it is Data URL
-                            isBinary: isImage,
-                            mediaType: file.type || "text/plain"
-                        }]);
+                    if (isImage) {
+                        preview = content;
+                    } else {
+                        preview = "TEXT_FILE";
                     }
-                };
 
-                if (isImage) {
-                    reader.readAsDataURL(file);
-                } else {
-                    reader.readAsText(file);
+                    setAttachments(prev => [...prev, {
+                        file,
+                        preview,
+                        base64: content, // Data URL
+                        isBinary: isImage,
+                        mediaType: file.type || "text/plain"
+                    }]);
                 }
+            };
+
+            if (isImage) {
+                reader.readAsDataURL(file);
+            } else {
+                reader.readAsText(file);
             }
         }
     };
+
 
     const removeAttachment = (index: number) => {
         setAttachments(prev => prev.filter((_, i) => i !== index));
@@ -264,6 +374,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         setErrorMsg(null);
 
         try {
+            console.log("Sending message with selectedModel:", selectedModel);
             let [providerId, modelId] = selectedModel.split("::");
             if (!modelId) {
                 providerId = "openai";
@@ -392,8 +503,24 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     };
 
     const handleSend = async () => {
-        if (!input.trim()) return;
-        const userMsg: Message = { role: "user", content: input };
+        console.log("Triggering handleSend...");
+        if (!input.trim() && attachments.length === 0) {
+            console.log("Empty input and no attachments, blocking send.");
+            return;
+        }
+
+        const currentAttachments = attachments.map(a => ({
+            name: a.file.name,
+            media_type: a.mediaType,
+            data: a.base64,
+            is_binary: a.isBinary
+        }));
+
+        const userMsg: Message = {
+            role: "user",
+            content: input,
+            attachments: currentAttachments.length > 0 ? currentAttachments : undefined
+        };
 
         const newHistory = [...messages, userMsg];
         setMessages(newHistory);
@@ -518,10 +645,24 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             console.error("Export failed", e);
             setErrorMsg("Export failed: " + String(e));
         }
+
     };
 
+
+
     return (
-        <div className="flex flex-col h-full bg-gray-950 text-white font-sans relative">
+        <div
+            className="flex flex-col h-full bg-gray-950 text-white font-sans relative"
+        >
+            {isDragging && (
+                <div className="absolute inset-0 z-50 bg-blue-600/20 backdrop-blur-sm border-4 border-blue-500 border-dashed m-4 rounded-xl flex items-center justify-center animate-pulse pointer-events-none">
+                    <div className="bg-gray-900/80 p-8 rounded-2xl shadow-2xl flex flex-col items-center gap-4">
+                        <Download size={48} className="text-blue-400" />
+                        <h3 className="text-2xl font-bold text-white">Drop files to attach</h3>
+                    </div>
+                </div>
+            )}
+
             {errorMsg && (
                 <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50 bg-red-600/90 backdrop-blur text-white px-4 py-3 rounded-xl shadow-2xl animate-fade-in-down flex items-center gap-3 border border-red-500/50">
                     <AlertTriangle size={20} className="text-white" />
@@ -863,6 +1004,32 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
                         : "text-gray-200 pl-0"
                         }`}
                     >
+                        {/* Attachments */}
+                        {m.attachments && m.attachments.length > 0 && (
+                            <div className="flex flex-wrap gap-2 mb-3">
+                                {m.attachments.map((att: any, idx: number) => (
+                                    <div key={idx} className="relative group rounded-lg overflow-hidden border border-gray-700 bg-black/30">
+                                        {att.media_type.startsWith('image/') ? (
+                                            <img
+                                                src={att.data.startsWith('data:') ? att.data : `data:${att.media_type}; base64, ${att.data} `}
+                                                alt={att.name}
+                                                className="max-h-64 object-contain rounded"
+                                            />
+                                        ) : (
+                                            <div className="p-4 flex items-center gap-3">
+                                                <FileText className="text-gray-400" />
+                                                <div className="text-sm">
+                                                    <p className="font-medium text-white">{att.name}</p>
+                                                    <p className="text-xs text-gray-500">{att.media_type}</p>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+
                         {/* Tool Output Collapse */}
                         {m.role === "tool" && !isExpanded ? (
                             <div className="flex items-center gap-3">

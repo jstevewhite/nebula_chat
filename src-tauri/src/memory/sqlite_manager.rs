@@ -47,6 +47,20 @@ impl SqliteManager {
             [],
         )?;
 
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS attachments (
+                id TEXT PRIMARY KEY,
+                message_id TEXT NOT NULL,
+                filename TEXT,
+                media_type TEXT,
+                data TEXT,
+                is_binary BOOLEAN,
+                created_at TEXT,
+                FOREIGN KEY(message_id) REFERENCES messages(id)
+            )",
+            [],
+        )?;
+
         Ok(Self { conn })
     }
 
@@ -84,13 +98,30 @@ impl SqliteManager {
             Option<String>,
             Option<String>,
             String, // created_at
+            String,
         )>,
     > {
-        // Returns (id, role, content, tool_calls_json, tool_call_id, created_at)
+        // Returns (id, role, content, tool_calls_json, tool_call_id, created_at, attachments_json)
         let mut stmt = self.conn.prepare(
-            "SELECT id, role, content, tool_calls, tool_call_id, created_at FROM messages 
-             WHERE conversation_id = ?1 
-             ORDER BY created_at ASC",
+            "SELECT 
+                m.id, 
+                m.role, 
+                m.content, 
+                m.tool_calls, 
+                m.tool_call_id, 
+                m.created_at,
+                (SELECT json_group_array(
+                    json_object(
+                        'id', a.id, 
+                        'name', a.filename, 
+                        'media_type', a.media_type, 
+                        'data', a.data,
+                        'is_binary', a.is_binary
+                    )
+                ) FROM attachments a WHERE a.message_id = m.id) as attachments
+             FROM messages m
+             WHERE m.conversation_id = ?1 
+             ORDER BY m.created_at ASC",
         )?;
 
         let rows = stmt.query_map(params![conversation_id], |row| {
@@ -101,6 +132,7 @@ impl SqliteManager {
                 row.get(3)?,
                 row.get(4)?,
                 row.get(5)?,
+                row.get(6)?,
             ))
         })?;
 
@@ -255,6 +287,42 @@ impl SqliteManager {
         self.conn
             .execute("DELETE FROM conversations WHERE id = ?1", params![id])?;
         Ok(())
+    }
+
+    pub fn save_attachment(
+        &self,
+        message_id: &str,
+        filename: &str,
+        media_type: &str,
+        data: &str,
+        is_binary: bool,
+    ) -> Result<()> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let created_at = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO attachments (id, message_id, filename, media_type, data, is_binary, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id, message_id, filename, media_type, data, is_binary, created_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_attachments_for_message(
+        &self,
+        message_id: &str,
+    ) -> Result<Vec<(String, String, String, bool)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT filename, media_type, data, is_binary FROM attachments WHERE message_id = ?1",
+        )?;
+        let rows = stmt.query_map(params![message_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?;
+
+        let mut attachments = Vec::new();
+        for row in rows {
+            attachments.push(row?);
+        }
+        Ok(attachments)
     }
 
     pub fn rename_conversation(&self, id: &str, new_title: &str) -> Result<()> {

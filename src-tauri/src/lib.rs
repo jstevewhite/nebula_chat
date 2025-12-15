@@ -114,7 +114,7 @@ async fn generate_title(
     }
 
     let mut prompt = String::new();
-    for (_, (_, role, content, _, _, _)) in history.iter().enumerate().take(6) {
+    for (_, (_, role, content, _, _, _, _)) in history.iter().enumerate().take(6) {
         if let Some(c) = content {
             prompt.push_str(&format!("{}: {}\n", role, c));
         }
@@ -206,7 +206,7 @@ async fn get_chat_history(
         .map_err(|e| e.to_string())?;
 
     let mut messages = Vec::new();
-    for (id, role, content, tool_calls_json, tool_call_id, _) in raw {
+    for (id, role, content, tool_calls_json, tool_call_id, _, attachments_json) in raw {
         let tool_calls = if let Some(json_str) = tool_calls_json {
             if !json_str.is_empty() {
                 serde_json::from_str(&json_str).ok()
@@ -217,13 +217,19 @@ async fn get_chat_history(
             None
         };
 
+        let attachments = if !attachments_json.is_empty() {
+            serde_json::from_str(&attachments_json).ok()
+        } else {
+            None
+        };
+
         messages.push(Message {
             id: Some(id),
             role,
             content,
             tool_calls,
             tool_call_id,
-            attachments: None,
+            attachments,
         });
     }
     Ok(messages)
@@ -328,6 +334,7 @@ async fn send_message(
                         last.content.as_deref(),
                         tool_calls_json.as_deref(),
                         last.tool_call_id.as_deref(),
+                        last.attachments.as_deref(), // Use last.attachments to avoid borrow error
                     );
                 }
             }
@@ -551,6 +558,7 @@ async fn send_message(
                 response.content.as_deref(),
                 tool_calls_json.as_deref(),
                 response.tool_call_id.as_deref(),
+                None,
             );
 
             // Trigger Background Pruning (Fire & Forget)
@@ -979,7 +987,7 @@ async fn rebuild_memory_index(state: State<'_, AppState>) -> Result<(), String> 
             .get_complete_history(&conv_id)
             .map_err(|e| e.to_string())?;
 
-        for (msg_id, role, content, _, _, created_at) in messages {
+        for (msg_id, role, content, _, _, created_at, _) in messages {
             if let Some(text) = content {
                 lib.index_existing_message(&conv_id, &role, &text, &msg_id, &created_at)
                     .map_err(|e| e.to_string())?;
@@ -1033,7 +1041,7 @@ async fn export_conversation(
         .map_err(|e| e.to_string())?;
 
     let mut messages = Vec::new();
-    for (id, role, content, tool_calls_txt, tool_call_id, _created) in raw_msgs {
+    for (id, role, content, tool_calls_txt, tool_call_id, _created, attachments_json) in raw_msgs {
         let tool_calls = if let Some(json) = tool_calls_txt {
             if !json.is_empty() {
                 serde_json::from_str(&json).ok()
@@ -1044,7 +1052,11 @@ async fn export_conversation(
             None
         };
 
-        let attachments = None; // Not stored in DB yet, Phase 7
+        let attachments = if !attachments_json.is_empty() {
+            serde_json::from_str(&attachments_json).ok()
+        } else {
+            None
+        };
 
         messages.push(Message {
             id: Some(id),
@@ -1124,6 +1136,7 @@ async fn import_conversation(
             msg.content.as_deref(),
             tool_calls_str,
             msg.tool_call_id.as_deref(),
+            None,
         )
         .map_err(|e| e.to_string())?;
     }
