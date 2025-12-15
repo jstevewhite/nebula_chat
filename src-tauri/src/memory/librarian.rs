@@ -28,8 +28,9 @@ impl Librarian {
     }
 
     pub fn save_interaction(&self, conversation_id: &str, role: &str, content: &str) -> Result<()> {
-        self.sqlite.save_message(conversation_id, role, content)?;
-        self.tantivy.add_document(conversation_id, role, content)?;
+        let (id, created_at) = self.sqlite.save_message(conversation_id, role, content)?;
+        self.tantivy
+            .add_document(conversation_id, role, content, &id, &created_at)?;
         Ok(())
     }
 
@@ -39,7 +40,7 @@ impl Librarian {
         content: &str,
         timestamp: &str,
     ) -> Result<()> {
-        self.sqlite.save_message_with_timestamp(
+        let (id, created_at) = self.sqlite.save_message_with_timestamp(
             conversation_id,
             "system_summary",
             content,
@@ -47,7 +48,7 @@ impl Librarian {
         )?;
         // Also index the summary
         self.tantivy
-            .add_document(conversation_id, "system_summary", content)?;
+            .add_document(conversation_id, "system_summary", content, &id, &created_at)?;
         Ok(())
     }
 
@@ -64,7 +65,11 @@ impl Librarian {
     }
 
     pub fn delete_messages(&self, ids: &[String]) -> Result<()> {
-        self.sqlite.delete_messages(ids)
+        self.sqlite.delete_messages(ids)?;
+        for id in ids {
+            self.tantivy.delete_by_message_id(id)?;
+        }
+        Ok(())
     }
 
     pub fn get_context(&self, conversation_id: &str) -> Result<Vec<(String, String)>> {
@@ -77,7 +82,9 @@ impl Librarian {
     }
 
     pub fn delete_conversation(&self, id: &str) -> Result<()> {
-        self.sqlite.delete_conversation(id)
+        self.sqlite.delete_conversation(id)?;
+        self.tantivy.delete_by_conversation_id(id)?;
+        Ok(())
     }
 
     pub fn rename_conversation(&self, id: &str, new_title: &str) -> Result<()> {
@@ -111,12 +118,34 @@ impl Librarian {
         tool_calls: Option<&str>,
         tool_call_id: Option<&str>,
     ) -> Result<()> {
-        self.sqlite
-            .save_full_message(conversation_id, role, content, tool_calls, tool_call_id)?;
+        let (id, created_at) = self.sqlite.save_full_message(
+            conversation_id,
+            role,
+            content,
+            tool_calls,
+            tool_call_id,
+        )?;
         if let Some(text) = content {
-            self.tantivy.add_document(conversation_id, role, text)?;
+            self.tantivy
+                .add_document(conversation_id, role, text, &id, &created_at)?;
         }
         Ok(())
+    }
+
+    pub fn index_existing_message(
+        &self,
+        conversation_id: &str,
+        role: &str,
+        content: &str,
+        message_id: &str,
+        created_at: &str,
+    ) -> Result<()> {
+        self.tantivy
+            .add_document(conversation_id, role, content, message_id, created_at)
+    }
+
+    pub fn clear_search_index(&self) -> Result<()> {
+        self.tantivy.clear_index()
     }
 
     pub fn search(&self, query: &str) -> Result<Vec<(String, String)>> {

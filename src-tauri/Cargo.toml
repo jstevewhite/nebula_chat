@@ -34,4 +34,6 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 tantivy = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 tiktoken-rs = "0.5"
-
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+keyring = "2"

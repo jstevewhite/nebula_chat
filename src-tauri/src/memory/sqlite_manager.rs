@@ -100,34 +100,39 @@ impl SqliteManager {
         content: Option<&str>,
         tool_calls: Option<&str>,
         tool_call_id: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<(String, String)> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let created_at = chrono::Utc::now().to_rfc3339();
         self.conn.execute(
             "INSERT INTO messages (id, conversation_id, role, content, tool_calls, tool_call_id, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
-                uuid::Uuid::new_v4().to_string(),
+                id,
                 conversation_id,
                 role,
                 content,
                 tool_calls,
-                tool_call_id
+                tool_call_id,
+                created_at
             ],
         )?;
-        Ok(())
+        Ok((id, created_at))
     }
 
-    pub fn save_message(&self, conversation_id: &str, role: &str, content: &str) -> Result<()> {
+    pub fn save_message(
+        &self,
+        conversation_id: &str,
+        role: &str,
+        content: &str,
+    ) -> Result<(String, String)> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let created_at = chrono::Utc::now().to_rfc3339();
         self.conn.execute(
             "INSERT INTO messages (id, conversation_id, role, content, created_at)
-             VALUES (?1, ?2, ?3, ?4, datetime('now'))",
-            params![
-                uuid::Uuid::new_v4().to_string(),
-                conversation_id,
-                role,
-                content
-            ],
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, conversation_id, role, content, created_at],
         )?;
-        Ok(())
+        Ok((id, created_at))
     }
 
     pub fn save_message_with_timestamp(
@@ -136,19 +141,14 @@ impl SqliteManager {
         role: &str,
         content: &str,
         timestamp: &str,
-    ) -> Result<()> {
+    ) -> Result<(String, String)> {
+        let id = uuid::Uuid::new_v4().to_string();
         self.conn.execute(
             "INSERT INTO messages (id, conversation_id, role, content, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                uuid::Uuid::new_v4().to_string(),
-                conversation_id,
-                role,
-                content,
-                timestamp
-            ],
+            params![id, conversation_id, role, content, timestamp],
         )?;
-        Ok(())
+        Ok((id, timestamp.to_string()))
     }
 
     pub fn get_message_count(&self, conversation_id: &str) -> Result<usize> {

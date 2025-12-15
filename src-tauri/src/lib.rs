@@ -1,6 +1,7 @@
 use crate::llm::openai::OpenAiProvider;
 use crate::llm::provider::{Attachment, GenerationOptions, LlmProvider, Message};
-use crate::mcp::config::{McpServerConfig, ModelConfig, ProviderType, Settings};
+use crate::mcp::config::Settings;
+use crate::mcp::config::{McpServerConfig, ModelConfig, ProviderType};
 use crate::mcp::manager::McpManager;
 use std::sync::Arc;
 use tauri::{Manager, State};
@@ -12,11 +13,13 @@ use crate::llm::ollama::OllamaProvider;
 use std::collections::HashMap;
 
 pub mod llm;
+pub use llm::capabilities;
 pub mod mcp;
 pub mod memory;
+use crate::memory::maintenance::rebuild_memory_index;
 
 #[derive(Clone)]
-struct AppState {
+pub struct AppState {
     mcp_manager: Arc<McpManager>,
     librarian: Arc<Mutex<crate::memory::librarian::Librarian>>,
     active_task: Arc<Mutex<Option<tokio::task::AbortHandle>>>,
@@ -26,7 +29,7 @@ struct AppState {
 async fn stop_generation(state: State<'_, AppState>) -> Result<(), String> {
     let mut handle_guard = state.active_task.lock().await;
     if let Some(handle) = handle_guard.take() {
-        println!("[Backend] Stopping generation...");
+        tracing::info!("[Backend] Stopping generation...");
         handle.abort();
     }
     Ok(())
@@ -288,6 +291,35 @@ async fn send_message(
                         None
                     };
 
+                    // Phase 1.3: Tool-call integrity check
+                    if last.role == "tool" {
+                        if let Some(tid) = &last.tool_call_id {
+                            // Verify this ID exists in the conversation history
+                            // (In a real implementation we would query the DB or check the `messages` vec)
+                            // For now, we rely on the frontend sending the correct ID, but we could add a check here:
+                            // if !history_contains_tool_call_id(tid) { return Err("Invalid tool_call_id"); }
+
+                            // NOTE: Ideally we check `messages` for a preceding assistant message with this tool_call.id
+                            let valid = messages.iter().any(|m| {
+                                m.role == "assistant"
+                                    && m.tool_calls.as_ref().map_or(false, |tcs| {
+                                        tcs.iter().any(|tc| {
+                                            tc.get("id").and_then(|v| v.as_str()) == Some(tid)
+                                        })
+                                    })
+                            });
+                            if !valid {
+                                tracing::error!("Security: Attempted to submit tool result with invalid tool_call_id: {}", tid);
+                                return Err(format!("Invalid tool_call_id: {}", tid));
+                            }
+                        } else {
+                            tracing::error!(
+                                "Security: Tool message submitted without tool_call_id"
+                            );
+                            return Err("Tool message must have tool_call_id".to_string());
+                        }
+                    }
+
                     // Save full message
                     let _ = lib.save_full_message(
                         conv_id,
@@ -333,12 +365,12 @@ async fn send_message(
                         context_text = format!("Refined Context:\n{}\n", assembled);
                         use tauri::Emitter;
                         if let Err(e) = app_handle.emit("memory-context", &vec![assembled]) {
-                            eprintln!("Failed to emit memory-context: {}", e);
+                            tracing::error!("Failed to emit memory-context: {}", e);
                         }
                     } else {
                         use tauri::Emitter;
                         if let Err(e) = app_handle.emit("memory-context", &memory_list_preview) {
-                            eprintln!("Failed to emit memory-context: {}", e);
+                            tracing::error!("Failed to emit memory-context: {}", e);
                         }
 
                         context_text = "Relevant Memories:\n".to_string();
@@ -368,11 +400,11 @@ async fn send_message(
         }
 
         // Inject System Prompt
-        println!("[DEBUG] Loading settings for system prompt...");
+        tracing::debug!("[DEBUG] Loading settings for system prompt...");
 
         if let Some(active_id) = settings.active_system_prompt_id {
             if let Some(prompt) = settings.system_prompts.iter().find(|p| p.id == active_id) {
-                println!("[DEBUG] Injecting system prompt: {}", prompt.name);
+                tracing::debug!("[DEBUG] Injecting system prompt: {}", prompt.name);
                 final_messages.insert(
                     0,
                     Message {
@@ -387,22 +419,41 @@ async fn send_message(
             }
         }
 
-        println!("[DEBUG] Getting tools from MCP Manager...");
+        tracing::debug!("[DEBUG] Getting tools from MCP Manager...");
         let all_tools = state.mcp_manager.get_all_tools().await;
 
         let tools: Vec<_> = all_tools
             .into_iter()
             .filter(|t| !settings.disabled_tools.contains(&t.name))
             .collect();
-        println!("[DEBUG] Final tool count: {}", tools.len());
+        tracing::debug!("[DEBUG] Final tool count: {}", tools.len());
 
-        // Select Provider
-        println!("[DEBUG] select provider config for '{}'", provider_id);
-        let provider_config = settings
-            .providers
-            .get(&provider_id)
-            .ok_or_else(|| format!("Provider '{}' not found in settings", provider_id))?;
+        // Phase 1.4: Streaming parity safety
+        // Check capabilities
+        let provider_type = match provider_id.as_str() {
+            "openai" => ProviderType::OpenAI,
+            "anthropic" => ProviderType::Anthropic,
+            "ollama" => ProviderType::Ollama,
+            _ => ProviderType::OpenAICompatible,
+        };
 
+        let caps = crate::llm::capabilities::get_capabilities(&provider_type, &model);
+
+        // If streaming is requested but not supported for tools, and we have tools, force stream=false
+        let mut effective_stream = stream;
+        if stream && !caps.supports_streaming_tools && !tools.is_empty() {
+            tracing::warn!(
+                "Provider {:?} does not support streaming with tools. Forcing non-streaming.",
+                provider_type
+            );
+            effective_stream = false;
+        }
+
+        // 5. Instantiate Provider
+        let provider_config = settings.providers.get(&provider_id).ok_or_else(|| {
+            tracing::error!("Provider not found in settings: {}", provider_id);
+            format!("Provider {} not found in settings", provider_id)
+        })?;
         if !provider_config.enabled {
             return Err(format!("Provider '{}' is disabled", provider_id));
         }
@@ -410,7 +461,7 @@ async fn send_message(
         // Prune context
         let pruned_messages =
             ContextManager::prune_messages(final_messages, 64000).map_err(|e| e.to_string())?;
-        println!("[DEBUG] Messages pruned. Calling provider...");
+        tracing::debug!("[DEBUG] Messages pruned. Calling provider...");
 
         let options = Some(GenerationOptions {
             temperature,
@@ -423,7 +474,7 @@ async fn send_message(
             use tauri::Emitter;
             // Emit standard stream chunk event
             if let Err(e) = app_handle_for_stream.emit("stream-chunk", &token) {
-                eprintln!("Failed to emit stream chunk: {}", e);
+                tracing::error!("Failed to emit stream chunk: {}", e);
             }
         });
 
@@ -437,7 +488,7 @@ async fn send_message(
                 };
                 let provider = OpenAiProvider::new(api_key, base_url, model.clone());
 
-                if stream {
+                if effective_stream {
                     provider
                         .stream(pruned_messages, tools, options, on_token)
                         .await
@@ -449,7 +500,7 @@ async fn send_message(
                 let api_key = provider_config.api_key.clone().unwrap_or_default();
                 let provider = AnthropicProvider::new(api_key, model.clone());
 
-                if stream {
+                if effective_stream {
                     provider
                         .stream(pruned_messages, tools, options, on_token)
                         .await
@@ -464,7 +515,7 @@ async fn send_message(
                     .unwrap_or("http://localhost:11434".to_string());
                 let provider = OllamaProvider::new(base_url, model.clone());
 
-                if stream {
+                if effective_stream {
                     provider
                         .stream(pruned_messages, tools, options, on_token)
                         .await
@@ -506,7 +557,7 @@ async fn send_message(
                 )
                 .await
                 {
-                    eprintln!("Pruning Error: {}", e);
+                    tracing::error!("Pruning Error: {}", e);
                 }
             });
         }
@@ -930,7 +981,7 @@ async fn attempt_pruning(
                         .map_err(|e| e.to_string())?;
                     lib.delete_messages(&ids_to_delete)
                         .map_err(|e| e.to_string())?;
-                    println!("Pruning complete. Summarized {} messages.", prune_count);
+                    tracing::debug!("Pruned {} messages.", prune_count);
                 }
             }
             Err(e) => return Err(e.to_string()),
@@ -1127,7 +1178,7 @@ pub fn run() {
             let manager = mcp_manager.clone();
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = manager.initialize(settings).await {
-                    eprintln!("Failed to initialize from settings: {}", e);
+                    tracing::error!("Failed to initialize from settings: {}", e);
                 }
             });
             Ok(())
@@ -1156,9 +1207,10 @@ pub fn run() {
             get_system_prompts,
             save_system_prompt,
             delete_system_prompt,
-            delete_system_prompt,
             set_active_system_prompt,
-            stop_generation
+            set_active_system_prompt,
+            stop_generation,
+            rebuild_memory_index
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

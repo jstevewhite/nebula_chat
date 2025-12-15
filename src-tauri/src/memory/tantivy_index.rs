@@ -18,12 +18,32 @@ impl TantivyIndex {
         schema_builder.add_text_field("conversation_id", STRING | STORED);
         schema_builder.add_text_field("role", STRING | STORED);
         schema_builder.add_text_field("content", TEXT | STORED);
+        schema_builder.add_text_field("message_id", STRING | STORED);
+        schema_builder.add_text_field("created_at", STRING | STORED);
         let schema = schema_builder.build();
 
-        let index = Index::open_or_create(
+        let index = match Index::open_or_create(
             tantivy::directory::MmapDirectory::open(index_path)?,
             schema.clone(),
-        )?;
+        ) {
+            Ok(index) => index,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to open index (likely schema mismatch). Recreating: {}",
+                    e
+                );
+                // Remove all files in the directory
+                for entry in std::fs::read_dir(index_path)? {
+                    let entry = entry?;
+                    let path = entry.path();
+                    if path.is_file() {
+                        std::fs::remove_file(path)?;
+                    }
+                }
+                // Try again
+                Index::create_in_dir(index_path, schema.clone())?
+            }
+        };
 
         // Reader
         let reader = index
@@ -34,18 +54,29 @@ impl TantivyIndex {
         Ok(Self { index, reader })
     }
 
-    pub fn add_document(&self, conversation_id: &str, role: &str, content: &str) -> Result<()> {
-        let mut index_writer = self.index.writer(50_000_000)?;
+    pub fn add_document(
+        &self,
+        conversation_id: &str,
+        role: &str,
+        content: &str,
+        message_id: &str,
+        created_at: &str,
+    ) -> Result<()> {
+        let mut index_writer = self.index.writer::<TantivyDocument>(50_000_000)?;
 
         let schema = self.index.schema();
         let conv_id = schema.get_field("conversation_id").expect("schema");
         let role_field = schema.get_field("role").expect("schema");
         let content_field = schema.get_field("content").expect("schema");
+        let msg_id_field = schema.get_field("message_id").expect("schema");
+        let created_at_field = schema.get_field("created_at").expect("schema");
 
         index_writer.add_document(doc!(
             conv_id => conversation_id,
             role_field => role,
-            content_field => content
+            content_field => content,
+            msg_id_field => message_id,
+            created_at_field => created_at
         ))?;
 
         index_writer.commit()?;
@@ -79,5 +110,33 @@ impl TantivyIndex {
         }
 
         Ok(results)
+    }
+    pub fn delete_by_message_id(&self, message_id: &str) -> Result<()> {
+        let mut index_writer = self.index.writer::<TantivyDocument>(50_000_000)?;
+        let schema = self.index.schema();
+        let msg_id_field = schema.get_field("message_id").expect("schema");
+        let term = tantivy::Term::from_field_text(msg_id_field, message_id);
+        index_writer.delete_term(term);
+        index_writer.commit()?;
+        self.reader.reload()?;
+        Ok(())
+    }
+
+    pub fn delete_by_conversation_id(&self, conversation_id: &str) -> Result<()> {
+        let mut index_writer = self.index.writer::<TantivyDocument>(50_000_000)?;
+        let schema = self.index.schema();
+        let conv_id_field = schema.get_field("conversation_id").expect("schema");
+        let term = tantivy::Term::from_field_text(conv_id_field, conversation_id);
+        index_writer.delete_term(term);
+        index_writer.commit()?;
+        self.reader.reload()?;
+        Ok(())
+    }
+    pub fn clear_index(&self) -> Result<()> {
+        let mut index_writer = self.index.writer::<TantivyDocument>(50_000_000)?;
+        index_writer.delete_all_documents()?;
+        index_writer.commit()?;
+        self.reader.reload()?;
+        Ok(())
     }
 }
