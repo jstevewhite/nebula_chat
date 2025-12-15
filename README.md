@@ -67,30 +67,29 @@ graph TD
 - **System Dependencies**: Standard Tauri prerequisites (e.g., `libwebkit2gtk-4.0-dev`, `build-essential`, etc. on Linux).
 
 ### Installation
-
 1. **Clone the repository:**
    ```bash
    git clone https://github.com/jstevewhite/nebula_chat.git
-   cd nebula
+   cd nebula_chat
    ```
-
-2. **Install frontend dependencies:**
+2. **Install dependencies:**
    ```bash
-   npm install
+   npm ci
    ```
-
-3. **Run the development application:**
+   If you don’t have a lockfile yet, you can use `npm install` instead.
+3. **Run the development application (Vite + Tauri):**
    ```bash
    npm run tauri dev
    ```
-**NB** If you're on a linux nvidia machine, you may need to run `WEBKIT_DISABLE_DMABUF_RENDERER=1 npm run tauri dev` to avoid issues with the webview.
+   **NB** On Linux + NVIDIA, you may need:
+   `WEBKIT_DISABLE_DMABUF_RENDERER=1 npm run tauri dev`
 
 ## Configuration
+Nebula uses a `settings.json` file stored in your system’s app config directory. You can configure providers, models, memory, and MCP servers in the UI (recommended) or by editing the file.
 
-Nebula uses a `settings.json` file located in your system's application data directory. You can configure providers and MCP servers directly via the UI or by editing this file.
+Provider credentials can be set in `settings.json` *or* via environment variables (e.g. `NEBULA_OPENAI_KEY`, `NEBULA_ANTHROPIC_KEY`).
 
-### Valid `settings.json` Example:
-
+### Valid `settings.json` Example
 ```json
 {
   "providers": {
@@ -105,12 +104,17 @@ Nebula uses a `settings.json` file located in your system's application data dir
       "provider_type": "Ollama"
     }
   },
+  "memory_enabled": true,
+  "context_turns": 0,
   "mcp_servers": {
     "filesystem": {
       "type": "Stdio",
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/workspace"],
-      "enabled": true
+      "enabled": true,
+      "env": {
+        "SOME_FLAG": "1"
+      }
     },
     "remote-server": {
       "type": "Sse",
@@ -120,6 +124,11 @@ Nebula uses a `settings.json` file located in your system's application data dir
   }
 }
 ```
+
+Notes:
+- `memory_enabled`: master toggle for long‑term memory retrieval/injection.
+- `context_turns`: number of recent conversation turns (user/assistant) that are explicitly included during context assembly (0 disables the feature).
+- `mcp_servers.*.env`: optional environment variables for `Stdio` MCP servers (same format as `process.env`).
 
 ## Tech Stack
 
