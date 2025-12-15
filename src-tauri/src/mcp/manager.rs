@@ -196,6 +196,15 @@ impl McpManager {
         all_tools
     }
 
+    pub async fn get_server_for_tool(&self, tool_name: &str) -> Option<String> {
+        let parts: Vec<&str> = tool_name.splitn(2, "__").collect();
+        if parts.len() == 2 {
+            Some(parts[0].to_string())
+        } else {
+            None
+        }
+    }
+
     pub async fn call_tool(
         &self,
         name: &str,

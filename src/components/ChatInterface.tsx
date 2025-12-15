@@ -352,17 +352,23 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             } else {
                 setLoading(false);
             }
-        } catch (error) {
+        } catch (error: any) {
             console.error(error);
             setLoading(false);
-            if (String(error).includes("cancelled")) {
-                // If cancelled, we might want to keep the partial streamed content?
-                // Currently backend returns error, but we have partial content in state.
-                // We could just leave it as is or mark it as "Cancelled".
-                // For now, simple return, leaving partial content visible.
+
+            const errStr = String(error);
+            if (errStr.includes("cancelled")) {
                 return;
             }
-            setErrorMsg(String(error));
+
+            // Handle Permission Denials nicely
+            if (errStr.includes("denylist") || errStr.includes("allowlist")) {
+                setErrorMsg("Tool Execution Denied: " + errStr);
+                // Optionally add a system message to chat history so the LLM knows?
+                // For now just show error toast.
+            } else {
+                setErrorMsg(errStr);
+            }
         }
     };
 
@@ -407,11 +413,24 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
             // Continue conversation
             await sendMessage(newHistory);
-        } catch (e) {
+        } catch (e: any) {
             console.error(e);
             setLoading(false);
-            setPendingTool(null); // Or show error
-            setErrorMsg("Tool Execution Failed: " + String(e));
+            setPendingTool(null);
+
+            const errStr = String(e);
+            if (errStr.includes("denylist") || errStr.includes("allowlist")) {
+                setErrorMsg("Tool Execution Denied: " + errStr);
+                // Add a "Tool Error" message to history so user sees it failed
+                const errorMsg: Message = {
+                    role: "tool",
+                    content: JSON.stringify({ error: errStr }),
+                    tool_call_id: pendingTool.callId
+                };
+                setMessages([...messages, errorMsg]);
+            } else {
+                setErrorMsg("Tool Execution Failed: " + errStr);
+            }
         }
     };
 

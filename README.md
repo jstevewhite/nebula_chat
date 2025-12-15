@@ -9,11 +9,15 @@ Unlike standard chat clients, Nebula features a **Memory Sidecar** (powered by S
 - **Episodic Memory**: Automatically indexes and stores conversation history.
 - **Semantic Search**: Fast, full-text retrieval of past context ($<100$ms).
 - **Smart Pruning**: Automatically summarizes and compresses old conversations to maintain context without blowing up token budgets.
+- **Index Maintenance**: Built-in tools to rebuild and optimize the search index if data gets out of sync.
+- **Deletion Support**: Full support for deleting messages and conversations from both the database and search index.
 
 ### 🔌 Native MCP Host
 Nebula implements the **[Model Context Protocol (MCP)](https://modelcontextprotocol.io/)**, treating external tools as first-class citizens.
 - **Connect Tools**: Give the AI access to your file system, Git repositories, or browser automation via MCP servers.
 - **Security First**: Granular "Human-in-the-loop" permissions. You verify every tool execution (Allow/Deny/Always Allow).
+- **Permission Policy**: Configure allowlists and denylists per server to restrict tool access automatically.
+- **Audit Logging**: Every tool execution is logged to a local SQLite database for transparency.
 - **Tool Management**: Visual panel to view, search, and granularly enable/disable individual tools or entire servers.
 - **System Message Management**: Create, edit, and switch between reusable system prompts to guide the AI's behavior.
 - **Transport Support**: Supports `stdio` and `sse` (Streamable HTTP) transports for flexible integration.

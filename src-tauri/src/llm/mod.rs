@@ -6,3 +6,4 @@ pub mod ollama;
 pub mod openai;
 pub mod provider;
 pub mod tokenizer;
+pub mod tool_shaping;

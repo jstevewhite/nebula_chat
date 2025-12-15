@@ -15,12 +15,22 @@ pub enum McpTransport {
     },
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct ServerPermissions {
+    #[serde(default)]
+    pub allowlist: Vec<String>,
+    #[serde(default)]
+    pub denylist: Vec<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct McpServerConfig {
     #[serde(flatten)]
     pub transport: McpTransport,
     #[serde(default)]
     pub auto_approve: bool,
+    #[serde(default)]
+    pub permissions: ServerPermissions,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -233,6 +243,7 @@ impl Settings {
                                 env,
                             },
                             auto_approve,
+                            permissions: ServerPermissions::default(),
                         };
                         s.mcp_servers.insert(name.clone(), config);
                     }

@@ -20,7 +20,21 @@ const MIGRATIONS: &[Migration] = &[
         description: "Add `metadata` column to messages table",
         sql: "ALTER TABLE messages ADD COLUMN metadata TEXT;",
     },
-    // Future migrations can be added here.
+    Migration {
+        version: 2,
+        description: "Create `tool_executions` table",
+        sql: "CREATE TABLE IF NOT EXISTS tool_executions (
+            id TEXT PRIMARY KEY,
+            conversation_id TEXT,
+            tool_name TEXT,
+            server_name TEXT,
+            args_json TEXT,
+            result_preview TEXT,
+            result_full_json TEXT,
+            status TEXT,
+            created_at TEXT
+        );",
+    },
 ];
 
 /// Ensure the `migrations` table exists.
