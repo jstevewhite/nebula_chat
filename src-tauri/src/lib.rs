@@ -917,7 +917,11 @@ async fn add_mcp_server(
         .mcp_manager
         .initialize(runtime_config)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    use tauri::Emitter;
+    let _ = app.emit("tools-updated", ());
+    Ok(())
 }
 
 #[tauri::command]
@@ -946,7 +950,11 @@ async fn edit_mcp_server(
         .mcp_manager
         .restart_server(original_name, new_config)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    use tauri::Emitter;
+    let _ = app.emit("tools-updated", ());
+    Ok(())
 }
 
 #[tauri::command]
@@ -967,6 +975,9 @@ async fn delete_mcp_server(
 
     // Remove from runtime (best-effort; may not kill an external stdio process today).
     state.mcp_manager.remove_server(&name).await;
+
+    use tauri::Emitter;
+    let _ = app.emit("tools-updated", ());
 
     Ok(())
 }
@@ -1332,7 +1343,11 @@ async fn toggle_tool(
         }
     }
 
-    settings.save(&settings_path).map_err(|e| e.to_string())
+    settings.save(&settings_path).map_err(|e| e.to_string())?;
+
+    use tauri::Emitter;
+    let _ = app.emit("tools-updated", ());
+    Ok(())
 }
 
 #[tauri::command]
@@ -1360,7 +1375,11 @@ async fn toggle_tool_list(
         }
     }
 
-    settings.save(&settings_path).map_err(|e| e.to_string())
+    settings.save(&settings_path).map_err(|e| e.to_string())?;
+
+    use tauri::Emitter;
+    let _ = app.emit("tools-updated", ());
+    Ok(())
 }
 
 #[tauri::command]
@@ -1468,6 +1487,11 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     if let Err(e) = mcp_manager.initialize(settings).await {
                         eprintln!("Failed to initialize MCP servers: {}", e);
+                    }
+                    // Emit event to notify UI that tools (and servers) are ready
+                    use tauri::Emitter;
+                    if let Err(e) = app_handle.emit("tools-updated", ()) {
+                        eprintln!("Failed to emit tools-updated: {}", e);
                     }
                 });
             });
