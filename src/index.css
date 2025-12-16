@@ -4,3 +4,9 @@
 :root {
   font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
 }
+
+/* Force options to use theme colors, fixing dark dropdowns in light mode */
+option {
+  background-color: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+}

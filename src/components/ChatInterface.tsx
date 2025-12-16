@@ -11,7 +11,7 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import remarkGfm from 'remark-gfm';
 import MemoryPanel from "./MemoryPanel";
 import { getProviderIcon } from "../utils/providerIcons";
-import { useTheme } from "../contexts/ThemeContext";
+import { CustomSelect } from "./ui/CustomSelect";
 
 interface ToolCall {
     id: string;
@@ -59,8 +59,7 @@ interface GenerationSettings {
 }
 
 export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
-    const { theme } = useTheme();
-    const colorScheme = theme === 'light' || theme === 'solarized-light' ? 'light' : 'dark';
+    // const { theme } = useTheme(); // Unused
 
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState("");
@@ -728,34 +727,37 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             <div className="p-4 bg-[var(--color-bg-secondary)] border-b border-[var(--color-border-primary)] flex justify-between items-center shadow-md z-10 relative">
                 <div className="flex items-center gap-3">
                     <div className="w-3 h-3 rounded-full bg-green-500 animate-pulse box-shadow-lg shadow-green-500/50" />
-                    <select
-                        value={selectedModel}
-                        onChange={(e) => setSelectedModel(e.target.value)}
-                        className="bg-[var(--color-bg-tertiary)] text-[var(--color-text-primary)] text-sm rounded-lg border border-[var(--color-border-secondary)] focus:ring-blue-500 focus:border-blue-500 block p-2.5 font-medium max-w-[200px] chat-model-dropdown"
-                        style={{ colorScheme }}
-                    >
-                        {availableModels.length === 0 && <option disabled>No enabled models</option>}
-                        {availableModels.map(m => (
-                            <option key={`${m.providerId}::${m.id}`} value={`${m.providerId}::${m.id}`}>
-                                {getProviderIcon(m.providerType, m.providerId)} {m.name}
-                            </option>
-                        ))}
-                    </select>
+                    <div className="w-[200px]">
+                        <CustomSelect
+                            value={selectedModel}
+                            onChange={(val) => setSelectedModel(val)}
+                            options={availableModels.map(m => ({
+                                id: `${m.providerId}::${m.id}`,
+                                label: m.name,
+                                value: `${m.providerId}::${m.id}`,
+                                icon: getProviderIcon(m.providerType, m.providerId)
+                            }))}
+                            placeholder={availableModels.length === 0 ? "No enabled models" : "Select Model"}
+                            disabled={availableModels.length === 0}
+                        />
+                    </div>
 
                     {/* Prompt Selector */}
                     <div className="flex items-center gap-1 border-l border-[var(--color-border-secondary)] pl-3">
                         <Book size={16} className="text-[var(--color-text-secondary)]" />
-                        <select
+                        <CustomSelect
                             value={selectedPromptId}
-                            onChange={(e) => handleSetPrompt(e.target.value)}
-                            className="bg-[var(--color-bg-tertiary)] text-[var(--color-text-primary)] text-sm rounded-lg border border-[var(--color-border-secondary)] focus:ring-blue-500 focus:border-blue-500 block p-2.5 font-medium max-w-[150px] chat-prompt-dropdown"
-                            style={{ colorScheme }}
-                        >
-                            <option value="">Default System</option>
-                            {prompts.map(p => (
-                                <option key={p.id} value={p.id}>{p.name}</option>
-                            ))}
-                        </select>
+                            onChange={(val) => handleSetPrompt(val)}
+                            options={[
+                                { id: "default", label: "Default System", value: "" },
+                                ...prompts.map(p => ({
+                                    id: p.id,
+                                    label: p.name,
+                                    value: p.id
+                                }))
+                            ]}
+                            className="w-[150px]"
+                        />
                     </div>
 
 
