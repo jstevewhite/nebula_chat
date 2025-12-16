@@ -4,7 +4,6 @@ use crate::mcp::config::Settings;
 use crate::mcp::config::{McpServerConfig, ModelConfig, ProviderType};
 use crate::mcp::manager::McpManager;
 use crate::memory::tantivy_index::SearchResult;
-use crate::memory::MemoryHit;
 use anyhow::Result;
 use std::sync::Arc;
 use tauri::{Manager, State};
@@ -370,56 +369,47 @@ async fn send_message(
         let settings_path = config_dir.join("settings.json");
         let settings = Settings::load_migrated(&settings_path);
 
-        // Retrieve Context (Long-term memory)
+        // Retrieve Context (Long-term memory) via Strategist Orchestrator
         let mut context_text = String::new();
         if settings.memory_enabled && !query.is_empty() {
-            let lib = state.librarian.lock().await;
-            if let Ok(results) = lib.search(&query) {
-                if !results.is_empty() {
-                    // Convert SearchResults to MemoryHits (with snippet truncation)
-                    let memory_hits: Vec<MemoryHit> = results
-                        .into_iter()
-                        .map(|res| MemoryHit::from_search_result_default(res))
-                        .collect();
+            // Use strategist orchestrator for intelligent context assembly
+            match crate::memory::StrategistMemoryOrchestrator::assemble_context(
+                &query,
+                &messages,
+                state.librarian.clone(),
+                settings.context_turns,
+                settings.context_model.as_deref(),
+                &settings,
+            )
+            .await
+            {
+                Ok(result) => {
+                    if !result.context_text.is_empty() {
+                        context_text = format!("Refined Context:\n{}\n", result.context_text);
 
-                    // Emit new structured memory-hits event
-                    use tauri::Emitter;
-                    if let Err(e) = app_handle.emit("memory-hits", &memory_hits) {
-                        tracing::error!("Failed to emit memory-hits: {}", e);
-                    }
-
-                    if let Some(ctx_model) = &settings.context_model {
-                        let assembled = crate::llm::context_assembler::ContextAssembler::assemble(
-                            &query,
-                            &memory_hits,
-                            &messages,
-                            settings.context_turns,
-                            ctx_model,
-                            &settings,
-                        )
-                        .await
-                        .unwrap_or_else(|_| {
-                            memory_hits.iter().map(|h| h.snippet.clone()).collect::<Vec<_>>().join("\n")
-                        });
-
-                        context_text = format!("Refined Context:\n{}\n", assembled);
-
-                        // Emit legacy memory-context event for backward compatibility
-                        if let Err(e) = app_handle.emit("memory-context", &vec![assembled.clone()]) {
-                            tracing::error!("Failed to emit memory-context: {}", e);
-                        }
-                    } else {
-                        // Emit legacy memory-context event with snippets
-                        let snippets: Vec<String> = memory_hits.iter().map(|h| h.snippet.clone()).collect();
-                        if let Err(e) = app_handle.emit("memory-context", &snippets) {
+                        // Emit memory-context event for UI
+                        use tauri::Emitter;
+                        if let Err(e) = app_handle.emit("memory-context", &vec![result.context_text.clone()]) {
                             tracing::error!("Failed to emit memory-context: {}", e);
                         }
 
-                        context_text = "Relevant Memories:\n".to_string();
-                        for hit in &memory_hits {
-                            context_text.push_str(&format!("- {}\n", hit.snippet));
+                        // Emit memory-hits event with selected IDs (for debugging/UI)
+                        if let Err(e) = app_handle.emit("memory-selected-ids", &result.selected_message_ids) {
+                            tracing::error!("Failed to emit memory-selected-ids: {}", e);
+                        }
+
+                        // Log search plan if present (for debugging)
+                        if let Some(plan) = &result.search_plan {
+                            tracing::debug!("Strategist plan: {} queries", plan.queries.len());
+                            if let Some(notes) = &plan.notes {
+                                tracing::debug!("Plan notes: {}", notes);
+                            }
                         }
                     }
+                }
+                Err(e) => {
+                    tracing::error!("Strategist memory assembly failed: {}", e);
+                    // Continue without memory context rather than failing the entire request
                 }
             }
         }
