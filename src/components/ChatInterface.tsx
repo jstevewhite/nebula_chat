@@ -1027,7 +1027,7 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
         if (m.role === "user") return <div className="w-8 h-8 rounded-full bg-orange-500 flex items-center justify-center text-[var(--color-text-primary)]"><span className="text-xs font-bold">U</span></div>;
         if (m.role === "assistant") return <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-[var(--color-text-primary)]"><Brain size={16} /></div>;
         if (m.role === "tool") return <div className="w-8 h-8 rounded-full bg-yellow-600 flex items-center justify-center text-[var(--color-text-primary)]"><Terminal size={14} /></div>;
-        return <div className="w-8 h-8 rounded-full bg-gray-600 flex items-center justify-center text-[var(--color-text-primary)]"><span className="text-xs">?</span></div>;
+        return <div className="w-8 h-8 rounded-full bg-[var(--color-bg-tertiary)] flex items-center justify-center text-[var(--color-text-primary)]"><span className="text-xs">?</span></div>;
     };
 
     return (
@@ -1048,8 +1048,8 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
 
                     {/* Message Body */}
                     <div className={`${m.role === "user"
-                        ? "bg-[var(--color-bg-tertiary)] text-gray-100 rounded-2xl px-5 py-2.5 inline-block self-start border border-[var(--color-border-secondary)]/50"
-                        : "text-gray-200 pl-0"
+                        ? "bg-[var(--color-bg-tertiary)] text-[var(--color-text-primary)] rounded-2xl px-5 py-2.5 inline-block self-start border border-[var(--color-border-secondary)]/50"
+                        : "text-[var(--color-text-primary)] pl-0"
                         }`}
                     >
                         {/* Attachments */}
@@ -1097,7 +1097,7 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
                                     </pre>
                                 ) : (
                                     displayContent && (
-                                        <div className={`prose prose-invert max-w-none prose-p:leading-relaxed prose-pre:bg-[#0d1117] prose-pre:rounded-lg prose-pre:border prose-pre:border-[var(--color-border-primary)]`}>
+                                        <div className={`prose max-w-none prose-p:leading-relaxed prose-pre:bg-[var(--color-bg-tertiary)] prose-pre:rounded-lg prose-pre:border prose-pre:border-[var(--color-border-primary)]`}>
                                             <ReactMarkdown
                                                 remarkPlugins={[remarkGfm]}
                                                 components={{
@@ -1131,14 +1131,14 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
                                                                     style={vscDarkPlus}
                                                                     language={match[1]}
                                                                     PreTag="div"
-                                                                    customStyle={{ margin: 0, padding: '1rem', background: '#0d1117', fontSize: '14px' }}
+                                                                    customStyle={{ margin: 0, padding: '1rem', background: 'var(--color-bg-primary)', fontSize: '14px' }}
                                                                     {...props}
                                                                 >
                                                                     {codeText}
                                                                 </SyntaxHighlighter>
                                                             </div>
                                                         ) : (
-                                                            <code className={`${className} bg-[var(--color-bg-tertiary)] px-1.5 py-0.5 rounded text-[0.9em] font-mono text-gray-200 border border-[var(--color-border-secondary)]/50`} {...props}>
+                                                            <code className={`${className} bg-[var(--color-bg-tertiary)] px-1.5 py-0.5 rounded text-[0.9em] font-mono text-[var(--color-text-primary)] border border-[var(--color-border-secondary)]/50`} {...props}>
                                                                 {children}
                                                             </code>
                                                         )
