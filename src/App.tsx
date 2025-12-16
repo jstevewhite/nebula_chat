@@ -54,7 +54,7 @@ export default function App() {
 
         <button
           onClick={() => setActiveTab("chat")}
-          className={`p-3 rounded-xl transition-all duration-200 ${activeTab === "chat" ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20" : "text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text-secondary)]"}`}
+          className={`p-3 rounded-xl transition-all duration-200 ${activeTab === "chat" ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20" : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text-primary)]"}`}
           title="Chat"
         >
           <MessageSquare size={20} />
@@ -62,7 +62,7 @@ export default function App() {
 
         <button
           onClick={() => setShowTools(!showTools)}
-          className={`p-3 rounded-xl transition-all duration-200 ${showTools && activeTab === "chat" ? "bg-[var(--color-bg-secondary)] text-[var(--color-accent-secondary)]" : "text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text-secondary)]"}`}
+          className={`p-3 rounded-xl transition-all duration-200 ${showTools && activeTab === "chat" ? "bg-[var(--color-bg-secondary)] text-[var(--color-accent-secondary)]" : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text-primary)]"}`}
           title="Tools"
         >
           <Wrench size={20} />
@@ -72,7 +72,7 @@ export default function App() {
 
         <button
           onClick={() => setActiveTab("settings")}
-          className={`p-3 rounded-xl transition-all duration-200 ${activeTab === "settings" ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20" : "text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text-secondary)]"}`}
+          className={`p-3 rounded-xl transition-all duration-200 ${activeTab === "settings" ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20" : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text-primary)]"}`}
           title="Settings"
         >
           <Settings size={20} />

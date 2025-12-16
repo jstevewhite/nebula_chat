@@ -67,12 +67,12 @@
   /* Solarized Light palette */
   --color-bg-primary: #fdf6e3;
   --color-bg-secondary: #eee8d5;
-  --color-bg-tertiary: #93a1a1;
+  --color-bg-tertiary: #d3cbb7;
   --color-bg-elevated: #fffbf0;
 
-  --color-text-primary: #657b83;
-  --color-text-secondary: #839496;
-  --color-text-tertiary: #93a1a1;
+  --color-text-primary: #073642;
+  --color-text-secondary: #586e75;
+  --color-text-tertiary: #839496;
 
   --color-border-primary: #d3cbb7;
   --color-border-secondary: #bdb5a1;
@@ -98,11 +98,11 @@
   /* Solarized Dark palette */
   --color-bg-primary: #002b36;
   --color-bg-secondary: #073642;
-  --color-bg-tertiary: #586e75;
+  --color-bg-tertiary: #0a3f4d;
   --color-bg-elevated: #0a3948;
 
-  --color-text-primary: #839496;
-  --color-text-secondary: #93a1a1;
+  --color-text-primary: #93a1a1;
+  --color-text-secondary: #839496;
   --color-text-tertiary: #657b83;
 
   --color-border-primary: #0d4b5a;
