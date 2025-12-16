@@ -11,6 +11,7 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import remarkGfm from 'remark-gfm';
 import MemoryPanel from "./MemoryPanel";
 import { getProviderIcon } from "../utils/providerIcons";
+import { useTheme } from "../contexts/ThemeContext";
 import { CustomSelect } from "./ui/CustomSelect";
 
 interface ToolCall {
@@ -59,7 +60,7 @@ interface GenerationSettings {
 }
 
 export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
-    // const { theme } = useTheme(); // Unused
+    const { theme } = useTheme();
 
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState("");

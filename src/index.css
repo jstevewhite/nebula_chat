@@ -2,7 +2,39 @@
 @import "./themes.css";
 
 :root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  /* Default fonts - will be overridden by JS */
+  --font-interface: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  --size-interface: 14px;
+  --weight-interface: 400;
+  --font-chat: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  --size-chat: 14px;
+  --weight-chat: 400;
+
+  font-family: var(--font-interface);
+  font-size: var(--size-interface);
+  font-weight: var(--weight-interface);
+}
+
+body {
+  font-family: var(--font-interface);
+  font-size: var(--size-interface);
+  font-weight: var(--weight-interface);
+}
+
+textarea,
+input,
+select,
+button {
+  font-family: var(--font-interface);
+  font-size: var(--size-interface);
+}
+
+/* Specific overrides for Chat Interface content usually happens in the component, 
+   but we can set a helper class here */
+.font-chat {
+  font-family: var(--font-chat) !important;
+  font-size: var(--size-chat) !important;
+  font-weight: var(--weight-chat) !important;
 }
 
 /* Force options to use theme colors, fixing dark dropdowns in light mode */

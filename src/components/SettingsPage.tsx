@@ -5,9 +5,39 @@ import ProvidersSettings, { ProviderConfig } from "./ProvidersSettings";
 import PromptsSettings from "./PromptsSettings";
 import { ThemeSelector } from "./ThemeSelector";
 import { CustomSelect } from "./ui/CustomSelect";
+import { useTheme } from "../contexts/ThemeContext";
+
+const AVAILABLE_FONTS = [
+    { id: "Inter", label: "Inter (Default)", value: "Inter" },
+    { id: "system-ui", label: "System UI", value: "system-ui, -apple-system, sans-serif" },
+    { id: "Roboto", label: "Roboto", value: "Roboto" },
+    { id: "Open Sans", label: "Open Sans", value: "Open Sans" },
+    { id: "Lato", label: "Lato", value: "Lato" },
+    { id: "Montserrat", label: "Montserrat", value: "Montserrat" },
+    { id: "Fira Code", label: "Fira Code (Monospace)", value: "Fira Code, monospace" },
+    { id: "JetBrains Mono", label: "JetBrains Mono (Monospace)", value: "JetBrains Mono, monospace" },
+];
+
+const FONT_SIZES = [
+    { id: "12", label: "12px", value: "12" },
+    { id: "13", label: "13px", value: "13" },
+    { id: "14", label: "14px", value: "14" },
+    { id: "15", label: "15px", value: "15" },
+    { id: "16", label: "16px", value: "16" },
+    { id: "18", label: "18px", value: "18" },
+    { id: "20", label: "20px", value: "20" },
+];
+
+const FONT_WEIGHTS = [
+    { id: "300", label: "Light", value: "300" },
+    { id: "400", label: "Normal", value: "400" },
+    { id: "500", label: "Medium", value: "500" },
+    { id: "600", label: "Semibold", value: "600" },
+    { id: "700", label: "Bold", value: "700" },
+];
 
 export default function SettingsPage() {
-    // const { theme } = useTheme(); // Unused
+    const { fontSettings, setFontSettings } = useTheme();
     // const colorScheme = theme === 'light' || theme === 'solarized-light' ? 'light' : 'dark'; // Unused
 
     const [servers, setServers] = useState<{ name: string, status: 'connected' | 'error' | 'unknown', config: any }[]>([]);
@@ -411,6 +441,69 @@ export default function SettingsPage() {
                     <Palette className="w-5 h-5 text-blue-500" /> Appearance
                 </h3>
                 <ThemeSelector />
+
+                <div className="mt-8 border-t border-[var(--color-border-secondary)] pt-6">
+                    <h3 className="text-lg font-semibold text-[var(--color-text-primary)] mb-4">Typography</h3>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        {/* Interface Font */}
+                        <div className="space-y-4">
+                            <h4 className="font-medium text-[var(--color-text-secondary)]">Interface Font</h4>
+                            <div className="flex gap-2">
+                                <div className="flex-1">
+                                    <CustomSelect
+                                        value={fontSettings.interface_font}
+                                        onChange={(val) => setFontSettings({ ...fontSettings, interface_font: val })}
+                                        options={AVAILABLE_FONTS}
+                                    />
+                                </div>
+                                <div className="w-[100px]">
+                                    <CustomSelect
+                                        value={String(fontSettings.interface_font_size)}
+                                        onChange={(val) => setFontSettings({ ...fontSettings, interface_font_size: Number(val) })}
+                                        options={FONT_SIZES}
+                                    />
+                                </div>
+                                <div className="w-[120px]">
+                                    <CustomSelect
+                                        value={fontSettings.interface_font_weight}
+                                        onChange={(val) => setFontSettings({ ...fontSettings, interface_font_weight: val })}
+                                        options={FONT_WEIGHTS}
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Chat Font */}
+                        <div className="space-y-4">
+                            <h4 className="font-medium text-[var(--color-text-secondary)]">Chat Font</h4>
+                            <div className="flex gap-2">
+                                <div className="flex-1">
+                                    <CustomSelect
+                                        value={fontSettings.chat_font}
+                                        onChange={(val) => setFontSettings({ ...fontSettings, chat_font: val })}
+                                        options={AVAILABLE_FONTS}
+                                    />
+                                </div>
+                                <div className="w-[100px]">
+                                    <CustomSelect
+                                        value={String(fontSettings.chat_font_size)}
+                                        onChange={(val) => setFontSettings({ ...fontSettings, chat_font_size: Number(val) })}
+                                        options={FONT_SIZES}
+                                    />
+                                </div>
+                                <div className="w-[120px]">
+                                    <CustomSelect
+                                        value={fontSettings.chat_font_weight}
+                                        onChange={(val) => setFontSettings({ ...fontSettings, chat_font_weight: val })}
+                                        options={FONT_WEIGHTS}
+                                    />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
             </div>
 
             <h2 className="text-2xl font-bold mb-6 flex items-center gap-2 text-[var(--color-text-primary)]">
