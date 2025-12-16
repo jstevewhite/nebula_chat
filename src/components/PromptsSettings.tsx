@@ -80,12 +80,12 @@ export default function PromptsSettings() {
     };
 
     return (
-        <div className="flex h-[500px] border border-gray-800 rounded-xl overflow-hidden bg-gray-900">
+        <div className="flex h-[500px] border border-[var(--color-border-primary)] rounded-xl overflow-hidden bg-[var(--color-bg-secondary)]">
             {/* Sidebar List */}
-            <div className="w-1/3 border-r border-gray-800 flex flex-col">
-                <div className="p-3 border-b border-gray-800 flex justify-between items-center bg-gray-950">
-                    <span className="font-bold text-gray-400 text-xs uppercase tracking-wider">Prompts</span>
-                    <button onClick={handleNew} className="p-1 hover:bg-gray-800 rounded text-blue-500">
+            <div className="w-1/3 border-r border-[var(--color-border-primary)] flex flex-col">
+                <div className="p-3 border-b border-[var(--color-border-primary)] flex justify-between items-center bg-[var(--color-bg-primary)]">
+                    <span className="font-bold text-[var(--color-text-secondary)] text-xs uppercase tracking-wider">Prompts</span>
+                    <button onClick={handleNew} className="p-1 hover:bg-[var(--color-bg-tertiary)] rounded text-blue-500">
                         <Plus size={16} />
                     </button>
                 </div>
@@ -94,7 +94,7 @@ export default function PromptsSettings() {
                         <div
                             key={p.id}
                             onClick={() => handleSelect(p)}
-                            className={`p-2 rounded cursor-pointer text-sm flex justify-between items-center group transition-colors ${selectedId === p.id ? "bg-blue-600/20 text-blue-400" : "hover:bg-gray-800 text-gray-300"}`}
+                            className={`p-2 rounded cursor-pointer text-sm flex justify-between items-center group transition-colors ${selectedId === p.id ? "bg-blue-600/20 text-blue-400" : "hover:bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)]"}`}
                         >
                             <div className="flex items-center gap-2 truncate">
                                 <Book size={14} className="opacity-50" />
@@ -109,7 +109,7 @@ export default function PromptsSettings() {
                         </div>
                     ))}
                     {prompts.length === 0 && (
-                        <div className="text-center text-gray-600 text-xs py-10">
+                        <div className="text-center text-[var(--color-text-tertiary)] text-xs py-10">
                             No prompts created.
                         </div>
                     )}
@@ -117,8 +117,8 @@ export default function PromptsSettings() {
             </div>
 
             {/* Editor */}
-            <div className="flex-1 flex flex-col bg-gray-950">
-                <div className="p-4 border-b border-gray-800 space-y-3">
+            <div className="flex-1 flex flex-col bg-[var(--color-bg-primary)]">
+                <div className="p-4 border-b border-[var(--color-border-primary)] space-y-3">
                     <div>
                         <input
                             className="w-full bg-transparent text-lg font-bold placeholder-gray-600 outline-none"
@@ -130,13 +130,13 @@ export default function PromptsSettings() {
                 </div>
                 <div className="flex-1 relative">
                     <textarea
-                        className="w-full h-full bg-gray-950 p-4 resize-none outline-none text-sm font-mono text-gray-300 leading-relaxed custom-scrollbar"
+                        className="w-full h-full bg-[var(--color-bg-primary)] p-4 resize-none outline-none text-sm font-mono text-[var(--color-text-secondary)] leading-relaxed custom-scrollbar"
                         placeholder="Enter system prompt content here..."
                         value={content}
                         onChange={(e) => setContent(e.target.value)}
                     />
                 </div>
-                <div className="p-3 border-t border-gray-800 flex justify-between items-center bg-gray-900">
+                <div className="p-3 border-t border-[var(--color-border-primary)] flex justify-between items-center bg-[var(--color-bg-secondary)]">
                     <span className={`text-xs ${status.startsWith("Error") ? "text-red-400" : "text-green-400"}`}>
                         {status}
                     </span>

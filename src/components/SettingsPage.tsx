@@ -300,7 +300,7 @@ export default function SettingsPage() {
                     : "bg-blue-900/20 border-blue-500/50 text-blue-200"
                     }`}>
                     <div className="flex-1 font-mono text-sm">{status}</div>
-                    <button onClick={() => setStatus("")} className="px-2 hover:bg-white/10 rounded">&times;</button>
+                    <button onClick={() => setStatus("")} className="px-2 hover:bg-[var(--color-hover-bg)] rounded">&times;</button>
                 </div>
             )}
 
@@ -391,7 +391,7 @@ export default function SettingsPage() {
                             disabled={!(fullSettings.memory_enabled ?? true)}
                             className={`w-full py-2 px-4 rounded-lg border border-[var(--color-border-secondary)] text-sm font-bold transition-colors flex items-center justify-center gap-2
                                 ${(fullSettings.memory_enabled ?? true)
-                                    ? "bg-[var(--color-bg-tertiary)] hover:bg-gray-700 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                                    ? "bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-hover-bg)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
                                     : "opacity-50 cursor-not-allowed text-[var(--color-text-tertiary)]"
                                 }`}
                         >
@@ -431,12 +431,12 @@ export default function SettingsPage() {
                                 className={`w-2 h-2 rounded-full ${s.status === 'connected'
                                     ? 'bg-green-500 animate-pulse'
                                     : s.status === 'unknown'
-                                        ? 'bg-gray-500'
+                                        ? 'bg-[var(--color-text-tertiary)]'
                                         : 'bg-red-500'
                                     }`}
                             />
                             <div className="flex flex-col">
-                                <span className="font-mono font-bold text-gray-200">{s.name}</span>
+                                <span className="font-mono font-bold text-[var(--color-text-primary)]">{s.name}</span>
                                 <span className="text-xs text-[var(--color-text-tertiary)]">
                                     {s.config.type === 'Sse' ? 'SSE' : 'Stdio'}
                                     {s.config.type === 'Sse' ? ` (${s.config.url})` : ` (${s.config.command})`}
@@ -448,7 +448,7 @@ export default function SettingsPage() {
                                 className={`text-xs font-bold px-2 py-1 rounded ${s.status === 'connected'
                                     ? 'text-green-500 bg-green-500/10'
                                     : s.status === 'unknown'
-                                        ? 'text-[var(--color-text-secondary)] bg-gray-500/10'
+                                        ? 'text-[var(--color-text-secondary)] bg-[var(--color-text-tertiary)]/10'
                                         : 'text-red-400 bg-red-500/10'
                                     }`}
                             >
@@ -474,7 +474,7 @@ export default function SettingsPage() {
 
                 <button
                     onClick={openAddModal}
-                    className="w-full py-4 border-2 border-dashed border-[var(--color-border-primary)] rounded-xl text-[var(--color-text-tertiary)] hover:border-gray-600 hover:text-[var(--color-text-secondary)] transition-colors flex items-center justify-center gap-2 font-semibold"
+                    className="w-full py-4 border-2 border-dashed border-[var(--color-border-primary)] rounded-xl text-[var(--color-text-tertiary)] hover:border-[var(--color-border-secondary)] hover:text-[var(--color-text-secondary)] transition-colors flex items-center justify-center gap-2 font-semibold"
                 >
                     <Plus className="w-5 h-5" /> Add MCP Server
                 </button>

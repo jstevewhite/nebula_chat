@@ -50,30 +50,30 @@ function ProviderCard({ providerKey, config, onUpdate, onDelete, onFetch, loadin
     );
 
     return (
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 transition-all hover:border-gray-700">
+        <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border-primary)] rounded-xl p-4 transition-all hover:border-[var(--color-border-secondary)]">
             <div className="flex justify-between items-start mb-4">
                 <div className="flex items-center gap-3">
                     <div className={`text-2xl`} title={config.enabled ? "Enabled" : "Disabled"}>
                         {getProviderIcon(config.provider_type, providerKey)}
                     </div>
                     <div>
-                        <h3 className={`font-bold text-lg capitalize ${!config.enabled && "text-gray-500 line-through decoration-gray-500"}`}>{providerKey}</h3>
+                        <h3 className={`font-bold text-lg capitalize ${!config.enabled && "text-[var(--color-text-tertiary)] line-through decoration-[var(--color-text-tertiary)]"}`}>{providerKey}</h3>
                     </div>
-                    <span className="text-xs px-2 py-0.5 rounded bg-gray-800 text-gray-400 border border-gray-700">
+                    <span className="text-xs px-2 py-0.5 rounded bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)] border border-[var(--color-border-secondary)]">
                         {config.provider_type}
                     </span>
                 </div>
                 <div className="flex items-center gap-2">
                     <button
                         onClick={() => onUpdate({ enabled: !config.enabled })}
-                        className={`p-2 rounded-lg transition-colors ${config.enabled ? "bg-green-900/30 text-green-400 hover:bg-green-900/50" : "bg-gray-800 text-gray-500 hover:bg-gray-700"}`}
+                        className={`p-2 rounded-lg transition-colors ${config.enabled ? "bg-green-900/30 text-green-400 hover:bg-green-900/50" : "bg-[var(--color-bg-tertiary)] text-[var(--color-text-tertiary)] hover:bg-[var(--color-hover-bg)]"}`}
                         title={config.enabled ? "Disable Provider" : "Enable Provider"}
                     >
                         {config.enabled ? <CheckCircle size={18} /> : <AlertCircle size={18} />}
                     </button>
                     <button
                         onClick={onDelete}
-                        className="p-2 rounded-lg bg-gray-800 text-gray-500 hover:bg-red-900/30 hover:text-red-400 transition-colors"
+                        className="p-2 rounded-lg bg-[var(--color-bg-tertiary)] text-[var(--color-text-tertiary)] hover:bg-red-900/30 hover:text-red-400 transition-colors"
                         title="Delete Provider"
                     >
                         <Trash2 size={18} />
@@ -85,13 +85,13 @@ function ProviderCard({ providerKey, config, onUpdate, onDelete, onFetch, loadin
                 {/* API Key / URL */}
                 {config.provider_type !== "Ollama" && (
                     <div className="space-y-1">
-                        <label className="text-xs font-semibold text-gray-500 uppercase">API Key</label>
+                        <label className="text-xs font-semibold text-[var(--color-text-tertiary)] uppercase">API Key</label>
                         <div className="relative">
                             <input
                                 type="password"
                                 value={config.api_key || ""}
                                 onChange={(e) => onUpdate({ api_key: e.target.value })}
-                                className="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm text-white focus:ring-1 focus:ring-blue-500 outline-none"
+                                className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-primary)] rounded-lg px-3 py-2 text-sm text-[var(--color-text-primary)] focus:ring-1 focus:ring-blue-500 outline-none"
                                 placeholder="sk-..."
                             />
                         </div>
@@ -100,22 +100,22 @@ function ProviderCard({ providerKey, config, onUpdate, onDelete, onFetch, loadin
 
                 {(config.provider_type === "Ollama" || config.provider_type === "OpenAICompatible") && (
                     <div className="space-y-1">
-                        <label className="text-xs font-semibold text-gray-500 uppercase">Base URL</label>
+                        <label className="text-xs font-semibold text-[var(--color-text-tertiary)] uppercase">Base URL</label>
                         <input
                             type="text"
                             value={config.base_url || ""}
                             onChange={(e) => onUpdate({ base_url: e.target.value })}
-                            className="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm text-white focus:ring-1 focus:ring-blue-500 outline-none"
+                            className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-primary)] rounded-lg px-3 py-2 text-sm text-[var(--color-text-primary)] focus:ring-1 focus:ring-blue-500 outline-none"
                             placeholder="http://localhost:11434"
                         />
                     </div>
                 )}
 
                 {/* Models */}
-                <div className="pt-2 border-t border-gray-800">
+                <div className="pt-2 border-t border-[var(--color-border-primary)]">
                     <div className="flex flex-col gap-2 mb-2">
                         <div className="flex justify-between items-center">
-                            <label className="text-xs font-semibold text-gray-500 uppercase">
+                            <label className="text-xs font-semibold text-[var(--color-text-tertiary)] uppercase">
                                 Models ({config.models.filter(m => m.visible !== false).length}/{config.models.length})
                             </label>
 
@@ -134,18 +134,18 @@ function ProviderCard({ providerKey, config, onUpdate, onDelete, onFetch, loadin
                             <div className="flex gap-2 items-center">
                                 {/* Search Input */}
                                 <div className="relative flex-1">
-                                    <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" />
+                                    <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]" />
                                     <input
                                         type="text"
                                         placeholder="Filter models..."
                                         value={searchQuery}
                                         onChange={(e) => setSearchQuery(e.target.value)}
-                                        className="w-full bg-gray-950 border border-gray-800 rounded-lg pl-8 pr-8 py-1.5 text-xs text-white focus:ring-1 focus:ring-blue-500 outline-none"
+                                        className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-primary)] rounded-lg pl-8 pr-8 py-1.5 text-xs text-[var(--color-text-primary)] focus:ring-1 focus:ring-blue-500 outline-none"
                                     />
                                     {searchQuery && (
                                         <button
                                             onClick={() => setSearchQuery("")}
-                                            className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"
+                                            className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]"
                                         >
                                             <X size={12} />
                                         </button>
@@ -156,14 +156,14 @@ function ProviderCard({ providerKey, config, onUpdate, onDelete, onFetch, loadin
                                 <div className="flex gap-1">
                                     <button
                                         onClick={() => toggleAllModels(true)}
-                                        className="text-[10px] px-2 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-400 rounded uppercase font-bold transition-colors"
+                                        className="text-[10px] px-2 py-1.5 bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-hover-bg)] text-[var(--color-text-secondary)] rounded uppercase font-bold transition-colors"
                                         title="Enable All"
                                     >
                                         All
                                     </button>
                                     <button
                                         onClick={() => toggleAllModels(false)}
-                                        className="text-[10px] px-2 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-400 rounded uppercase font-bold transition-colors"
+                                        className="text-[10px] px-2 py-1.5 bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-hover-bg)] text-[var(--color-text-secondary)] rounded uppercase font-bold transition-colors"
                                         title="Disable All"
                                     >
                                         None
@@ -179,25 +179,25 @@ function ProviderCard({ providerKey, config, onUpdate, onDelete, onFetch, loadin
                                 filteredModels.map(m => (
                                     <div
                                         key={m.id}
-                                        className={`flex items-center justify-between bg-gray-950 border rounded px-3 py-2 text-xs transition-colors ${m.visible !== false ? "border-gray-800 text-gray-200" : "border-gray-800/50 text-gray-600"}`}
+                                        className={`flex items-center justify-between bg-[var(--color-bg-primary)] border rounded px-3 py-2 text-xs transition-colors ${m.visible !== false ? "border-[var(--color-border-primary)] text-[var(--color-text-primary)]" : "border-[var(--color-border-primary)]/50 text-[var(--color-text-tertiary)]"}`}
                                     >
                                         <span className="truncate mr-2" title={m.name}>{m.name}</span>
                                         <button
                                             onClick={() => toggleModelVisibility(m.id)}
-                                            className={`p-1 rounded hover:bg-gray-800 ${m.visible !== false ? "text-blue-400" : "text-gray-600"}`}
+                                            className={`p-1 rounded hover:bg-[var(--color-bg-tertiary)] ${m.visible !== false ? "text-blue-400" : "text-[var(--color-text-tertiary)]"}`}
                                         >
                                             {m.visible !== false ? <Eye size={14} /> : <EyeOff size={14} />}
                                         </button>
                                     </div>
                                 ))
                             ) : (
-                                <div className="col-span-2 text-xs text-gray-600 italic text-center py-4">
+                                <div className="col-span-2 text-xs text-[var(--color-text-tertiary)] italic text-center py-4">
                                     No models match "{searchQuery}"
                                 </div>
                             )}
                         </div>
                     ) : (
-                        <div className="text-xs text-gray-600 italic text-center py-2">
+                        <div className="text-xs text-[var(--color-text-tertiary)] italic text-center py-2">
                             No models found. Click fetch to discover.
                         </div>
                     )}
@@ -330,7 +330,7 @@ export default function ProvidersSettings({ providers, onChange }: ProvidersSett
 
             <button
                 onClick={openAddProvider}
-                className="w-full py-3 border-2 border-dashed border-gray-800 rounded-xl text-gray-500 hover:border-gray-600 hover:text-gray-300 transition-colors flex items-center justify-center gap-2 font-semibold"
+                className="w-full py-3 border-2 border-dashed border-[var(--color-border-primary)] rounded-xl text-[var(--color-text-tertiary)] hover:border-[var(--color-border-secondary)] hover:text-[var(--color-text-secondary)] transition-colors flex items-center justify-center gap-2 font-semibold"
             >
                 <div className="w-5 h-5 rounded-full border border-current flex items-center justify-center">+</div>
                 Add Custom Provider
@@ -338,27 +338,27 @@ export default function ProvidersSettings({ providers, onChange }: ProvidersSett
 
             {isAddOpen && (
                 <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
-                    <div className="bg-gray-900 border border-gray-800 rounded-xl w-full max-w-lg overflow-hidden">
-                        <div className="p-4 border-b border-gray-800 flex items-center justify-between">
+                    <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border-primary)] rounded-xl w-full max-w-lg overflow-hidden">
+                        <div className="p-4 border-b border-[var(--color-border-primary)] flex items-center justify-between">
                             <h4 className="font-bold">Add Model Provider</h4>
-                            <button className="text-gray-400 hover:text-white" onClick={() => setIsAddOpen(false)}>×</button>
+                            <button className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]" onClick={() => setIsAddOpen(false)}>×</button>
                         </div>
                         <div className="p-4 space-y-4">
                             <div>
-                                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Provider ID</label>
+                                <label className="block text-xs font-semibold text-[var(--color-text-tertiary)] uppercase mb-1">Provider ID</label>
                                 <input
                                     value={newId}
                                     onChange={(e) => setNewId(e.target.value)}
                                     placeholder="e.g. local-vllm or deepseek"
-                                    className="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm text-white focus:ring-1 focus:ring-blue-500 outline-none"
+                                    className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-primary)] rounded-lg px-3 py-2 text-sm text-[var(--color-text-primary)] focus:ring-1 focus:ring-blue-500 outline-none"
                                 />
                             </div>
                             <div>
-                                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Provider Type</label>
+                                <label className="block text-xs font-semibold text-[var(--color-text-tertiary)] uppercase mb-1">Provider Type</label>
                                 <select
                                     value={newType}
                                     onChange={(e) => setNewType(e.target.value as ProviderType)}
-                                    className="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm text-white focus:ring-1 focus:ring-blue-500 outline-none"
+                                    className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-primary)] rounded-lg px-3 py-2 text-sm text-[var(--color-text-primary)] focus:ring-1 focus:ring-blue-500 outline-none"
                                 >
                                     <option value="OpenAI">OpenAI</option>
                                     <option value="Anthropic">Anthropic</option>
@@ -368,30 +368,30 @@ export default function ProvidersSettings({ providers, onChange }: ProvidersSett
                             </div>
                             {(newType === "Ollama" || newType === "OpenAICompatible") && (
                                 <div>
-                                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Base URL</label>
+                                    <label className="block text-xs font-semibold text-[var(--color-text-tertiary)] uppercase mb-1">Base URL</label>
                                     <input
                                         value={newBaseUrl}
                                         onChange={(e) => setNewBaseUrl(e.target.value)}
                                         placeholder={newType === "Ollama" ? "http://localhost:11434" : "http://localhost:1234/v1"}
-                                        className="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm text-white focus:ring-1 focus:ring-blue-500 outline-none"
+                                        className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-primary)] rounded-lg px-3 py-2 text-sm text-[var(--color-text-primary)] focus:ring-1 focus:ring-blue-500 outline-none"
                                     />
                                 </div>
                             )}
                             {newType !== "Ollama" && (
                                 <div>
-                                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">API Key</label>
+                                    <label className="block text-xs font-semibold text-[var(--color-text-tertiary)] uppercase mb-1">API Key</label>
                                     <input
                                         type="password"
                                         value={newApiKey}
                                         onChange={(e) => setNewApiKey(e.target.value)}
                                         placeholder="sk-..."
-                                        className="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm text-white focus:ring-1 focus:ring-blue-500 outline-none"
+                                        className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-primary)] rounded-lg px-3 py-2 text-sm text-[var(--color-text-primary)] focus:ring-1 focus:ring-blue-500 outline-none"
                                     />
                                 </div>
                             )}
                         </div>
-                        <div className="p-4 border-t border-gray-800 flex justify-end gap-2">
-                            <button className="px-4 py-2 rounded-lg hover:bg-gray-800 text-gray-400 font-bold text-sm" onClick={() => setIsAddOpen(false)}>Cancel</button>
+                        <div className="p-4 border-t border-[var(--color-border-primary)] flex justify-end gap-2">
+                            <button className="px-4 py-2 rounded-lg hover:bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)] font-bold text-sm" onClick={() => setIsAddOpen(false)}>Cancel</button>
                             <button className="px-6 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm" onClick={confirmAddProvider}>Add</button>
                         </div>
                     </div>
