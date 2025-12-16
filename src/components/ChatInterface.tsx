@@ -11,6 +11,7 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import remarkGfm from 'remark-gfm';
 import MemoryPanel from "./MemoryPanel";
 import { getProviderIcon } from "../utils/providerIcons";
+import { useTheme } from "../contexts/ThemeContext";
 
 interface ToolCall {
     id: string;
@@ -58,6 +59,9 @@ interface GenerationSettings {
 }
 
 export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
+    const { theme } = useTheme();
+    const colorScheme = theme === 'light' || theme === 'solarized-light' ? 'light' : 'dark';
+
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState("");
     const [loading, setLoading] = useState(false);
@@ -728,6 +732,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         value={selectedModel}
                         onChange={(e) => setSelectedModel(e.target.value)}
                         className="bg-[var(--color-bg-tertiary)] text-[var(--color-text-primary)] text-sm rounded-lg border border-[var(--color-border-secondary)] focus:ring-blue-500 focus:border-blue-500 block p-2.5 font-medium max-w-[200px] chat-model-dropdown"
+                        style={{ colorScheme }}
                     >
                         {availableModels.length === 0 && <option disabled>No enabled models</option>}
                         {availableModels.map(m => (
@@ -744,6 +749,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                             value={selectedPromptId}
                             onChange={(e) => handleSetPrompt(e.target.value)}
                             className="bg-[var(--color-bg-tertiary)] text-[var(--color-text-primary)] text-sm rounded-lg border border-[var(--color-border-secondary)] focus:ring-blue-500 focus:border-blue-500 block p-2.5 font-medium max-w-[150px] chat-prompt-dropdown"
+                            style={{ colorScheme }}
                         >
                             <option value="">Default System</option>
                             {prompts.map(p => (

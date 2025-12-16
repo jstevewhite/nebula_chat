@@ -4,8 +4,12 @@ import { Server, Plus, Edit2, Book, Trash2, Palette } from "lucide-react";
 import ProvidersSettings, { ProviderConfig } from "./ProvidersSettings";
 import PromptsSettings from "./PromptsSettings";
 import { ThemeSelector } from "./ThemeSelector";
+import { useTheme } from "../contexts/ThemeContext";
 
 export default function SettingsPage() {
+    const { theme } = useTheme();
+    const colorScheme = theme === 'light' || theme === 'solarized-light' ? 'light' : 'dark';
+
     const [servers, setServers] = useState<{ name: string, status: 'connected' | 'error' | 'unknown', config: any }[]>([]);
     const [providers, setProviders] = useState<Record<string, ProviderConfig>>({});
     const [fullSettings, setFullSettings] = useState<any>({});
@@ -349,6 +353,7 @@ export default function SettingsPage() {
                         value={fullSettings.context_model || ""}
                         onChange={(e) => setFullSettings({ ...fullSettings, context_model: e.target.value })}
                         className={`w-full border border-[var(--color-border-secondary)] rounded-lg p-3 text-sm bg-[var(--color-bg-secondary)] text-[var(--color-text-primary)] focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none intelligence-settings-dropdown ${(fullSettings.memory_enabled ?? true) ? "" : "opacity-50 cursor-not-allowed"}`}
+                        style={{ colorScheme }}
                     >
                         <option value="">None (Raw Injection)</option>
                         {Object.entries(providers).flatMap(([pkey, pval]) =>
@@ -373,6 +378,7 @@ export default function SettingsPage() {
                             value={String(fullSettings.context_turns ?? 0)}
                             onChange={(e) => setFullSettings({ ...fullSettings, context_turns: Number(e.target.value) })}
                             className={`w-full border border-[var(--color-border-secondary)] rounded-lg p-3 text-sm bg-[var(--color-bg-secondary)] text-[var(--color-text-primary)] focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none intelligence-settings-dropdown ${(fullSettings.memory_enabled ?? true) ? "" : "opacity-50 cursor-not-allowed"}`}
+                            style={{ colorScheme }}
                         >
                             {[0, 1, 2, 3, 4, 6, 8, 10].map(n => (
                                 <option key={n} value={String(n)}>
