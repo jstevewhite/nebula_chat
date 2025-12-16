@@ -1,0 +1,136 @@
+/* Theme CSS Custom Properties for Nebula */
+
+:root {
+  /* Light Theme (Default) */
+  --color-bg-primary: #ffffff;
+  --color-bg-secondary: #f9fafb;
+  --color-bg-tertiary: #f3f4f6;
+  --color-bg-elevated: #ffffff;
+
+  --color-text-primary: #111827;
+  --color-text-secondary: #4b5563;
+  --color-text-tertiary: #9ca3af;
+
+  --color-border-primary: #e5e7eb;
+  --color-border-secondary: #d1d5db;
+
+  --color-accent-primary: #396cd8;
+  --color-accent-secondary: #535bf2;
+
+  --color-success: #27ae60;
+  --color-error: #ef4444;
+  --color-warning: #f59e0b;
+
+  /* Component-specific */
+  --color-input-bg: #ffffff;
+  --color-input-border: #d1d5db;
+  --color-input-focus: #396cd8;
+  --color-hover-bg: #f3f4f6;
+  --color-active-bg: #e5e7eb;
+
+  /* Additional UI colors */
+  --color-shadow: rgba(0, 0, 0, 0.1);
+  --color-overlay: rgba(0, 0, 0, 0.5);
+}
+
+[data-theme="dark"] {
+  --color-bg-primary: #0f0f0f;
+  --color-bg-secondary: #1a1a1a;
+  --color-bg-tertiary: #2a2a2a;
+  --color-bg-elevated: #2f2f2f;
+
+  --color-text-primary: #ffffff;
+  --color-text-secondary: #d1d5db;
+  --color-text-tertiary: #9ca3af;
+
+  --color-border-primary: #374151;
+  --color-border-secondary: #4b5563;
+
+  --color-accent-primary: #396cd8;
+  --color-accent-secondary: #646cff;
+
+  --color-success: #27ae60;
+  --color-error: #ef4444;
+  --color-warning: #fbbf24;
+
+  --color-input-bg: #030712;
+  --color-input-border: #374151;
+  --color-input-focus: #535bf2;
+  --color-hover-bg: #3a3a3a;
+  --color-active-bg: #4a4a4a;
+
+  --color-shadow: rgba(0, 0, 0, 0.3);
+  --color-overlay: rgba(0, 0, 0, 0.7);
+}
+
+[data-theme="solarized-light"] {
+  /* Solarized Light palette */
+  --color-bg-primary: #fdf6e3;
+  --color-bg-secondary: #eee8d5;
+  --color-bg-tertiary: #93a1a1;
+  --color-bg-elevated: #fffbf0;
+
+  --color-text-primary: #657b83;
+  --color-text-secondary: #839496;
+  --color-text-tertiary: #93a1a1;
+
+  --color-border-primary: #d3cbb7;
+  --color-border-secondary: #bdb5a1;
+
+  --color-accent-primary: #268bd2;
+  --color-accent-secondary: #2aa198;
+
+  --color-success: #859900;
+  --color-error: #dc322f;
+  --color-warning: #b58900;
+
+  --color-input-bg: #eee8d5;
+  --color-input-border: #d3cbb7;
+  --color-input-focus: #268bd2;
+  --color-hover-bg: #e4ddc7;
+  --color-active-bg: #d9d2c2;
+
+  --color-shadow: rgba(0, 0, 0, 0.1);
+  --color-overlay: rgba(253, 246, 227, 0.9);
+}
+
+[data-theme="solarized-dark"] {
+  /* Solarized Dark palette */
+  --color-bg-primary: #002b36;
+  --color-bg-secondary: #073642;
+  --color-bg-tertiary: #586e75;
+  --color-bg-elevated: #0a3948;
+
+  --color-text-primary: #839496;
+  --color-text-secondary: #93a1a1;
+  --color-text-tertiary: #657b83;
+
+  --color-border-primary: #0d4b5a;
+  --color-border-secondary: #125968;
+
+  --color-accent-primary: #268bd2;
+  --color-accent-secondary: #2aa198;
+
+  --color-success: #859900;
+  --color-error: #dc322f;
+  --color-warning: #b58900;
+
+  --color-input-bg: #073642;
+  --color-input-border: #0d4b5a;
+  --color-input-focus: #268bd2;
+  --color-hover-bg: #0a3f4d;
+  --color-active-bg: #0d4b5a;
+
+  --color-shadow: rgba(0, 0, 0, 0.4);
+  --color-overlay: rgba(0, 43, 54, 0.9);
+}
+
+/* Smooth theme transitions */
+* {
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+/* Prevent transition on page load */
+.no-transition * {
+  transition: none !important;
+}
