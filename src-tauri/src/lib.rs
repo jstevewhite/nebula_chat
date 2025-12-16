@@ -19,6 +19,15 @@ pub use llm::capabilities;
 pub mod mcp;
 pub mod memory;
 
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_tool_call_validation_integration() {
+        // This is a placeholder for integration tests
+        // The actual database validation is tested in the sqlite_manager tests
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     mcp_manager: Arc<McpManager>,
@@ -304,21 +313,15 @@ async fn send_message(
                     // Phase 1.3: Tool-call integrity check
                     if last.role == "tool" {
                         if let Some(tid) = &last.tool_call_id {
-                            // Verify this ID exists in the conversation history
-                            // (In a real implementation we would query the DB or check the `messages` vec)
-                            // For now, we rely on the frontend sending the correct ID, but we could add a check here:
-                            // if !history_contains_tool_call_id(tid) { return Err("Invalid tool_call_id"); }
-
-                            // NOTE: Ideally we check `messages` for a preceding assistant message with this tool_call.id
-                            let valid = messages.iter().any(|m| {
-                                m.role == "assistant"
-                                    && m.tool_calls.as_ref().map_or(false, |tcs| {
-                                        tcs.iter().any(|tc| {
-                                            tc.get("id").and_then(|v| v.as_str()) == Some(tid)
-                                        })
-                                    })
-                            });
-                            if !valid {
+                            // Verify this ID exists in the conversation history using database-backed validation
+                            let tool_call_exists = match lib.tool_call_id_exists(conv_id, tid) {
+                                Ok(exists) => exists,
+                                Err(e) => {
+                                    tracing::error!("Error checking tool_call_id: {}", e);
+                                    return Err(format!("Error validating tool_call_id: {}", e));
+                                }
+                            };
+                            if !tool_call_exists {
                                 tracing::error!("Security: Attempted to submit tool result with invalid tool_call_id: {}", tid);
                                 return Err(format!("Invalid tool_call_id: {}", tid));
                             }
@@ -1593,6 +1596,10 @@ pub fn run() {
                     }
                 });
             });
+
+            // Note: MCP server cleanup happens automatically on process exit via Drop
+            // The SSE transport's stop() method is called by McpManager::shutdown()
+            // which is available but not currently hooked into window close events
 
             Ok(())
         })

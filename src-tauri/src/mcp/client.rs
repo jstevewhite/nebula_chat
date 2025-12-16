@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{oneshot, Mutex};
@@ -43,6 +43,8 @@ trait Transport: Send + Sync {
     fn is_connected(&self) -> bool {
         true
     }
+    // Stop the transport and clean up resources
+    fn stop(&self) {}
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -83,6 +85,8 @@ struct SseTransport {
     session_id: Arc<Mutex<Option<String>>>,
     sse_handle: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value>>>>>,
+    shutdown_flag: Arc<AtomicBool>,
+    disconnected_flag: Arc<AtomicBool>,
 }
 
 impl SseTransport {
@@ -91,6 +95,7 @@ impl SseTransport {
         let url = self.url.clone();
         let pending = self.pending.clone();
         let session_id_str = session_id_val.clone(); // Keep for retries
+        let shutdown_flag = self.shutdown_flag.clone();
 
         let mut handle_guard = self.sse_handle.lock().unwrap();
         if handle_guard.is_some() {
@@ -102,6 +107,12 @@ impl SseTransport {
             let max_delay = std::time::Duration::from_secs(15);
 
             loop {
+                // Check if shutdown was requested
+                if shutdown_flag.load(Ordering::Relaxed) {
+                    tracing::info!("SSE loop stopped by request");
+                    return;
+                }
+
                 let req_builder = client
                     .get(&url)
                     .header("Accept", "text/event-stream")
@@ -221,7 +232,28 @@ impl Transport for SseTransport {
 
     fn is_connected(&self) -> bool {
         let guard = self.sse_handle.lock().unwrap();
-        guard.is_some()
+        guard.is_some() && !self.disconnected_flag.load(Ordering::Relaxed)
+    }
+
+    fn stop(&self) {
+        // Signal shutdown to the SSE loop
+        self.shutdown_flag.store(true, Ordering::Relaxed);
+        self.disconnected_flag.store(true, Ordering::Relaxed);
+        
+        // Abort the current SSE task if it exists
+        let mut handle_guard = self.sse_handle.lock().unwrap();
+        if let Some(handle) = handle_guard.take() {
+            handle.abort();
+        }
+        
+        // Fail all pending requests (async block to handle the await)
+        let pending = self.pending.clone();
+        tokio::spawn(async move {
+            let mut pending_guard = pending.lock().await;
+            for (_, sender) in pending_guard.drain() {
+                let _ = sender.send(Err(anyhow::anyhow!("Transport disconnected")));
+            }
+        });
     }
 }
 
@@ -316,6 +348,8 @@ impl McpClient {
                 let client = HttpClient::new();
                 let session_id = Arc::new(Mutex::new(None));
                 let sse_handle = Arc::new(std::sync::Mutex::new(None));
+                let shutdown_flag = Arc::new(AtomicBool::new(false));
+                let disconnected_flag = Arc::new(AtomicBool::new(false));
 
                 Arc::new(SseTransport {
                     url: url.clone(),
@@ -323,6 +357,8 @@ impl McpClient {
                     session_id,
                     sse_handle,
                     pending: pending_clone,
+                    shutdown_flag,
+                    disconnected_flag,
                 })
             }
         };
@@ -445,5 +481,9 @@ impl McpClient {
 
     pub fn is_connected(&self) -> bool {
         self.transport.is_connected()
+    }
+
+    pub fn stop(&self) {
+        self.transport.stop();
     }
 }

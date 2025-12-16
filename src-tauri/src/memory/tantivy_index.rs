@@ -1,8 +1,11 @@
 use anyhow::Result;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::*;
 use tantivy::{doc, Index, ReloadPolicy, TantivyDocument};
+use tokio::sync::{mpsc, Mutex};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SearchResult {
@@ -14,9 +17,180 @@ pub struct SearchResult {
     pub score: f32,
 }
 
+/// Indexing operations that can be queued
+#[derive(Debug)]
+enum IndexOperation {
+    AddDocument {
+        conversation_id: String,
+        role: String,
+        content: String,
+        message_id: String,
+        created_at: String,
+    },
+    DeleteByMessageId {
+        message_id: String,
+    },
+    DeleteByConversationId {
+        conversation_id: String,
+    },
+    ClearIndex,
+    CommitAndReload,
+}
+
+/// Background worker for batch processing indexing operations
+struct IndexBatchProcessor {
+    index: Index,
+    reader: tantivy::IndexReader,
+    receiver: mpsc::UnboundedReceiver<IndexOperation>,
+    batch_size: usize,
+    max_batch_delay: Duration,
+}
+
+impl IndexBatchProcessor {
+    fn new(
+        index: Index,
+        reader: tantivy::IndexReader,
+        receiver: mpsc::UnboundedReceiver<IndexOperation>,
+        batch_size: usize,
+        max_batch_delay: Duration,
+    ) -> Self {
+        Self {
+            index,
+            reader,
+            receiver,
+            batch_size,
+            max_batch_delay,
+        }
+    }
+
+    async fn run(mut self) {
+        let mut batch = Vec::with_capacity(self.batch_size);
+        let mut last_commit_time = Instant::now();
+
+        loop {
+            // Try to receive an operation (non-blocking)
+            match self.receiver.try_recv() {
+                Ok(operation) => {
+                    match operation {
+                        IndexOperation::CommitAndReload => {
+                            // Force immediate commit
+                            if !batch.is_empty() {
+                                if let Err(e) = self.process_batch(&batch).await {
+                                    tracing::error!("Error processing batch: {}", e);
+                                }
+                                batch.clear();
+                            }
+                            // Reload reader to see latest changes
+                            if let Err(e) = self.reader.reload() {
+                                tracing::error!("Error reloading reader: {}", e);
+                            }
+                            last_commit_time = Instant::now();
+                        }
+                        op => {
+                            batch.push(op);
+
+                            // Check if we should commit due to batch size or time
+                            let should_commit_by_size = batch.len() >= self.batch_size;
+                            let should_commit_by_time = last_commit_time.elapsed() >= self.max_batch_delay;
+
+                            if should_commit_by_size || should_commit_by_time {
+                                if let Err(e) = self.process_batch(&batch).await {
+                                    tracing::error!("Error processing batch: {}", e);
+                                }
+                                batch.clear();
+                                last_commit_time = Instant::now();
+
+                                // Reload reader to see latest changes
+                                if let Err(e) = self.reader.reload() {
+                                    tracing::error!("Error reloading reader: {}", e);
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(mpsc::error::TryRecvError::Empty) => {
+                    // No operations available, check time-based commit
+                    if last_commit_time.elapsed() >= self.max_batch_delay && !batch.is_empty() {
+                        if let Err(e) = self.process_batch(&batch).await {
+                            tracing::error!("Error processing batch: {}", e);
+                        }
+                        batch.clear();
+                        last_commit_time = Instant::now();
+
+                        // Reload reader to see latest changes
+                        if let Err(e) = self.reader.reload() {
+                            tracing::error!("Error reloading reader: {}", e);
+                        }
+                    }
+                    // Sleep briefly to avoid busy waiting
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    // Channel closed, process remaining batch and exit
+                    break;
+                }
+            }
+        }
+
+        // Process any remaining operations before exiting
+        if !batch.is_empty() {
+            let _ = self.process_batch(&batch).await;
+        }
+    }
+
+    async fn process_batch(&self, batch: &[IndexOperation]) -> Result<()> {
+        let mut index_writer = self.index.writer::<TantivyDocument>(50_000_000)?;
+        let schema = self.index.schema();
+        let conv_id = schema.get_field("conversation_id").expect("schema");
+        let role_field = schema.get_field("role").expect("schema");
+        let content_field = schema.get_field("content").expect("schema");
+        let msg_id_field = schema.get_field("message_id").expect("schema");
+        let created_at_field = schema.get_field("created_at").expect("schema");
+
+        for operation in batch {
+            match operation {
+                IndexOperation::AddDocument {
+                    conversation_id,
+                    role,
+                    content,
+                    message_id,
+                    created_at,
+                } => {
+                    index_writer.add_document(doc!(
+                        conv_id => conversation_id.as_str(),
+                        role_field => role.as_str(),
+                        content_field => content.as_str(),
+                        msg_id_field => message_id.as_str(),
+                        created_at_field => created_at.as_str()
+                    ))?;
+                }
+                IndexOperation::DeleteByMessageId { message_id } => {
+                    let term = tantivy::Term::from_field_text(msg_id_field, message_id);
+                    index_writer.delete_term(term);
+                }
+                IndexOperation::DeleteByConversationId { conversation_id } => {
+                    let term = tantivy::Term::from_field_text(conv_id, conversation_id);
+                    index_writer.delete_term(term);
+                }
+                IndexOperation::ClearIndex => {
+                    index_writer.delete_all_documents()?;
+                }
+                IndexOperation::CommitAndReload => {
+                    // This is handled separately
+                }
+            }
+        }
+
+        index_writer.commit()?;
+        Ok(())
+    }
+}
+
 pub struct TantivyIndex {
     index: Index,
     reader: tantivy::IndexReader,
+    sender: mpsc::UnboundedSender<IndexOperation>,
+    processor_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl TantivyIndex {
@@ -61,7 +235,29 @@ impl TantivyIndex {
             .reload_policy(ReloadPolicy::Manual)
             .try_into()?;
 
-        Ok(Self { index, reader })
+        // Create channel for indexing operations
+        let (sender, receiver) = mpsc::unbounded_channel::<IndexOperation>();
+
+        // Start background processor
+        let index_clone = index.clone();
+        let reader_clone = reader.clone();
+
+        let processor_handle = Arc::new(Mutex::new(Some(tokio::spawn(async move {
+            IndexBatchProcessor::new(
+                index_clone,
+                reader_clone,
+                receiver,
+                10,      // Batch size: commit after 10 documents
+                Duration::from_secs(2), // Max delay: commit after 2 seconds
+            ).run().await
+        }))));
+
+        Ok(Self {
+            index,
+            reader,
+            sender,
+            processor_handle,
+        })
     }
 
     pub fn add_document(
@@ -72,25 +268,15 @@ impl TantivyIndex {
         message_id: &str,
         created_at: &str,
     ) -> Result<()> {
-        let mut index_writer = self.index.writer::<TantivyDocument>(50_000_000)?;
+        // Queue the document for batch processing
+        self.sender.send(IndexOperation::AddDocument {
+            conversation_id: conversation_id.to_string(),
+            role: role.to_string(),
+            content: content.to_string(),
+            message_id: message_id.to_string(),
+            created_at: created_at.to_string(),
+        }).map_err(|e| anyhow::anyhow!("Failed to queue document: {}", e))?;
 
-        let schema = self.index.schema();
-        let conv_id = schema.get_field("conversation_id").expect("schema");
-        let role_field = schema.get_field("role").expect("schema");
-        let content_field = schema.get_field("content").expect("schema");
-        let msg_id_field = schema.get_field("message_id").expect("schema");
-        let created_at_field = schema.get_field("created_at").expect("schema");
-
-        index_writer.add_document(doc!(
-            conv_id => conversation_id,
-            role_field => role,
-            content_field => content,
-            msg_id_field => message_id,
-            created_at_field => created_at
-        ))?;
-
-        index_writer.commit()?;
-        self.reader.reload()?;
         Ok(())
     }
 
@@ -156,32 +342,27 @@ impl TantivyIndex {
     }
 
     pub fn delete_by_message_id(&self, message_id: &str) -> Result<()> {
-        let mut index_writer = self.index.writer::<TantivyDocument>(50_000_000)?;
-        let schema = self.index.schema();
-        let msg_id_field = schema.get_field("message_id").expect("schema");
-        let term = tantivy::Term::from_field_text(msg_id_field, message_id);
-        index_writer.delete_term(term);
-        index_writer.commit()?;
-        self.reader.reload()?;
+        self.sender.send(IndexOperation::DeleteByMessageId {
+            message_id: message_id.to_string(),
+        }).map_err(|e| anyhow::anyhow!("Failed to queue deletion: {}", e))?;
         Ok(())
     }
 
     pub fn delete_by_conversation_id(&self, conversation_id: &str) -> Result<()> {
-        let mut index_writer = self.index.writer::<TantivyDocument>(50_000_000)?;
-        let schema = self.index.schema();
-        let conv_id_field = schema.get_field("conversation_id").expect("schema");
-        let term = tantivy::Term::from_field_text(conv_id_field, conversation_id);
-        index_writer.delete_term(term);
-        index_writer.commit()?;
-        self.reader.reload()?;
+        self.sender.send(IndexOperation::DeleteByConversationId {
+            conversation_id: conversation_id.to_string(),
+        }).map_err(|e| anyhow::anyhow!("Failed to queue deletion: {}", e))?;
         Ok(())
     }
 
     pub fn clear_index(&self) -> Result<()> {
-        let mut index_writer = self.index.writer::<TantivyDocument>(50_000_000)?;
-        index_writer.delete_all_documents()?;
-        index_writer.commit()?;
-        self.reader.reload()?;
+        self.sender.send(IndexOperation::ClearIndex).map_err(|e| anyhow::anyhow!("Failed to queue clear: {}", e))?;
+        Ok(())
+    }
+
+    /// Force immediate commit and reload for cases where consistency is needed
+    pub fn flush(&self) -> Result<()> {
+        self.sender.send(IndexOperation::CommitAndReload).map_err(|e| anyhow::anyhow!("Failed to queue flush: {}", e))?;
         Ok(())
     }
 }
