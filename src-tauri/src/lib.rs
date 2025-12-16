@@ -746,6 +746,23 @@ async fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<(), 
 }
 
 #[tauri::command]
+async fn get_theme(app: tauri::AppHandle) -> Result<String, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let settings = Settings::load_migrated(&settings_path);
+    Ok(settings.theme)
+}
+
+#[tauri::command]
+async fn set_theme(app: tauri::AppHandle, theme: String) -> Result<(), String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let mut settings = Settings::load_migrated(&settings_path);
+    settings.theme = theme;
+    settings.save(&settings_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn fetch_models(
     provider_type: ProviderType,
     base_url: Option<String>,
@@ -1615,6 +1632,8 @@ pub fn run() {
             send_message,
             get_settings,
             save_settings,
+            get_theme,
+            set_theme,
             fetch_models,
             execute_tool,
             get_tool_execution,

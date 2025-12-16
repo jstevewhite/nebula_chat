@@ -105,6 +105,14 @@ pub struct Settings {
     // Disabling does NOT disable chat history persistence.
     #[serde(default = "default_true_bool")]
     pub memory_enabled: bool,
+
+    // Theme preference: "light", "dark", "solarized-light", "solarized-dark"
+    #[serde(default = "default_theme")]
+    pub theme: String,
+}
+
+fn default_theme() -> String {
+    "dark".to_string()
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
@@ -212,6 +220,9 @@ impl Settings {
         }
         if let Some(mem_enabled) = val.get("memory_enabled").and_then(|v| v.as_bool()) {
             s.memory_enabled = mem_enabled;
+        }
+        if let Some(theme) = val.get("theme").and_then(|v| v.as_str()) {
+            s.theme = theme.to_string();
         }
 
         if let Some(mcp) = val.get("mcp_servers").and_then(|v| v.as_object()) {

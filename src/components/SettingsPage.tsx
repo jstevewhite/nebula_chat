@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Server, Plus, Edit2, Book, Trash2 } from "lucide-react";
+import { Server, Plus, Edit2, Book, Trash2, Palette } from "lucide-react";
 import ProvidersSettings, { ProviderConfig } from "./ProvidersSettings";
 import PromptsSettings from "./PromptsSettings";
+import { ThemeSelector } from "./ThemeSelector";
 
 export default function SettingsPage() {
     const [servers, setServers] = useState<{ name: string, status: 'connected' | 'error' | 'unknown', config: any }[]>([]);
@@ -401,6 +402,13 @@ export default function SettingsPage() {
                         </p>
                     </div>
                 </div>
+            </div>
+
+            <div className="bg-gray-900 p-6 rounded-xl border border-gray-800 shadow-xl mb-8">
+                <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+                    <Palette className="w-5 h-5 text-blue-500" /> Appearance
+                </h3>
+                <ThemeSelector />
             </div>
 
             <h2 className="text-2xl font-bold mb-6 flex items-center gap-2 text-white">
