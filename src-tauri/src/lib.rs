@@ -34,6 +34,8 @@ pub struct AppState {
     mcp_manager: Arc<McpManager>,
     librarian: Arc<Mutex<crate::memory::librarian::Librarian>>,
     active_task: Arc<Mutex<Option<tokio::task::AbortHandle>>>,
+    // For context inspection: maps request_id -> oneshot sender for approval
+    context_approvals: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
 }
 
 #[tauri::command]
@@ -42,6 +44,19 @@ async fn stop_generation(state: State<'_, AppState>) -> Result<(), String> {
     if let Some(handle) = handle_guard.take() {
         tracing::info!("[Backend] Stopping generation...");
         handle.abort();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn respond_to_context_inspection(
+    state: State<'_, AppState>,
+    request_id: String,
+    approved: bool,
+) -> Result<(), String> {
+    let mut approvals = state.context_approvals.lock().await;
+    if let Some(sender) = approvals.remove(&request_id) {
+        let _ = sender.send(approved);
     }
     Ok(())
 }
@@ -527,6 +542,69 @@ async fn send_message(
         let pruned_messages = ContextManager::prune_messages(final_messages, context_limit)
             .map_err(|e| e.to_string())?;
         tracing::debug!("[DEBUG] Messages pruned. Calling provider...");
+
+        // Context Inspection: If enabled, emit context and wait for user approval
+        if settings.context_inspection_enabled {
+            let request_id = uuid::Uuid::new_v4().to_string();
+            let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+
+            // Store the approval sender
+            {
+                let mut approvals = state.context_approvals.lock().await;
+                approvals.insert(request_id.clone(), tx);
+            }
+
+            // Format the context for display
+            let context_preview: Vec<serde_json::Value> = pruned_messages
+                .iter()
+                .map(|msg| {
+                    serde_json::json!({
+                        "role": msg.role,
+                        "content": msg.content.clone().unwrap_or_default(),
+                        "tool_calls": msg.tool_calls.as_ref().map(|tc| serde_json::to_string(tc).unwrap_or_default()),
+                        "tool_call_id": msg.tool_call_id.clone(),
+                    })
+                })
+                .collect();
+
+            // Emit context inspection event
+            use tauri::Emitter;
+            if let Err(e) = app_handle.emit(
+                "context-inspection-request",
+                serde_json::json!({
+                    "request_id": request_id,
+                    "messages": context_preview,
+                    "tools_count": tools.len(),
+                    "provider": provider_id,
+                    "model": model,
+                }),
+            ) {
+                tracing::error!("Failed to emit context-inspection-request: {}", e);
+                return Err("Failed to emit context inspection request".to_string());
+            }
+
+            // Wait for user approval (with timeout)
+            match tokio::time::timeout(std::time::Duration::from_secs(300), rx).await {
+                Ok(Ok(true)) => {
+                    tracing::info!("Context inspection approved");
+                }
+                Ok(Ok(false)) => {
+                    tracing::info!("Context inspection rejected");
+                    return Err("Context inspection rejected by user".to_string());
+                }
+                Ok(Err(_)) => {
+                    tracing::error!("Context inspection channel closed unexpectedly");
+                    return Err("Context inspection failed".to_string());
+                }
+                Err(_) => {
+                    // Timeout - clean up
+                    let mut approvals = state.context_approvals.lock().await;
+                    approvals.remove(&request_id);
+                    tracing::error!("Context inspection timed out");
+                    return Err("Context inspection timed out".to_string());
+                }
+            }
+        }
 
         let options = Some(GenerationOptions {
             temperature,
@@ -1633,6 +1711,7 @@ pub fn run() {
                     mcp_manager: mcp_manager.clone(),
                     librarian: librarian_arc.clone(),
                     active_task: Arc::new(Mutex::new(None)),
+                    context_approvals: Arc::new(Mutex::new(HashMap::new())),
                 };
                 app_handle.manage(state);
 
@@ -1661,6 +1740,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             stop_generation,
+            respond_to_context_inspection,
             list_conversations,
             create_conversation,
             delete_conversation,
