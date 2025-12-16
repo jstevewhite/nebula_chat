@@ -109,6 +109,40 @@ pub struct Settings {
     // Theme preference: "light", "dark", "solarized-light", "solarized-dark"
     #[serde(default = "default_theme")]
     pub theme: String,
+
+    #[serde(default = "default_font_interface")]
+    pub interface_font: String,
+
+    #[serde(default = "default_size_interface")]
+    pub interface_font_size: u32,
+
+    #[serde(default = "default_weight")]
+    pub interface_font_weight: String,
+
+    #[serde(default = "default_font_chat")]
+    pub chat_font: String,
+
+    #[serde(default = "default_size_chat")]
+    pub chat_font_size: u32,
+
+    #[serde(default = "default_weight")]
+    pub chat_font_weight: String,
+}
+
+fn default_font_interface() -> String {
+    "Inter".to_string()
+}
+fn default_size_interface() -> u32 {
+    14
+}
+fn default_weight() -> String {
+    "400".to_string()
+}
+fn default_font_chat() -> String {
+    "Inter".to_string()
+}
+fn default_size_chat() -> u32 {
+    14
 }
 
 fn default_theme() -> String {
@@ -223,6 +257,24 @@ impl Settings {
         }
         if let Some(theme) = val.get("theme").and_then(|v| v.as_str()) {
             s.theme = theme.to_string();
+        }
+        if let Some(font) = val.get("interface_font").and_then(|v| v.as_str()) {
+            s.interface_font = font.to_string();
+        }
+        if let Some(size) = val.get("interface_font_size").and_then(|v| v.as_u64()) {
+            s.interface_font_size = size as u32;
+        }
+        if let Some(weight) = val.get("interface_font_weight").and_then(|v| v.as_str()) {
+            s.interface_font_weight = weight.to_string();
+        }
+        if let Some(font) = val.get("chat_font").and_then(|v| v.as_str()) {
+            s.chat_font = font.to_string();
+        }
+        if let Some(size) = val.get("chat_font_size").and_then(|v| v.as_u64()) {
+            s.chat_font_size = size as u32;
+        }
+        if let Some(weight) = val.get("chat_font_weight").and_then(|v| v.as_str()) {
+            s.chat_font_weight = weight.to_string();
         }
 
         if let Some(mcp) = val.get("mcp_servers").and_then(|v| v.as_object()) {
