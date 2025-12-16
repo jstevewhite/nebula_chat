@@ -4,11 +4,11 @@ import { Server, Plus, Edit2, Book, Trash2, Palette } from "lucide-react";
 import ProvidersSettings, { ProviderConfig } from "./ProvidersSettings";
 import PromptsSettings from "./PromptsSettings";
 import { ThemeSelector } from "./ThemeSelector";
-import { useTheme } from "../contexts/ThemeContext";
+import { CustomSelect } from "./ui/CustomSelect";
 
 export default function SettingsPage() {
-    const { theme } = useTheme();
-    const colorScheme = theme === 'light' || theme === 'solarized-light' ? 'light' : 'dark';
+    // const { theme } = useTheme(); // Unused
+    // const colorScheme = theme === 'light' || theme === 'solarized-light' ? 'light' : 'dark'; // Unused
 
     const [servers, setServers] = useState<{ name: string, status: 'connected' | 'error' | 'unknown', config: any }[]>([]);
     const [providers, setProviders] = useState<Record<string, ProviderConfig>>({});
@@ -348,22 +348,22 @@ export default function SettingsPage() {
                         Select a model to use for analyzing and summarizing retrieved memories.
                         A smaller model (e.g., Llama 3 8B) is recommended for speed.
                     </p>
-                    <select
+                    <CustomSelect
                         disabled={!(fullSettings.memory_enabled ?? true)}
                         value={fullSettings.context_model || ""}
-                        onChange={(e) => setFullSettings({ ...fullSettings, context_model: e.target.value })}
-                        className={`w-full border border-[var(--color-border-secondary)] rounded-lg p-3 text-sm bg-[var(--color-bg-secondary)] text-[var(--color-text-primary)] focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none intelligence-settings-dropdown ${(fullSettings.memory_enabled ?? true) ? "" : "opacity-50 cursor-not-allowed"}`}
-                        style={{ colorScheme }}
-                    >
-                        <option value="">None (Raw Injection)</option>
-                        {Object.entries(providers).flatMap(([pkey, pval]) =>
-                            pval.models.filter(m => m.visible).map(m => (
-                                <option key={`${pkey}::${m.id}`} value={`${pkey}::${m.id}`}>
-                                    {pkey} - {m.name}
-                                </option>
-                            ))
-                        )}
-                    </select>
+                        onChange={(val) => setFullSettings({ ...fullSettings, context_model: val })}
+                        options={[
+                            { id: "none", label: "None (Raw Injection)", value: "" },
+                            ...Object.entries(providers).flatMap(([pkey, pval]) =>
+                                pval.models.filter(m => m.visible).map(m => ({
+                                    id: `${pkey}::${m.id}`,
+                                    label: `${pkey} - ${m.name}`,
+                                    value: `${pkey}::${m.id}`
+                                }))
+                            )
+                        ]}
+                        className={!(fullSettings.memory_enabled ?? true) ? "opacity-50" : ""}
+                    />
 
                     <div className="mt-4">
                         <label className="block text-sm font-bold text-[var(--color-text-secondary)] mb-2">
@@ -373,19 +373,17 @@ export default function SettingsPage() {
                             How many recent turns (user/assistant pairs) to include when deciding which memories are relevant.
                             Set to 0 to disable.
                         </p>
-                        <select
+                        <CustomSelect
                             disabled={!(fullSettings.memory_enabled ?? true)}
                             value={String(fullSettings.context_turns ?? 0)}
-                            onChange={(e) => setFullSettings({ ...fullSettings, context_turns: Number(e.target.value) })}
-                            className={`w-full border border-[var(--color-border-secondary)] rounded-lg p-3 text-sm bg-[var(--color-bg-secondary)] text-[var(--color-text-primary)] focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none intelligence-settings-dropdown ${(fullSettings.memory_enabled ?? true) ? "" : "opacity-50 cursor-not-allowed"}`}
-                            style={{ colorScheme }}
-                        >
-                            {[0, 1, 2, 3, 4, 6, 8, 10].map(n => (
-                                <option key={n} value={String(n)}>
-                                    {n}
-                                </option>
-                            ))}
-                        </select>
+                            onChange={(val) => setFullSettings({ ...fullSettings, context_turns: Number(val) })}
+                            options={[0, 1, 2, 3, 4, 6, 8, 10].map(n => ({
+                                id: String(n),
+                                label: String(n),
+                                value: String(n)
+                            }))}
+                            className={!(fullSettings.memory_enabled ?? true) ? "opacity-50" : ""}
+                        />
 
                     </div>
 
