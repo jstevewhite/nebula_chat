@@ -341,6 +341,83 @@ impl TantivyIndex {
         Ok(results)
     }
 
+    /// Search with advanced filtering options
+    /// Note: Filtering is done post-retrieval for simplicity. For better performance
+    /// at scale, consider implementing Tantivy query-time filtering.
+    pub fn search_with_options(
+        &self,
+        query_str: &str,
+        conversation_id: Option<&str>,
+        include_roles: Option<&[String]>,
+        exclude_roles: Option<&[String]>,
+        max_age_days: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
+        // Retrieve more results than needed to account for filtering
+        // This is a simple heuristic; adjust multiplier based on your filtering needs
+        let fetch_limit = if conversation_id.is_some()
+            || include_roles.is_some()
+            || exclude_roles.is_some()
+            || max_age_days.is_some() {
+            limit * 3 // Fetch 3x to account for filtering
+        } else {
+            limit
+        };
+
+        // Get raw results from Tantivy
+        let mut all_results = self.search(query_str, fetch_limit)?;
+
+        // Calculate cutoff timestamp for recency filtering
+        let cutoff_timestamp = if let Some(days) = max_age_days {
+            let cutoff = chrono::Utc::now() - chrono::Duration::days(days as i64);
+            Some(cutoff)
+        } else {
+            None
+        };
+
+        // Post-filter results
+        all_results.retain(|result| {
+            // Filter by conversation_id
+            if let Some(conv_id) = conversation_id {
+                if result.conversation_id != conv_id {
+                    return false;
+                }
+            }
+
+            // Filter by included roles
+            if let Some(roles) = include_roles {
+                if !roles.contains(&result.role) {
+                    return false;
+                }
+            }
+
+            // Filter by excluded roles
+            if let Some(roles) = exclude_roles {
+                if roles.contains(&result.role) {
+                    return false;
+                }
+            }
+
+            // Filter by recency
+            if let Some(cutoff) = cutoff_timestamp {
+                // Parse created_at (expected format: RFC3339)
+                if let Ok(created) = chrono::DateTime::parse_from_rfc3339(&result.created_at) {
+                    if created.with_timezone(&chrono::Utc) < cutoff {
+                        return false;
+                    }
+                }
+                // If parsing fails, include the result (graceful degradation)
+            }
+
+            true
+        });
+
+        // Limit to requested count
+        all_results.truncate(limit);
+
+        Ok(all_results)
+    }
+
     pub fn delete_by_message_id(&self, message_id: &str) -> Result<()> {
         self.sender.send(IndexOperation::DeleteByMessageId {
             message_id: message_id.to_string(),

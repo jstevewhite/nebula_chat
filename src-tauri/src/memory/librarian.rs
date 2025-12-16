@@ -5,6 +5,31 @@ use std::sync::Arc;
 
 use crate::memory::audit_logger::AuditLogger;
 
+/// Options for customizing memory search behavior
+#[derive(Debug, Clone, Default)]
+pub struct SearchOptions {
+    /// Maximum number of results to return
+    pub limit: usize,
+    /// Filter to specific conversation (None = search all conversations)
+    pub conversation_id: Option<String>,
+    /// Only include messages with these roles (None = include all)
+    pub include_roles: Option<Vec<String>>,
+    /// Exclude messages with these roles (None = exclude none)
+    pub exclude_roles: Option<Vec<String>>,
+    /// Only include messages from last N days (None = no time limit)
+    pub max_age_days: Option<u64>,
+}
+
+impl SearchOptions {
+    /// Create default search options with the given limit
+    pub fn with_limit(limit: usize) -> Self {
+        Self {
+            limit,
+            ..Default::default()
+        }
+    }
+}
+
 pub struct Librarian {
     sqlite: SqliteManager,
     tantivy: Arc<TantivyIndex>,
@@ -175,6 +200,20 @@ impl Librarian {
     }
 
     pub fn search(&self, query: &str) -> Result<Vec<SearchResult>> {
-        self.tantivy.search(query, 10)
+        self.search_with_options(query, SearchOptions::with_limit(10))
+    }
+
+    /// Search with custom options for filtering and scoping results
+    pub fn search_with_options(&self, query: &str, options: SearchOptions) -> Result<Vec<SearchResult>> {
+        let limit = if options.limit == 0 { 10 } else { options.limit };
+
+        self.tantivy.search_with_options(
+            query,
+            options.conversation_id.as_deref(),
+            options.include_roles.as_deref(),
+            options.exclude_roles.as_deref(),
+            options.max_age_days,
+            limit,
+        )
     }
 }
