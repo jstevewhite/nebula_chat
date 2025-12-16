@@ -4,6 +4,7 @@ use crate::mcp::config::Settings;
 use crate::mcp::config::{McpServerConfig, ModelConfig, ProviderType};
 use crate::mcp::manager::McpManager;
 use crate::memory::tantivy_index::SearchResult;
+use crate::memory::MemoryHit;
 use anyhow::Result;
 use std::sync::Arc;
 use tauri::{Manager, State};
@@ -360,36 +361,48 @@ async fn send_message(
             let lib = state.librarian.lock().await;
             if let Ok(results) = lib.search(&query) {
                 if !results.is_empty() {
-                    // Emit Memory Context Event
-                    let memory_list_preview: Vec<String> =
-                        results.iter().map(|res| res.content.clone()).collect();
+                    // Convert SearchResults to MemoryHits (with snippet truncation)
+                    let memory_hits: Vec<MemoryHit> = results
+                        .into_iter()
+                        .map(|res| MemoryHit::from_search_result_default(res))
+                        .collect();
+
+                    // Emit new structured memory-hits event
+                    use tauri::Emitter;
+                    if let Err(e) = app_handle.emit("memory-hits", &memory_hits) {
+                        tracing::error!("Failed to emit memory-hits: {}", e);
+                    }
 
                     if let Some(ctx_model) = &settings.context_model {
                         let assembled = crate::llm::context_assembler::ContextAssembler::assemble(
                             &query,
-                            &memory_list_preview,
+                            &memory_hits,
                             &messages,
                             settings.context_turns,
                             ctx_model,
                             &settings,
                         )
                         .await
-                        .unwrap_or_else(|_| memory_list_preview.join("\n"));
+                        .unwrap_or_else(|_| {
+                            memory_hits.iter().map(|h| h.snippet.clone()).collect::<Vec<_>>().join("\n")
+                        });
 
                         context_text = format!("Refined Context:\n{}\n", assembled);
-                        use tauri::Emitter;
-                        if let Err(e) = app_handle.emit("memory-context", &vec![assembled]) {
+
+                        // Emit legacy memory-context event for backward compatibility
+                        if let Err(e) = app_handle.emit("memory-context", &vec![assembled.clone()]) {
                             tracing::error!("Failed to emit memory-context: {}", e);
                         }
                     } else {
-                        use tauri::Emitter;
-                        if let Err(e) = app_handle.emit("memory-context", &memory_list_preview) {
+                        // Emit legacy memory-context event with snippets
+                        let snippets: Vec<String> = memory_hits.iter().map(|h| h.snippet.clone()).collect();
+                        if let Err(e) = app_handle.emit("memory-context", &snippets) {
                             tracing::error!("Failed to emit memory-context: {}", e);
                         }
 
                         context_text = "Relevant Memories:\n".to_string();
-                        for res in results {
-                            context_text.push_str(&format!("- {}\n", res.content));
+                        for hit in &memory_hits {
+                            context_text.push_str(&format!("- {}\n", hit.snippet));
                         }
                     }
                 }
