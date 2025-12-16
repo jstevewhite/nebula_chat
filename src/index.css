@@ -42,3 +42,16 @@ option {
   background-color: var(--color-bg-elevated);
   color: var(--color-text-primary);
 }
+
+/* Theme-aware button helpers */
+.btn-primary {
+  background-color: var(--color-accent-primary);
+  color: #ffffff;
+}
+.btn-primary:hover {
+  background-color: var(--color-accent-secondary);
+}
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

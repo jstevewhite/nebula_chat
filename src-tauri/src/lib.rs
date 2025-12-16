@@ -416,8 +416,8 @@ async fn send_message(
         // Inject System Prompt
         tracing::debug!("[DEBUG] Loading settings for system prompt...");
 
-        if let Some(active_id) = settings.active_system_prompt_id {
-            if let Some(prompt) = settings.system_prompts.iter().find(|p| p.id == active_id) {
+        if let Some(active_id) = &settings.active_system_prompt_id {
+            if let Some(prompt) = settings.system_prompts.iter().find(|p| &p.id == active_id) {
                 tracing::debug!("[DEBUG] Injecting system prompt: {}", prompt.name);
                 final_messages.insert(
                     0,
@@ -431,6 +431,32 @@ async fn send_message(
                     },
                 );
             }
+        }
+
+        // Inject Current Date/Time
+        let now = chrono::Local::now();
+        let date_msg = Message {
+            id: None,
+            role: "system".to_string(),
+            content: Some(format!(
+                "CURRENT DATE: {}",
+                now.format("%A, %B %d, %Y %H:%M")
+            )),
+            tool_calls: None,
+            tool_call_id: None,
+            attachments: None,
+        };
+
+        let has_system_prompt = settings
+            .active_system_prompt_id
+            .as_ref()
+            .and_then(|id| settings.system_prompts.iter().find(|p| &p.id == id))
+            .is_some();
+
+        if has_system_prompt {
+            final_messages.insert(1, date_msg);
+        } else {
+            final_messages.insert(0, date_msg);
         }
 
         tracing::debug!("[DEBUG] Getting tools from MCP Manager...");

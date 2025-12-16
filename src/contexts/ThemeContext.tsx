@@ -1,8 +1,6 @@
 import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 
-type Theme = 'light' | 'dark' | 'solarized-light' | 'solarized-dark'; // Keep this type for internal use if needed, but context uses string
-
 export interface FontSettings {
   interface_font: string;
   interface_font_size: number;
@@ -104,13 +102,21 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [theme, isLoading, updateTheme]);
 
   const setTheme = async (newTheme: string) => {
+    // Update UI immediately
+    setThemeState(newTheme);
+    updateTheme(newTheme);
+
     try {
-      await invoke('save_settings', { settings: { theme: newTheme } }); // Save only theme
-      setThemeState(newTheme);
+      // Merge into the full settings object so we don't wipe providers/MCP servers.
+      const currentSettings = await invoke<any>('get_settings');
+      await invoke('save_settings', {
+        settings: {
+          ...currentSettings,
+          theme: newTheme
+        }
+      });
     } catch (error) {
       console.error('Failed to save theme:', error);
-      // Still update UI even if save fails
-      setThemeState(newTheme);
     }
   };
 

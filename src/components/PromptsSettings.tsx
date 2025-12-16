@@ -85,7 +85,7 @@ export default function PromptsSettings() {
             <div className="w-1/3 border-r border-[var(--color-border-primary)] flex flex-col">
                 <div className="p-3 border-b border-[var(--color-border-primary)] flex justify-between items-center bg-[var(--color-bg-primary)]">
                     <span className="font-bold text-[var(--color-text-secondary)] text-xs uppercase tracking-wider">Prompts</span>
-                    <button onClick={handleNew} className="p-1 hover:bg-[var(--color-bg-tertiary)] rounded text-blue-500">
+                    <button onClick={handleNew} className="p-1 hover:bg-[var(--color-bg-tertiary)] rounded text-[var(--color-accent-primary)]">
                         <Plus size={16} />
                     </button>
                 </div>
@@ -94,7 +94,7 @@ export default function PromptsSettings() {
                         <div
                             key={p.id}
                             onClick={() => handleSelect(p)}
-                            className={`p-2 rounded cursor-pointer text-sm flex justify-between items-center group transition-colors ${selectedId === p.id ? "bg-blue-600/20 text-blue-400" : "hover:bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)]"}`}
+                            className={`p-2 rounded cursor-pointer text-sm flex justify-between items-center group transition-colors ${selectedId === p.id ? "bg-[var(--color-bg-tertiary)] text-[var(--color-accent-primary)]" : "hover:bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)]"}`}
                         >
                             <div className="flex items-center gap-2 truncate">
                                 <Book size={14} className="opacity-50" />
@@ -143,7 +143,7 @@ export default function PromptsSettings() {
                     <button
                         onClick={handleSave}
                         disabled={!name || !content}
-                        className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-bold rounded-lg transition-colors"
+                        className="flex items-center gap-2 px-4 py-2 btn-primary disabled:opacity-50 disabled:cursor-not-allowed text-sm font-bold rounded-lg transition-colors"
                     >
                         <Save size={16} /> Save Prompt
                     </button>

@@ -46,8 +46,10 @@
   --color-border-primary: #374151;
   --color-border-secondary: #4b5563;
 
-  --color-accent-primary: #396cd8;
-  --color-accent-secondary: #646cff;
+  /* Accent colors (used by primary buttons, focus rings, etc.)
+     Dark theme: slate/steel accent (muted blue-gray) for calmer CTAs. */
+  --color-accent-primary: #475569;
+  --color-accent-secondary: #64748b;
 
   --color-success: #27ae60;
   --color-error: #ef4444;
@@ -55,7 +57,7 @@
 
   --color-input-bg: #030712;
   --color-input-border: #374151;
-  --color-input-focus: #535bf2;
+  --color-input-focus: var(--color-accent-secondary);
   --color-hover-bg: #3a3a3a;
   --color-active-bg: #4a4a4a;
 

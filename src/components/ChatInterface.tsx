@@ -11,7 +11,6 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import remarkGfm from 'remark-gfm';
 import MemoryPanel from "./MemoryPanel";
 import { getProviderIcon } from "../utils/providerIcons";
-import { useTheme } from "../contexts/ThemeContext";
 import { CustomSelect } from "./ui/CustomSelect";
 
 interface ToolCall {
@@ -60,11 +59,10 @@ interface GenerationSettings {
 }
 
 export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
-    const { theme } = useTheme();
-
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState("");
     const [loading, setLoading] = useState(false);
+
 
     const [isDragging, setIsDragging] = useState(false);
 
@@ -118,6 +116,18 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
     const scrollRef = useRef<HTMLDivElement>(null);
 
+    // Track whether we should keep auto-scrolling to bottom.
+    // This prevents fighting the user's scrollbar drag / text selection while they're reading older messages.
+    const autoScrollRef = useRef(true);
+    const SCROLL_BOTTOM_THRESHOLD_PX = 64;
+
+    const handleScroll = () => {
+        const el = scrollRef.current;
+        if (!el) return;
+        const distanceFromBottom = el.scrollHeight - (el.scrollTop + el.clientHeight);
+        autoScrollRef.current = distanceFromBottom <= SCROLL_BOTTOM_THRESHOLD_PX;
+    };
+
     useEffect(() => {
         loadSettings();
 
@@ -154,17 +164,19 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     }, [conversationId]);
 
     useEffect(() => {
-        if (scrollRef.current) {
-            const container = scrollRef.current;
-            // Use setTimeout to allow layout to settle (e.g. images loading, markdown rendering)
-            const timer = setTimeout(() => {
-                container.scrollTo({
-                    top: container.scrollHeight,
-                    behavior: "smooth"
-                });
-            }, 100);
-            return () => clearTimeout(timer);
-        }
+        const el = scrollRef.current;
+        if (!el) return;
+        if (!autoScrollRef.current) return;
+
+        // Let layout settle (markdown/code blocks/images) but don't animate continuously.
+        const timer = setTimeout(() => {
+            el.scrollTo({
+                top: el.scrollHeight,
+                behavior: "auto"
+            });
+        }, 50);
+
+        return () => clearTimeout(timer);
     }, [messages]);
 
     // Tauri File Drop Listeners
@@ -728,7 +740,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             <div className="p-4 bg-[var(--color-bg-secondary)] border-b border-[var(--color-border-primary)] flex justify-between items-center shadow-md z-10 relative">
                 <div className="flex items-center gap-3">
                     <div className="w-3 h-3 rounded-full bg-green-500 animate-pulse box-shadow-lg shadow-green-500/50" />
-                    <div className="w-[200px]">
+                    <div className="w-[420px] max-w-[45vw]">
                         <CustomSelect
                             value={selectedModel}
                             onChange={(val) => setSelectedModel(val)}
@@ -775,7 +787,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                     <div className="relative">
                         <button
                             onClick={() => setShowSettings(!showSettings)}
-                            className={`p-2 rounded-lg transition-colors ${showSettings ? "bg-blue-600/20 text-blue-400" : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)]"}`}
+                            className={`p-2 rounded-lg transition-colors ${showSettings ? "bg-[var(--color-bg-tertiary)] text-[var(--color-accent-primary)] ring-1 ring-[var(--color-accent-primary)]" : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)]"}`}
                             title="Generation Settings"
                         >
                             <Sliders size={18} />
@@ -792,7 +804,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                                         <label className="text-sm text-[var(--color-text-secondary)]">Streaming</label>
                                         <button
                                             onClick={() => setGenSettings({ ...genSettings, stream: !genSettings.stream })}
-                                            className={`w-10 h-5 rounded-full relative transition-colors ${genSettings.stream ? 'bg-blue-600' : 'bg-[var(--color-bg-tertiary)]'}`}
+                                            className={`w-10 h-5 rounded-full relative transition-colors ${genSettings.stream ? 'bg-[var(--color-accent-primary)]' : 'bg-[var(--color-bg-tertiary)]'}`}
                                         >
                                             <div className={`w-3 h-3 bg-white rounded-full absolute top-1 transition-all ${genSettings.stream ? 'left-6' : 'left-1'}`} />
                                         </button>
@@ -884,6 +896,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             <div
                 className="flex-1 overflow-y-auto p-4 space-y-6 min-h-0"
                 ref={scrollRef}
+                onScroll={handleScroll}
             >
                 {messages.map((m, i) => (
                     <ChatMessage
@@ -929,7 +942,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                                 </button>
                                 <button
                                     onClick={handleApproveAllTools}
-                                    className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-[var(--color-text-primary)] font-semibold shadow-lg shadow-blue-500/20 transition-all hover:scale-105"
+                                    className="px-4 py-2 rounded-lg btn-primary font-semibold shadow-lg transition-all hover:scale-105"
                                 >
                                     Approve All
                                 </button>
@@ -989,7 +1002,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         onClick={loading ? handleStop : handleSend}
                         className={`p-3 rounded-xl transition-all shadow-lg ${loading
                             ? "bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/50 hover:shadow-red-500/20"
-                            : "bg-blue-600 hover:bg-blue-500 text-[var(--color-text-primary)] shadow-blue-600/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                            : "btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
                             }`}
                         title={loading ? "Stop Generating" : "Send Message"}
                     >
