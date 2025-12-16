@@ -4,6 +4,7 @@ use crate::llm::openai::OpenAiProvider;
 use crate::llm::provider::LlmProvider;
 use crate::llm::provider::Message;
 use crate::mcp::config::Settings;
+use crate::memory::MemoryHit;
 use anyhow::Result;
 
 pub struct ContextAssembler;
@@ -11,13 +12,13 @@ pub struct ContextAssembler;
 impl ContextAssembler {
     pub async fn assemble(
         query: &str,
-        raw_memories: &[String],
+        memory_hits: &[MemoryHit],
         conversation_history: &[Message],
         context_turns: usize,
         context_model_id: &str,
         settings: &Settings,
     ) -> Result<String> {
-        if raw_memories.is_empty() {
+        if memory_hits.is_empty() {
             return Ok(String::new());
         }
 
@@ -27,7 +28,7 @@ impl ContextAssembler {
             (parts[0], parts[1])
         } else {
             // Fallback or error
-            return Ok(raw_memories.join("\n"));
+            return Ok(memory_hits.iter().map(|h| h.snippet.clone()).collect::<Vec<_>>().join("\n"));
         };
 
         // 2. Instantiate local provider (stateless for this call)
@@ -56,13 +57,23 @@ impl ContextAssembler {
                     }
                 }
             } else {
-                // If provider config not found, fallback to raw
-                return Ok(raw_memories.join("\n"));
+                // If provider config not found, fallback to raw snippets
+                return Ok(memory_hits.iter().map(|h| h.snippet.clone()).collect::<Vec<_>>().join("\n"));
             };
 
         // 3. Construct Prompt
         // Use recent conversation turns (if configured) to better judge relevance.
-        let memory_block = raw_memories.join("\n---\n");
+        // Format memory hits with metadata for better context
+        let memory_block = memory_hits
+            .iter()
+            .map(|hit| {
+                format!(
+                    "[{}] {} (score: {:.2})\n{}",
+                    hit.role, hit.created_at, hit.score, hit.snippet
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n---\n");
 
         let recent_context = if context_turns == 0 {
             String::new()
@@ -140,7 +151,8 @@ INSTRUCTIONS:
             }
             Err(e) => {
                 eprintln!("Context Assembly Failed: {}", e);
-                Ok(raw_memories.join("\n")) // Fallback to raw
+                // Fallback to raw snippets
+                Ok(memory_hits.iter().map(|h| h.snippet.clone()).collect::<Vec<_>>().join("\n"))
             }
         }
     }
