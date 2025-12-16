@@ -1,11 +1,13 @@
 pub mod audit_logger;
 pub mod librarian;
+pub mod strategist;
 
 pub mod sqlite_manager;
 pub mod tantivy_index;
 
 use tantivy_index::SearchResult;
 pub use librarian::SearchOptions;
+pub use strategist::{SearchPlan, SearchQuery, StrategistContextResult, StrategistMemoryOrchestrator};
 
 /// Lightweight DTO for memory hits optimized for strategist consumption.
 /// Contains metadata + truncated snippet instead of full content.
