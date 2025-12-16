@@ -177,7 +177,7 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
                 <div className="flex gap-2">
                     <button
                         onClick={onCreate}
-                        className="flex-1 bg-blue-600 hover:bg-blue-500 text-[var(--color-text-primary)] rounded-lg p-2.5 flex items-center justify-center gap-2 transition-all font-semibold text-sm shadow-md shadow-blue-900/20"
+                        className="flex-1 btn-primary rounded-lg p-2.5 flex items-center justify-center gap-2 transition-all font-semibold text-sm shadow-md"
                     >
                         <Plus size={18} /> New Chat
                     </button>

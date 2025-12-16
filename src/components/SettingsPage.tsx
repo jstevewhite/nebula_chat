@@ -585,7 +585,7 @@ export default function SettingsPage() {
                 <div className="mt-6 flex justify-end">
                     <button
                         onClick={saveSettings}
-                        className="bg-blue-600 hover:bg-blue-500 text-[var(--color-text-primary)] font-bold py-2 px-6 rounded-lg transition-all shadow-lg shadow-blue-500/20"
+                        className="btn-primary font-bold py-2 px-6 rounded-lg transition-all shadow-lg"
                     >
                         Save Configuration
                     </button>
@@ -620,13 +620,13 @@ export default function SettingsPage() {
                                     <div className="flex gap-2">
                                         <button
                                             onClick={() => setTransportType("stdio")}
-                                            className={`flex-1 py-2 rounded-lg text-sm font-bold border ${transportType === "stdio" ? "bg-blue-600 border-blue-600 text-[var(--color-text-primary)]" : "bg-[var(--color-bg-primary)] border-[var(--color-border-secondary)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)]"}`}
+                                            className={`flex-1 py-2 rounded-lg text-sm font-bold border ${transportType === "stdio" ? "btn-primary border-[var(--color-accent-primary)]" : "bg-[var(--color-bg-primary)] border-[var(--color-border-secondary)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)]"}`}
                                         >
                                             Stdio (Local)
                                         </button>
                                         <button
                                             onClick={() => setTransportType("sse")}
-                                            className={`flex-1 py-2 rounded-lg text-sm font-bold border ${transportType === "sse" ? "bg-blue-600 border-blue-600 text-[var(--color-text-primary)]" : "bg-[var(--color-bg-primary)] border-[var(--color-border-secondary)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)]"}`}
+                                            className={`flex-1 py-2 rounded-lg text-sm font-bold border ${transportType === "sse" ? "btn-primary border-[var(--color-accent-primary)]" : "bg-[var(--color-bg-primary)] border-[var(--color-border-secondary)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)]"}`}
                                         >
                                             SSE (Remote)
                                         </button>
@@ -720,7 +720,7 @@ export default function SettingsPage() {
                                 </button>
                                 <button
                                     onClick={handleSaveServer}
-                                    className="px-6 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-[var(--color-text-primary)] font-bold text-sm shadow-lg shadow-blue-600/20"
+                                    className="px-6 py-2 rounded-lg btn-primary font-bold text-sm shadow-lg"
                                 >
                                     {editingServer ? 'Save Changes' : 'Connect Server'}
                                 </button>
