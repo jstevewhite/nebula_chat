@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check, Pin, FileText, Book, Paperclip, X, Brain, Square, Sliders, Download } from "lucide-react";
+import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check, Pin, FileText, Book, Paperclip, X, Brain, Square, Sliders, Download, Eye, EyeOff } from "lucide-react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile, readFile, readTextFile } from "@tauri-apps/plugin-fs";
 import ReactMarkdown from "react-markdown";
@@ -97,6 +97,12 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     const [activeSidePanel, setActiveSidePanel] = useState<'none' | 'memory'>('none');
     const [recentMemories, setRecentMemories] = useState<string[]>([]);
 
+    // Context Inspection
+    const [contextInspectionEnabled, setContextInspectionEnabled] = useState(false);
+    const [fullSettings, setFullSettings] = useState<any>(null);
+    const [showContextModal, setShowContextModal] = useState(false);
+    const [contextInspectionData, setContextInspectionData] = useState<any>(null);
+
     // Tool Execution State
     const [pendingTools, setPendingTools] = useState<{ name: string, args: any, callId: string }[]>([]);
     const [toolPolicies, setToolPolicies] = useState<Record<string, boolean>>({});
@@ -106,6 +112,18 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         const unlistenPromise = listen<string[]>("memory-context", (event) => {
             console.log("Memory Context Received:", event.payload);
             setRecentMemories(event.payload);
+        });
+        return () => {
+            unlistenPromise.then(unlisten => unlisten());
+        };
+    }, []);
+
+    // Listen for Context Inspection Events
+    useEffect(() => {
+        const unlistenPromise = listen<any>("context-inspection-request", (event) => {
+            console.log("Context Inspection Request:", event.payload);
+            setContextInspectionData(event.payload);
+            setShowContextModal(true);
         });
         return () => {
             unlistenPromise.then(unlisten => unlisten());
@@ -287,6 +305,8 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     const loadSettings = async () => {
         try {
             const settings: any = await invoke("get_settings");
+            setFullSettings(settings);
+            setContextInspectionEnabled(settings.context_inspection_enabled || false);
             const models: ModelOption[] = [];
 
             if (settings.providers) {
@@ -338,6 +358,54 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     const handleSetPrompt = async (id: string) => {
         setSelectedPromptId(id);
         await invoke("set_active_system_prompt", { id: id || null });
+    };
+
+    const toggleContextInspection = async () => {
+        const newValue = !contextInspectionEnabled;
+        setContextInspectionEnabled(newValue);
+
+        if (fullSettings) {
+            const updatedSettings = { ...fullSettings, context_inspection_enabled: newValue };
+            try {
+                await invoke("save_settings", { settings: updatedSettings });
+                setFullSettings(updatedSettings);
+            } catch (e) {
+                console.error("Failed to save context inspection setting:", e);
+                // Revert on error
+                setContextInspectionEnabled(!newValue);
+            }
+        }
+    };
+
+    const handleApproveContext = async () => {
+        if (contextInspectionData) {
+            try {
+                await invoke("respond_to_context_inspection", {
+                    requestId: contextInspectionData.request_id,
+                    approved: true
+                });
+                setShowContextModal(false);
+                setContextInspectionData(null);
+            } catch (e) {
+                console.error("Failed to approve context:", e);
+            }
+        }
+    };
+
+    const handleRejectContext = async () => {
+        if (contextInspectionData) {
+            try {
+                await invoke("respond_to_context_inspection", {
+                    requestId: contextInspectionData.request_id,
+                    approved: false
+                });
+                setShowContextModal(false);
+                setContextInspectionData(null);
+                setLoading(false); // Reset loading state since we cancelled
+            } catch (e) {
+                console.error("Failed to reject context:", e);
+            }
+        }
     };
 
 
@@ -880,6 +948,14 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                             </span>
                         )}
                     </button>
+
+                    <button
+                        onClick={toggleContextInspection}
+                        className={`p-2 rounded-lg transition-colors ${contextInspectionEnabled ? 'bg-amber-500/20 text-amber-400' : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)]'}`}
+                        title={`Context Inspection: ${contextInspectionEnabled ? 'ON - Will show context before sending' : 'OFF'}`}
+                    >
+                        {contextInspectionEnabled ? <Eye size={18} /> : <EyeOff size={18} />}
+                    </button>
                 </div>
             </div>
 
@@ -1255,6 +1331,94 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
                     </div>
                 </div>
             </div>
+
+            {/* Context Inspection Modal */}
+            {showContextModal && contextInspectionData && (
+                <div className="absolute inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+                    <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border-secondary)] rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col">
+                        {/* Header */}
+                        <div className="p-6 border-b border-[var(--color-border-primary)]">
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <h2 className="text-2xl font-bold text-[var(--color-text-primary)] flex items-center gap-3">
+                                        <Eye className="text-amber-400" size={24} />
+                                        Context Inspection
+                                    </h2>
+                                    <p className="text-sm text-[var(--color-text-secondary)] mt-1">
+                                        Review the exact context being sent to <strong>{contextInspectionData.provider}::{contextInspectionData.model}</strong>
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={handleRejectContext}
+                                    className="p-2 text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)] rounded-lg transition-colors"
+                                    title="Cancel"
+                                >
+                                    <X size={20} />
+                                </button>
+                            </div>
+                            <div className="mt-4 flex gap-4 text-sm">
+                                <div className="bg-[var(--color-bg-tertiary)] px-3 py-1.5 rounded-lg">
+                                    <span className="text-[var(--color-text-secondary)]">Messages:</span>
+                                    <span className="ml-2 font-bold text-[var(--color-text-primary)]">{contextInspectionData.messages?.length || 0}</span>
+                                </div>
+                                <div className="bg-[var(--color-bg-tertiary)] px-3 py-1.5 rounded-lg">
+                                    <span className="text-[var(--color-text-secondary)]">Tools:</span>
+                                    <span className="ml-2 font-bold text-[var(--color-text-primary)]">{contextInspectionData.tools_count || 0}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Message List */}
+                        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                            {contextInspectionData.messages?.map((msg: any, idx: number) => (
+                                <div key={idx} className="bg-[var(--color-bg-tertiary)] border border-[var(--color-border-primary)] rounded-xl p-4">
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <span className={`px-2 py-1 rounded text-xs font-bold uppercase ${
+                                            msg.role === 'system' ? 'bg-purple-600/20 text-purple-400' :
+                                            msg.role === 'user' ? 'bg-orange-600/20 text-orange-400' :
+                                            msg.role === 'assistant' ? 'bg-blue-600/20 text-blue-400' :
+                                            'bg-yellow-600/20 text-yellow-400'
+                                        }`}>
+                                            {msg.role}
+                                        </span>
+                                        {msg.tool_call_id && (
+                                            <span className="px-2 py-1 rounded text-xs bg-gray-600/20 text-gray-400">
+                                                tool_call_id: {msg.tool_call_id}
+                                            </span>
+                                        )}
+                                    </div>
+                                    {msg.content && (
+                                        <pre className="text-sm text-[var(--color-text-primary)] whitespace-pre-wrap font-mono overflow-x-auto">
+                                            {msg.content}
+                                        </pre>
+                                    )}
+                                    {msg.tool_calls && (
+                                        <div className="mt-2 text-xs text-yellow-400 font-mono">
+                                            Tool Calls: {msg.tool_calls}
+                                        </div>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+
+                        {/* Footer Actions */}
+                        <div className="p-6 border-t border-[var(--color-border-primary)] flex justify-end gap-3">
+                            <button
+                                onClick={handleRejectContext}
+                                className="px-6 py-2.5 rounded-lg bg-[var(--color-bg-tertiary)] text-[var(--color-text-primary)] hover:bg-red-600/20 hover:text-red-400 border border-[var(--color-border-primary)] hover:border-red-500/50 transition-colors font-semibold"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleApproveContext}
+                                className="px-6 py-2.5 rounded-lg bg-green-600 text-white hover:bg-green-700 transition-colors font-semibold shadow-lg"
+                            >
+                                Send to Model
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

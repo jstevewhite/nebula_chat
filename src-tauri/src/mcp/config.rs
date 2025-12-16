@@ -106,6 +106,11 @@ pub struct Settings {
     #[serde(default = "default_true_bool")]
     pub memory_enabled: bool,
 
+    // Enables context inspection mode: shows full context before sending to model
+    // with Cancel/OK dialog for debugging and transparency.
+    #[serde(default)]
+    pub context_inspection_enabled: bool,
+
     // Theme preference: "light", "dark", "solarized-light", "solarized-dark"
     #[serde(default = "default_theme")]
     pub theme: String,
