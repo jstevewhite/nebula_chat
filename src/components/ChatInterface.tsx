@@ -1333,7 +1333,7 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
             </div>
 
             {/* Context Inspection Modal */}
-            {showContextModal && contextInspectionData && (
+            {showContextModal && contextInspectionData && contextInspectionData.messages && (
                 <div className="absolute inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
                     <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border-secondary)] rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col">
                         {/* Header */}
