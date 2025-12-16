@@ -34,12 +34,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   // Apply theme to document when it changes
   useEffect(() => {
-    if (isLoading) return;
-
     const root = document.documentElement;
 
     // Remove no-transition class after initial load to enable smooth transitions
-    if (root.classList.contains('no-transition')) {
+    if (!isLoading && root.classList.contains('no-transition')) {
       // Small delay to ensure styles are applied before enabling transitions
       setTimeout(() => {
         root.classList.remove('no-transition');

@@ -47,14 +47,14 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen bg-black text-white overflow-hidden font-sans">
+    <div className="flex h-screen bg-[var(--color-bg-primary)] text-[var(--color-text-primary)] overflow-hidden font-sans">
       {/* Activity Bar */}
-      <div className="w-16 flex flex-col items-center py-6 bg-gray-950 border-r border-gray-900 space-y-4 z-20 shrink-0">
+      <div className="w-16 flex flex-col items-center py-6 bg-[var(--color-bg-tertiary)] border-r border-[var(--color-border-primary)] space-y-4 z-20 shrink-0">
         <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-purple-600 rounded-xl mb-4 shadow-lg shadow-blue-500/20" />
 
         <button
           onClick={() => setActiveTab("chat")}
-          className={`p-3 rounded-xl transition-all duration-200 ${activeTab === "chat" ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20" : "text-gray-500 hover:bg-gray-900 hover:text-gray-300"}`}
+          className={`p-3 rounded-xl transition-all duration-200 ${activeTab === "chat" ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20" : "text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text-secondary)]"}`}
           title="Chat"
         >
           <MessageSquare size={20} />
@@ -62,7 +62,7 @@ export default function App() {
 
         <button
           onClick={() => setShowTools(!showTools)}
-          className={`p-3 rounded-xl transition-all duration-200 ${showTools && activeTab === "chat" ? "bg-gray-800 text-blue-400" : "text-gray-500 hover:bg-gray-900 hover:text-gray-300"}`}
+          className={`p-3 rounded-xl transition-all duration-200 ${showTools && activeTab === "chat" ? "bg-[var(--color-bg-secondary)] text-[var(--color-accent-secondary)]" : "text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text-secondary)]"}`}
           title="Tools"
         >
           <Wrench size={20} />
@@ -72,7 +72,7 @@ export default function App() {
 
         <button
           onClick={() => setActiveTab("settings")}
-          className={`p-3 rounded-xl transition-all duration-200 ${activeTab === "settings" ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20" : "text-gray-500 hover:bg-gray-900 hover:text-gray-300"}`}
+          className={`p-3 rounded-xl transition-all duration-200 ${activeTab === "settings" ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20" : "text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text-secondary)]"}`}
           title="Settings"
         >
           <Settings size={20} />
