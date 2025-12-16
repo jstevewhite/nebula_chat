@@ -74,8 +74,7 @@ impl StrategistMemoryOrchestrator {
         // Step 1: Initial retrieval (fast, deterministic)
         let initial_options = SearchOptions {
             limit: 10,
-            // Default: exclude tool outputs for cleaner initial results
-            exclude_roles: Some(vec!["tool".to_string()]),
+            // Include tool outputs - model may need to reference prior tool results
             ..Default::default()
         };
 
@@ -494,7 +493,8 @@ OUTPUT:"#,
             if recent.len() >= max_msgs {
                 break;
             }
-            if m.role != "user" && m.role != "assistant" {
+            // Include user, assistant, and tool messages (tool outputs may be critical context)
+            if m.role != "user" && m.role != "assistant" && m.role != "tool" {
                 continue;
             }
             let content = m.content.clone().unwrap_or_default();
