@@ -143,30 +143,30 @@ export default function ToolsPanel() {
     });
 
     return (
-        <div className="h-full flex flex-col bg-gray-950 border-l border-gray-800 text-white w-80">
-            <div className="p-4 border-b border-gray-800 flex items-center justify-between">
+        <div className="h-full flex flex-col bg-[var(--color-bg-primary)] border-l border-[var(--color-border-primary)] text-[var(--color-text-primary)] w-80">
+            <div className="p-4 border-b border-[var(--color-border-primary)] flex items-center justify-between">
                 <div className="flex items-center gap-2 font-semibold">
-                    <Wrench size={18} className="text-gray-400" />
+                    <Wrench size={18} className="text-[var(--color-text-secondary)]" />
                     <span>Tools</span>
                 </div>
                 <button
                     onClick={loadTools}
-                    className={`p-1.5 rounded hover:bg-gray-800 text-gray-400 hover:text-white transition-colors ${loading ? "animate-spin" : ""}`}
+                    className={`p-1.5 rounded hover:bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors ${loading ? "animate-spin" : ""}`}
                     title="Refresh Tools"
                 >
                     <RefreshCw size={14} />
                 </button>
             </div>
 
-            <div className="p-3 border-b border-gray-800">
+            <div className="p-3 border-b border-[var(--color-border-primary)]">
                 <div className="relative">
-                    <Search className="absolute left-2.5 top-2.5 text-gray-500 w-3.5 h-3.5" />
+                    <Search className="absolute left-2.5 top-2.5 text-[var(--color-text-tertiary)] w-3.5 h-3.5" />
                     <input
                         type="text"
                         placeholder="Filter tools..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        className="w-full bg-gray-900 border border-gray-800 rounded-lg py-1.5 pl-8 pr-3 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50 transition-colors placeholder-gray-600"
+                        className="w-full bg-[var(--color-bg-secondary)] border border-[var(--color-border-primary)] rounded-lg py-1.5 pl-8 pr-3 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50 transition-colors placeholder-gray-600"
                     />
                 </div>
             </div>
@@ -185,16 +185,16 @@ export default function ToolsPanel() {
 
                     return (
                         <div key={server} className="space-y-1">
-                            <div className="flex items-center justify-between px-2 py-1 bg-gray-900/30 rounded hover:bg-gray-900 transition-colors group select-none">
+                            <div className="flex items-center justify-between px-2 py-1 bg-[var(--color-bg-secondary)]/30 rounded hover:bg-[var(--color-bg-secondary)] transition-colors group select-none">
                                 <div
                                     className="flex items-center gap-2 cursor-pointer flex-1 py-1"
                                     onClick={() => toggleServerCollapse(server)}
                                 >
-                                    {isExpanded ? <ChevronDown size={14} className="text-gray-500" /> : <ChevronRight size={14} className="text-gray-500" />}
-                                    <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">
+                                    {isExpanded ? <ChevronDown size={14} className="text-[var(--color-text-tertiary)]" /> : <ChevronRight size={14} className="text-[var(--color-text-tertiary)]" />}
+                                    <div className="text-xs font-bold text-[var(--color-text-secondary)] uppercase tracking-wider">
                                         {server}
                                     </div>
-                                    <span className="text-[10px] bg-gray-800 px-1.5 rounded-full font-mono text-gray-500">{serverTools.length}</span>
+                                    <span className="text-[10px] bg-[var(--color-bg-tertiary)] px-1.5 rounded-full font-mono text-[var(--color-text-tertiary)]">{serverTools.length}</span>
                                 </div>
 
                                 <div className="flex items-center gap-1">
@@ -203,7 +203,7 @@ export default function ToolsPanel() {
                                             e.stopPropagation();
                                             toggleServerAutoApprove(server, serverPolicies[server] || false);
                                         }}
-                                        className={`p-1 hover:text-white transition-colors ${serverPolicies[server] ? "text-purple-500" : "text-gray-600 hover:text-purple-400"}`}
+                                        className={`p-1 hover:text-[var(--color-text-primary)] transition-colors ${serverPolicies[server] ? "text-purple-500" : "text-gray-600 hover:text-purple-400"}`}
                                         title={serverPolicies[server] ? "Auto-Approve Enabled (Click to Disable)" : "Enable Auto-Approve"}
                                     >
                                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -216,7 +216,7 @@ export default function ToolsPanel() {
                                             e.stopPropagation();
                                             toggleServerTools(server, serverTools, !allEnabled);
                                         }}
-                                        className={`p-1 mr-1 hover:text-white transition-colors ${allEnabled ? "text-green-500" : someEnabled ? "text-green-500/50" : "text-gray-600"}`}
+                                        className={`p-1 mr-1 hover:text-[var(--color-text-primary)] transition-colors ${allEnabled ? "text-green-500" : someEnabled ? "text-green-500/50" : "text-gray-600"}`}
                                         title={allEnabled ? "Disable All" : "Enable All"}
                                     >
                                         {allEnabled ? <CheckSquare size={14} /> : someEnabled ? <CheckSquare size={14} className="opacity-50" /> : <Square size={14} />}
@@ -225,7 +225,7 @@ export default function ToolsPanel() {
                             </div>
 
                             {isExpanded && (
-                                <div className="space-y-0.5 ml-1 pl-2 border-l border-gray-800 animate-in fade-in slide-in-from-top-1 duration-200">
+                                <div className="space-y-0.5 ml-1 pl-2 border-l border-[var(--color-border-primary)] animate-in fade-in slide-in-from-top-1 duration-200">
                                     {serverTools.map((tool) => {
                                         const isAutoApproved = toolPolicies[tool.name as string] || false;
                                         const isServerLocked = serverPolicies[server] || false;
@@ -233,11 +233,11 @@ export default function ToolsPanel() {
                                         return (
                                             <div
                                                 key={tool.name as string}
-                                                className={`group flex items-start gap-3 p-2 rounded-lg transition-colors border border-transparent ${tool.enabled ? "hover:bg-gray-900/50" : "opacity-60 hover:opacity-80"}`}
+                                                className={`group flex items-start gap-3 p-2 rounded-lg transition-colors border border-transparent ${tool.enabled ? "hover:bg-[var(--color-bg-secondary)]/50" : "opacity-60 hover:opacity-80"}`}
                                             >
                                                 <button
                                                     onClick={() => toggleTool(tool.name as string, !tool.enabled)}
-                                                    className={`mt-0.5 shrink-0 transition-colors ${tool.enabled ? "text-green-500 hover:text-green-400" : "text-gray-600 hover:text-gray-400"}`}
+                                                    className={`mt-0.5 shrink-0 transition-colors ${tool.enabled ? "text-green-500 hover:text-green-400" : "text-gray-600 hover:text-[var(--color-text-secondary)]"}`}
                                                 >
                                                     {tool.enabled ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
                                                 </button>
@@ -274,7 +274,7 @@ export default function ToolsPanel() {
                                                         </button>
                                                     </div>
                                                     {tool.description && (
-                                                        <div className="text-xs text-gray-500 line-clamp-2 mt-0.5 leading-relaxed">
+                                                        <div className="text-xs text-[var(--color-text-tertiary)] line-clamp-2 mt-0.5 leading-relaxed">
                                                             {tool.description}
                                                         </div>
                                                     )}

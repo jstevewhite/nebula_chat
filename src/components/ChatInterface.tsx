@@ -703,31 +703,31 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
     return (
         <div
-            className="flex flex-col h-full bg-gray-950 text-white font-sans relative"
+            className="flex flex-col h-full bg-[var(--color-bg-primary)] text-[var(--color-text-primary)] font-sans relative"
         >
             {isDragging && (
                 <div className="absolute inset-0 z-50 bg-blue-600/20 backdrop-blur-sm border-4 border-blue-500 border-dashed m-4 rounded-xl flex items-center justify-center animate-pulse pointer-events-none">
-                    <div className="bg-gray-900/80 p-8 rounded-2xl shadow-2xl flex flex-col items-center gap-4">
+                    <div className="bg-[var(--color-bg-secondary)]/80 p-8 rounded-2xl shadow-2xl flex flex-col items-center gap-4">
                         <Download size={48} className="text-blue-400" />
-                        <h3 className="text-2xl font-bold text-white">Drop files to attach</h3>
+                        <h3 className="text-2xl font-bold text-[var(--color-text-primary)]">Drop files to attach</h3>
                     </div>
                 </div>
             )}
 
             {errorMsg && (
-                <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50 bg-red-600/90 backdrop-blur text-white px-4 py-3 rounded-xl shadow-2xl animate-fade-in-down flex items-center gap-3 border border-red-500/50">
-                    <AlertTriangle size={20} className="text-white" />
+                <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50 bg-red-600/90 backdrop-blur text-[var(--color-text-primary)] px-4 py-3 rounded-xl shadow-2xl animate-fade-in-down flex items-center gap-3 border border-red-500/50">
+                    <AlertTriangle size={20} className="text-[var(--color-text-primary)]" />
                     <span className="font-semibold">{errorMsg}</span>
                 </div>
             )}
 
-            <div className="p-4 bg-gray-900 border-b border-gray-800 flex justify-between items-center shadow-md z-10 relative">
+            <div className="p-4 bg-[var(--color-bg-secondary)] border-b border-[var(--color-border-primary)] flex justify-between items-center shadow-md z-10 relative">
                 <div className="flex items-center gap-3">
                     <div className="w-3 h-3 rounded-full bg-green-500 animate-pulse box-shadow-lg shadow-green-500/50" />
                     <select
                         value={selectedModel}
                         onChange={(e) => setSelectedModel(e.target.value)}
-                        className="bg-gray-800 text-white text-sm rounded-lg border border-gray-700 focus:ring-blue-500 focus:border-blue-500 block p-2.5 font-medium max-w-[200px] chat-model-dropdown"
+                        className="bg-[var(--color-bg-tertiary)] text-[var(--color-text-primary)] text-sm rounded-lg border border-[var(--color-border-secondary)] focus:ring-blue-500 focus:border-blue-500 block p-2.5 font-medium max-w-[200px] chat-model-dropdown"
                         style={{ colorScheme: "dark" }}
                     >
                         {availableModels.length === 0 && <option disabled>No enabled models</option>}
@@ -739,12 +739,12 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                     </select>
 
                     {/* Prompt Selector */}
-                    <div className="flex items-center gap-1 border-l border-gray-700 pl-3">
-                        <Book size={16} className="text-gray-400" />
+                    <div className="flex items-center gap-1 border-l border-[var(--color-border-secondary)] pl-3">
+                        <Book size={16} className="text-[var(--color-text-secondary)]" />
                         <select
                             value={selectedPromptId}
                             onChange={(e) => handleSetPrompt(e.target.value)}
-                            className="bg-gray-800 text-white text-sm rounded-lg border border-gray-700 focus:ring-blue-500 focus:border-blue-500 block p-2.5 font-medium max-w-[150px] chat-prompt-dropdown"
+                            className="bg-[var(--color-bg-tertiary)] text-[var(--color-text-primary)] text-sm rounded-lg border border-[var(--color-border-secondary)] focus:ring-blue-500 focus:border-blue-500 block p-2.5 font-medium max-w-[150px] chat-prompt-dropdown"
                             style={{ colorScheme: "dark" }}
                         >
                             <option value="">Default System</option>
@@ -758,7 +758,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                     <button
                         id="pin-model-btn"
                         onClick={handleSetDefaultModel}
-                        className="p-2 text-gray-400 hover:text-white transition-colors"
+                        className="p-2 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors"
                         title="Set as Default Model"
                     >
                         <Pin size={16} />
@@ -768,7 +768,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                     <div className="relative">
                         <button
                             onClick={() => setShowSettings(!showSettings)}
-                            className={`p-2 rounded-lg transition-colors ${showSettings ? "bg-blue-600/20 text-blue-400" : "text-gray-400 hover:text-white hover:bg-gray-800"}`}
+                            className={`p-2 rounded-lg transition-colors ${showSettings ? "bg-blue-600/20 text-blue-400" : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)]"}`}
                             title="Generation Settings"
                         >
                             <Sliders size={18} />
@@ -776,16 +776,16 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
                         {/* Settings Popup */}
                         {showSettings && (
-                            <div className="absolute top-full right-0 mt-2 w-72 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl p-4 z-50 animate-in fade-in zoom-in-95 duration-100">
-                                <h4 className="text-sm font-bold text-gray-300 mb-4 uppercase tracking-wider border-b border-gray-800 pb-2">Generation Options</h4>
+                            <div className="absolute top-full right-0 mt-2 w-72 bg-[var(--color-bg-secondary)] border border-[var(--color-border-secondary)] rounded-xl shadow-2xl p-4 z-50 animate-in fade-in zoom-in-95 duration-100">
+                                <h4 className="text-sm font-bold text-[var(--color-text-secondary)] mb-4 uppercase tracking-wider border-b border-[var(--color-border-primary)] pb-2">Generation Options</h4>
 
                                 <div className="space-y-4">
                                     {/* Streaming Toggle */}
                                     <div className="flex justify-between items-center">
-                                        <label className="text-sm text-gray-400">Streaming</label>
+                                        <label className="text-sm text-[var(--color-text-secondary)]">Streaming</label>
                                         <button
                                             onClick={() => setGenSettings({ ...genSettings, stream: !genSettings.stream })}
-                                            className={`w-10 h-5 rounded-full relative transition-colors ${genSettings.stream ? 'bg-blue-600' : 'bg-gray-700'}`}
+                                            className={`w-10 h-5 rounded-full relative transition-colors ${genSettings.stream ? 'bg-blue-600' : 'bg-[var(--color-bg-tertiary)]'}`}
                                         >
                                             <div className={`w-3 h-3 bg-white rounded-full absolute top-1 transition-all ${genSettings.stream ? 'left-6' : 'left-1'}`} />
                                         </button>
@@ -793,7 +793,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
                                     {/* Temperature */}
                                     <div className="space-y-1">
-                                        <div className="flex justify-between text-xs text-gray-400">
+                                        <div className="flex justify-between text-xs text-[var(--color-text-secondary)]">
                                             <span>Temperature</span>
                                             <span>{genSettings.temperature}</span>
                                         </div>
@@ -802,13 +802,13 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                                             min="0" max="2" step="0.1"
                                             value={genSettings.temperature}
                                             onChange={(e) => setGenSettings({ ...genSettings, temperature: parseFloat(e.target.value) })}
-                                            className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                                            className="w-full h-1 bg-[var(--color-bg-tertiary)] rounded-lg appearance-none cursor-pointer accent-blue-500"
                                         />
                                     </div>
 
                                     {/* Top P */}
                                     <div className="space-y-1">
-                                        <div className="flex justify-between text-xs text-gray-400">
+                                        <div className="flex justify-between text-xs text-[var(--color-text-secondary)]">
                                             <span>Top P</span>
                                             <span>{genSettings.top_p}</span>
                                         </div>
@@ -817,7 +817,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                                             min="0" max="1" step="0.05"
                                             value={genSettings.top_p}
                                             onChange={(e) => setGenSettings({ ...genSettings, top_p: parseFloat(e.target.value) })}
-                                            className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                                            className="w-full h-1 bg-[var(--color-bg-tertiary)] rounded-lg appearance-none cursor-pointer accent-blue-500"
                                         />
                                     </div>
                                 </div>
@@ -827,30 +827,30 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
                     {/* Export Button */}
                     <div className="relative group">
-                        <button className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors" title="Export Conversation">
+                        <button className="p-2 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)] rounded-lg transition-colors" title="Export Conversation">
                             <Download size={18} />
                         </button>
-                        <div className="absolute right-0 top-full mt-2 w-32 bg-gray-900 border border-gray-700 rounded-lg shadow-xl overflow-hidden invisible group-hover:visible opacity-0 group-hover:opacity-100 transition-all z-50">
+                        <div className="absolute right-0 top-full mt-2 w-32 bg-[var(--color-bg-secondary)] border border-[var(--color-border-secondary)] rounded-lg shadow-xl overflow-hidden invisible group-hover:visible opacity-0 group-hover:opacity-100 transition-all z-50">
                             <button
                                 onClick={() => handleExport('json')}
-                                className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
+                                className="w-full text-left px-4 py-2 text-sm text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text-primary)] transition-colors"
                             >
                                 JSON
                             </button>
                             <button
                                 onClick={() => handleExport('md')}
-                                className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
+                                className="w-full text-left px-4 py-2 text-sm text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text-primary)] transition-colors"
                             >
                                 Markdown
                             </button>
                         </div>
                     </div>
 
-                    <div className="h-4 w-px bg-gray-700 mx-2" />
+                    <div className="h-4 w-px bg-[var(--color-bg-tertiary)] mx-2" />
 
                     <button
                         onClick={() => setActiveSidePanel(activeSidePanel === 'memory' ? 'none' : 'memory')}
-                        className={`p-2 rounded-lg transition-colors relative ${activeSidePanel === 'memory' ? 'bg-purple-500/20 text-purple-400' : 'text-gray-400 hover:text-white hover:bg-gray-800'}`}
+                        className={`p-2 rounded-lg transition-colors relative ${activeSidePanel === 'memory' ? 'bg-purple-500/20 text-purple-400' : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)]'}`}
                         title="Memory Context"
                     >
                         <Brain size={18} />
@@ -894,8 +894,8 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             {
                 pendingTools.length > 0 && (
                     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
-                        <div className="bg-gray-900 p-6 rounded-xl max-w-lg w-full border border-gray-700 shadow-2xl ring-1 ring-white/10 max-h-[80vh] flex flex-col">
-                            <h3 className="text-lg font-bold mb-4 flex items-center gap-2 text-white shrink-0">
+                        <div className="bg-[var(--color-bg-secondary)] p-6 rounded-xl max-w-lg w-full border border-[var(--color-border-secondary)] shadow-2xl ring-1 ring-white/10 max-h-[80vh] flex flex-col">
+                            <h3 className="text-lg font-bold mb-4 flex items-center gap-2 text-[var(--color-text-primary)] shrink-0">
                                 <Terminal className="text-yellow-400" /> Use Tools? ({pendingTools.length})
                             </h3>
 
@@ -904,25 +904,25 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                                     <div key={tool.callId || idx} className="bg-black/50 p-4 rounded-lg border border-white/5">
                                         <div className="flex justify-between items-start mb-2">
                                             <p className="text-green-400 font-bold font-mono">$ {tool.name}</p>
-                                            <span className="text-xs text-gray-500 font-mono">{tool.callId?.slice(0, 8)}...</span>
+                                            <span className="text-xs text-[var(--color-text-tertiary)] font-mono">{tool.callId?.slice(0, 8)}...</span>
                                         </div>
-                                        <pre className="text-gray-400 whitespace-pre-wrap break-all text-xs font-mono bg-black/30 p-2 rounded">
+                                        <pre className="text-[var(--color-text-secondary)] whitespace-pre-wrap break-all text-xs font-mono bg-black/30 p-2 rounded">
                                             {JSON.stringify(tool.args, null, 2)}
                                         </pre>
                                     </div>
                                 ))}
                             </div>
 
-                            <div className="flex justify-end gap-3 shrink-0 pt-4 border-t border-gray-800">
+                            <div className="flex justify-end gap-3 shrink-0 pt-4 border-t border-[var(--color-border-primary)]">
                                 <button
                                     onClick={handleDenyAllTools}
-                                    className="px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors"
+                                    className="px-4 py-2 rounded-lg bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)] transition-colors"
                                 >
                                     Deny All
                                 </button>
                                 <button
                                     onClick={handleApproveAllTools}
-                                    className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold shadow-lg shadow-blue-500/20 transition-all hover:scale-105"
+                                    className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-[var(--color-text-primary)] font-semibold shadow-lg shadow-blue-500/20 transition-all hover:scale-105"
                                 >
                                     Approve All
                                 </button>
@@ -933,16 +933,16 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             }
 
 
-            <div className="p-4 bg-gray-900 border-t border-gray-800">
+            <div className="p-4 bg-[var(--color-bg-secondary)] border-t border-[var(--color-border-primary)]">
                 {/* Attachment Previews */}
                 {attachments.length > 0 && (
                     <div className="flex gap-2 mb-2 overflow-x-auto pb-2">
                         {attachments.map((att, i) => (
                             <div key={i} className="relative group shrink-0">
-                                <img src={att.preview} alt="preview" className="h-16 w-16 object-cover rounded-lg border border-gray-700" />
+                                <img src={att.preview} alt="preview" className="h-16 w-16 object-cover rounded-lg border border-[var(--color-border-secondary)]" />
                                 <button
                                     onClick={() => removeAttachment(i)}
-                                    className="absolute -top-1 -right-1 bg-red-500 rounded-full p-0.5 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                                    className="absolute -top-1 -right-1 bg-red-500 rounded-full p-0.5 text-[var(--color-text-primary)] opacity-0 group-hover:opacity-100 transition-opacity"
                                 >
                                     <X size={12} />
                                 </button>
@@ -952,7 +952,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 )}
 
                 <div className="max-w-4xl mx-auto flex gap-3 items-end">
-                    <label className="p-3 text-gray-400 hover:text-white cursor-pointer hover:bg-gray-800 rounded-xl transition-colors">
+                    <label className="p-3 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] cursor-pointer hover:bg-[var(--color-bg-tertiary)] rounded-xl transition-colors">
                         <Paperclip size={20} />
                         <input
                             type="file"
@@ -963,7 +963,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                     </label>
 
                     <textarea
-                        className="flex-1 bg-gray-800 border border-gray-700 rounded-xl p-3 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all resize-none min-h-[46px] max-h-[200px]"
+                        className="flex-1 bg-[var(--color-bg-tertiary)] border border-[var(--color-border-secondary)] rounded-xl p-3 text-[var(--color-text-primary)] placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all resize-none min-h-[46px] max-h-[200px]"
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
                         onKeyDown={(e) => {
@@ -982,7 +982,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         onClick={loading ? handleStop : handleSend}
                         className={`p-3 rounded-xl transition-all shadow-lg ${loading
                             ? "bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/50 hover:shadow-red-500/20"
-                            : "bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                            : "bg-blue-600 hover:bg-blue-500 text-[var(--color-text-primary)] shadow-blue-600/20 disabled:opacity-50 disabled:cursor-not-allowed"
                             }`}
                         title={loading ? "Stop Generating" : "Send Message"}
                     >
@@ -1026,10 +1026,10 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
 
     // Icons based on role
     const AvatarIcon = () => {
-        if (m.role === "user") return <div className="w-8 h-8 rounded-full bg-orange-500 flex items-center justify-center text-white"><span className="text-xs font-bold">U</span></div>;
-        if (m.role === "assistant") return <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white"><Brain size={16} /></div>;
-        if (m.role === "tool") return <div className="w-8 h-8 rounded-full bg-yellow-600 flex items-center justify-center text-white"><Terminal size={14} /></div>;
-        return <div className="w-8 h-8 rounded-full bg-gray-600 flex items-center justify-center text-white"><span className="text-xs">?</span></div>;
+        if (m.role === "user") return <div className="w-8 h-8 rounded-full bg-orange-500 flex items-center justify-center text-[var(--color-text-primary)]"><span className="text-xs font-bold">U</span></div>;
+        if (m.role === "assistant") return <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-[var(--color-text-primary)]"><Brain size={16} /></div>;
+        if (m.role === "tool") return <div className="w-8 h-8 rounded-full bg-yellow-600 flex items-center justify-center text-[var(--color-text-primary)]"><Terminal size={14} /></div>;
+        return <div className="w-8 h-8 rounded-full bg-gray-600 flex items-center justify-center text-[var(--color-text-primary)]"><span className="text-xs">?</span></div>;
     };
 
     return (
@@ -1044,13 +1044,13 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
                 {/* Name & Content wrapper */}
                 <div className="flex flex-col gap-1">
                     {/* Role Label - minimal, maybe optional, but good for context */}
-                    {/* <div className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-1">
+                    {/* <div className="text-xs text-[var(--color-text-tertiary)] font-bold uppercase tracking-wider mb-1">
                         {m.role === "assistant" ? "Nebula" : "You"}
                     </div> */}
 
                     {/* Message Body */}
                     <div className={`${m.role === "user"
-                        ? "bg-gray-800 text-gray-100 rounded-2xl px-5 py-2.5 inline-block self-start border border-gray-700/50"
+                        ? "bg-[var(--color-bg-tertiary)] text-gray-100 rounded-2xl px-5 py-2.5 inline-block self-start border border-[var(--color-border-secondary)]/50"
                         : "text-gray-200 pl-0"
                         }`}
                     >
@@ -1058,7 +1058,7 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
                         {m.attachments && m.attachments.length > 0 && (
                             <div className="flex flex-wrap gap-2 mb-3">
                                 {m.attachments.map((att: any, idx: number) => (
-                                    <div key={idx} className="relative group rounded-lg overflow-hidden border border-gray-700 bg-black/30">
+                                    <div key={idx} className="relative group rounded-lg overflow-hidden border border-[var(--color-border-secondary)] bg-black/30">
                                         {att.media_type.startsWith('image/') ? (
                                             <img
                                                 src={att.data.startsWith('data:') ? att.data : `data:${att.media_type}; base64, ${att.data} `}
@@ -1067,10 +1067,10 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
                                             />
                                         ) : (
                                             <div className="p-4 flex items-center gap-3">
-                                                <FileText className="text-gray-400" />
+                                                <FileText className="text-[var(--color-text-secondary)]" />
                                                 <div className="text-sm">
-                                                    <p className="font-medium text-white">{att.name}</p>
-                                                    <p className="text-xs text-gray-500">{att.media_type}</p>
+                                                    <p className="font-medium text-[var(--color-text-primary)]">{att.name}</p>
+                                                    <p className="text-xs text-[var(--color-text-tertiary)]">{att.media_type}</p>
                                                 </div>
                                             </div>
                                         )}
@@ -1083,7 +1083,7 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
                         {/* Tool Output Collapse */}
                         {m.role === "tool" && !isExpanded ? (
                             <div className="flex items-center gap-3">
-                                <span className="text-sm text-gray-400 italic">Tool output hidden</span>
+                                <span className="text-sm text-[var(--color-text-secondary)] italic">Tool output hidden</span>
                                 <button
                                     onClick={() => setIsExpanded(true)}
                                     className="text-blue-400 hover:text-blue-300 underline text-sm"
@@ -1094,12 +1094,12 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
                         ) : (
                             <>
                                 {showRaw ? (
-                                    <pre className="whitespace-pre-wrap font-mono text-sm text-gray-300 bg-black/20 p-2 rounded border border-white/10 overflow-x-auto">
+                                    <pre className="whitespace-pre-wrap font-mono text-sm text-[var(--color-text-secondary)] bg-black/20 p-2 rounded border border-white/10 overflow-x-auto">
                                         {displayContent}
                                     </pre>
                                 ) : (
                                     displayContent && (
-                                        <div className={`prose prose-invert max-w-none prose-p:leading-relaxed prose-pre:bg-[#0d1117] prose-pre:rounded-lg prose-pre:border prose-pre:border-gray-800`}>
+                                        <div className={`prose prose-invert max-w-none prose-p:leading-relaxed prose-pre:bg-[#0d1117] prose-pre:rounded-lg prose-pre:border prose-pre:border-[var(--color-border-primary)]`}>
                                             <ReactMarkdown
                                                 remarkPlugins={[remarkGfm]}
                                                 components={{
@@ -1117,12 +1117,12 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
                                                         const isCopied = copiedCodeVal === codeText
 
                                                         return !inline && match ? (
-                                                            <div className="relative group/code my-4 rounded-lg overflow-hidden border border-gray-800">
-                                                                <div className="bg-gray-800/50 px-3 py-1.5 flex justify-between items-center border-b border-gray-800">
-                                                                    <span className="text-xs text-gray-400 font-mono">{match[1]}</span>
+                                                            <div className="relative group/code my-4 rounded-lg overflow-hidden border border-[var(--color-border-primary)]">
+                                                                <div className="bg-[var(--color-bg-tertiary)]/50 px-3 py-1.5 flex justify-between items-center border-b border-[var(--color-border-primary)]">
+                                                                    <span className="text-xs text-[var(--color-text-secondary)] font-mono">{match[1]}</span>
                                                                     <button
                                                                         onClick={() => handleCopyCode(codeText)}
-                                                                        className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-white transition-colors"
+                                                                        className="flex items-center gap-1.5 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors"
                                                                     >
                                                                         {isCopied ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
                                                                         {isCopied ? "Copied" : "Copy"}
@@ -1140,7 +1140,7 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
                                                                 </SyntaxHighlighter>
                                                             </div>
                                                         ) : (
-                                                            <code className={`${className} bg-gray-800 px-1.5 py-0.5 rounded text-[0.9em] font-mono text-gray-200 border border-gray-700/50`} {...props}>
+                                                            <code className={`${className} bg-[var(--color-bg-tertiary)] px-1.5 py-0.5 rounded text-[0.9em] font-mono text-gray-200 border border-[var(--color-border-secondary)]/50`} {...props}>
                                                                 {children}
                                                             </code>
                                                         )
@@ -1174,7 +1174,7 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
                                 {m.role === "tool" && (
                                     <button
                                         onClick={() => setIsExpanded(false)}
-                                        className="text-gray-500 hover:text-gray-400 text-xs mt-2 underline"
+                                        className="text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)] text-xs mt-2 underline"
                                     >
                                         Collapse Output
                                     </button>
@@ -1188,7 +1188,7 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
                         <div className="mt-2 text-xs">
                             <button
                                 onClick={() => setShowToolArgs(!showToolArgs)}
-                                className="bg-gray-900/50 p-2 rounded border border-gray-800 hover:border-gray-700 transition-colors inline-flex items-center gap-2 text-yellow-500/80 hover:text-yellow-400"
+                                className="bg-[var(--color-bg-secondary)]/50 p-2 rounded border border-[var(--color-border-primary)] hover:border-[var(--color-border-secondary)] transition-colors inline-flex items-center gap-2 text-yellow-500/80 hover:text-yellow-400"
                             >
                                 <Terminal size={12} />
                                 <span className="font-mono">Called: {m.tool_calls[0]?.function?.name}</span>
@@ -1196,8 +1196,8 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
                             </button>
 
                             {showToolArgs && (
-                                <div className="mt-2 pl-4 border-l-2 border-gray-800">
-                                    <div className="bg-black/40 p-3 rounded-lg border border-gray-800 font-mono text-gray-400 overflow-x-auto">
+                                <div className="mt-2 pl-4 border-l-2 border-[var(--color-border-primary)]">
+                                    <div className="bg-black/40 p-3 rounded-lg border border-[var(--color-border-primary)] font-mono text-[var(--color-text-secondary)] overflow-x-auto">
                                         <pre>{m.tool_calls[0]?.function?.arguments}</pre>
                                     </div>
                                 </div>
@@ -1209,26 +1209,26 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
                     <div className="flex gap-2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 select-none">
                         <button
                             onClick={() => setShowRaw(!showRaw)}
-                            className={`p-1 text-gray-500 hover:text-blue-400 transition-colors ${showRaw ? "text-blue-400" : ""}`}
+                            className={`p-1 text-[var(--color-text-tertiary)] hover:text-blue-400 transition-colors ${showRaw ? "text-blue-400" : ""}`}
                             title="Toggle Raw View"
                         >
                             <FileText size={14} />
                         </button>
-                        <button onClick={() => onCopy(m.content || "")} className="p-1 text-gray-500 hover:text-white transition-colors" title="Copy">
+                        <button onClick={() => onCopy(m.content || "")} className="p-1 text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] transition-colors" title="Copy">
                             <Copy size={14} />
                         </button>
                         {m.role === "user" && (
-                            <button onClick={() => onEdit(m.content || "")} className="p-1 text-gray-500 hover:text-white transition-colors" title="Edit">
+                            <button onClick={() => onEdit(m.content || "")} className="p-1 text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] transition-colors" title="Edit">
                                 <Edit2 size={14} />
                             </button>
                         )}
                         {(m.role === "assistant" || m.role === "user") && (
-                            <button onClick={() => onDelete(i, m.id)} className="p-1 text-gray-500 hover:text-red-400 transition-colors" title="Delete">
+                            <button onClick={() => onDelete(i, m.id)} className="p-1 text-[var(--color-text-tertiary)] hover:text-red-400 transition-colors" title="Delete">
                                 <Trash2 size={14} />
                             </button>
                         )}
                         {m.role === "assistant" && (
-                            <button onClick={() => onRegenerate(i, m.id)} className="p-1 text-gray-500 hover:text-green-400 transition-colors" title="Regenerate">
+                            <button onClick={() => onRegenerate(i, m.id)} className="p-1 text-[var(--color-text-tertiary)] hover:text-green-400 transition-colors" title="Regenerate">
                                 <RefreshCw size={14} />
                             </button>
                         )}

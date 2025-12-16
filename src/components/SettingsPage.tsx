@@ -292,7 +292,7 @@ export default function SettingsPage() {
     };
 
     return (
-        <div className="p-6 bg-gray-950 h-full text-white overflow-auto font-sans relative">
+        <div className="p-6 bg-[var(--color-bg-primary)] h-full text-[var(--color-text-primary)] overflow-auto font-sans relative">
             {/* Status Banner */}
             {status && (
                 <div className={`mb-6 p-4 rounded-lg flex items-center gap-2 border ${status.includes("Error") || status.includes("Warning") || status.includes("Failed")
@@ -304,14 +304,14 @@ export default function SettingsPage() {
                 </div>
             )}
 
-            <h2 className="text-2xl font-bold mb-6 flex items-center gap-2 text-white">
+            <h2 className="text-2xl font-bold mb-6 flex items-center gap-2 text-[var(--color-text-primary)]">
                 <Book className="text-blue-500" /> System Prompts
             </h2>
             <div className="mb-10">
                 <PromptsSettings />
             </div>
 
-            <div className="bg-gray-900 p-6 rounded-xl border border-gray-800 shadow-xl mb-8">
+            <div className="bg-[var(--color-bg-secondary)] p-6 rounded-xl border border-[var(--color-border-primary)] shadow-xl mb-8">
                 <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
                     <Book className="w-5 h-5 text-purple-500" /> Intelligence Settings
                 </h3>
@@ -319,28 +319,28 @@ export default function SettingsPage() {
                 <div className="mb-4">
                     <div className="flex items-center justify-between gap-4 mb-3">
                         <div>
-                            <label className="block text-sm font-bold text-gray-400">
+                            <label className="block text-sm font-bold text-[var(--color-text-secondary)]">
                                 Long-term Memory
                             </label>
-                            <p className="text-xs text-gray-500">
+                            <p className="text-xs text-[var(--color-text-tertiary)]">
                                 Enable retrieval/injection of relevant memories into chats.
                             </p>
                         </div>
-                        <label className="flex items-center gap-2 text-sm text-gray-300 select-none">
+                        <label className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)] select-none">
                             <input
                                 type="checkbox"
                                 checked={fullSettings.memory_enabled ?? true}
                                 onChange={(e) => setFullSettings({ ...fullSettings, memory_enabled: e.target.checked })}
-                                className="h-4 w-4 rounded border-gray-700 bg-gray-950"
+                                className="h-4 w-4 rounded border-[var(--color-border-secondary)] bg-[var(--color-bg-primary)]"
                             />
                             Enabled
                         </label>
                     </div>
 
-                    <label className="block text-sm font-bold text-gray-400 mb-2">
+                    <label className="block text-sm font-bold text-[var(--color-text-secondary)] mb-2">
                         Memory Strategy Model
                     </label>
-                    <p className="text-xs text-gray-500 mb-2">
+                    <p className="text-xs text-[var(--color-text-tertiary)] mb-2">
                         Select a model to use for analyzing and summarizing retrieved memories.
                         A smaller model (e.g., Llama 3 8B) is recommended for speed.
                     </p>
@@ -348,7 +348,7 @@ export default function SettingsPage() {
                         disabled={!(fullSettings.memory_enabled ?? true)}
                         value={fullSettings.context_model || ""}
                         onChange={(e) => setFullSettings({ ...fullSettings, context_model: e.target.value })}
-                        className={`w-full border border-gray-700 rounded-lg p-3 text-sm bg-gray-900 text-white focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none intelligence-settings-dropdown ${(fullSettings.memory_enabled ?? true) ? "" : "opacity-50 cursor-not-allowed"}`}
+                        className={`w-full border border-[var(--color-border-secondary)] rounded-lg p-3 text-sm bg-[var(--color-bg-secondary)] text-[var(--color-text-primary)] focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none intelligence-settings-dropdown ${(fullSettings.memory_enabled ?? true) ? "" : "opacity-50 cursor-not-allowed"}`}
                         style={{ colorScheme: "dark" }}
                     >
                         <option value="">None (Raw Injection)</option>
@@ -362,10 +362,10 @@ export default function SettingsPage() {
                     </select>
 
                     <div className="mt-4">
-                        <label className="block text-sm font-bold text-gray-400 mb-2">
+                        <label className="block text-sm font-bold text-[var(--color-text-secondary)] mb-2">
                             Conversation Turns Included
                         </label>
-                        <p className="text-xs text-gray-500 mb-2">
+                        <p className="text-xs text-[var(--color-text-tertiary)] mb-2">
                             How many recent turns (user/assistant pairs) to include when deciding which memories are relevant.
                             Set to 0 to disable.
                         </p>
@@ -373,7 +373,7 @@ export default function SettingsPage() {
                             disabled={!(fullSettings.memory_enabled ?? true)}
                             value={String(fullSettings.context_turns ?? 0)}
                             onChange={(e) => setFullSettings({ ...fullSettings, context_turns: Number(e.target.value) })}
-                            className={`w-full border border-gray-700 rounded-lg p-3 text-sm bg-gray-900 text-white focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none intelligence-settings-dropdown ${(fullSettings.memory_enabled ?? true) ? "" : "opacity-50 cursor-not-allowed"}`}
+                            className={`w-full border border-[var(--color-border-secondary)] rounded-lg p-3 text-sm bg-[var(--color-bg-secondary)] text-[var(--color-text-primary)] focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none intelligence-settings-dropdown ${(fullSettings.memory_enabled ?? true) ? "" : "opacity-50 cursor-not-allowed"}`}
                             style={{ colorScheme: "dark" }}
                         >
                             {[0, 1, 2, 3, 4, 6, 8, 10].map(n => (
@@ -385,33 +385,33 @@ export default function SettingsPage() {
 
                     </div>
 
-                    <div className="mt-6 border-t border-gray-800 pt-4">
+                    <div className="mt-6 border-t border-[var(--color-border-primary)] pt-4">
                         <button
                             onClick={handleRebuildIndex}
                             disabled={!(fullSettings.memory_enabled ?? true)}
-                            className={`w-full py-2 px-4 rounded-lg border border-gray-700 text-sm font-bold transition-colors flex items-center justify-center gap-2
+                            className={`w-full py-2 px-4 rounded-lg border border-[var(--color-border-secondary)] text-sm font-bold transition-colors flex items-center justify-center gap-2
                                 ${(fullSettings.memory_enabled ?? true)
-                                    ? "bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white"
-                                    : "opacity-50 cursor-not-allowed text-gray-500"
+                                    ? "bg-[var(--color-bg-tertiary)] hover:bg-gray-700 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                                    : "opacity-50 cursor-not-allowed text-[var(--color-text-tertiary)]"
                                 }`}
                         >
                             <Trash2 className="w-4 h-4" /> Rebuild Memory Index
                         </button>
-                        <p className="text-xs text-gray-500 mt-2 text-center">
+                        <p className="text-xs text-[var(--color-text-tertiary)] mt-2 text-center">
                             Use this if search results seem stale or incorrect.
                         </p>
                     </div>
                 </div>
             </div>
 
-            <div className="bg-gray-900 p-6 rounded-xl border border-gray-800 shadow-xl mb-8">
+            <div className="bg-[var(--color-bg-secondary)] p-6 rounded-xl border border-[var(--color-border-primary)] shadow-xl mb-8">
                 <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
                     <Palette className="w-5 h-5 text-blue-500" /> Appearance
                 </h3>
                 <ThemeSelector />
             </div>
 
-            <h2 className="text-2xl font-bold mb-6 flex items-center gap-2 text-white">
+            <h2 className="text-2xl font-bold mb-6 flex items-center gap-2 text-[var(--color-text-primary)]">
                 <Server className="text-blue-500" /> MCP Servers
             </h2>
 
@@ -419,10 +419,10 @@ export default function SettingsPage() {
                 {servers.map(s => (
                     <div
                         key={s.name}
-                        className={`bg-gray-900 p-4 rounded-lg border flex justify-between items-center shadow-lg ${s.status === 'connected'
-                            ? 'border-gray-800'
+                        className={`bg-[var(--color-bg-secondary)] p-4 rounded-lg border flex justify-between items-center shadow-lg ${s.status === 'connected'
+                            ? 'border-[var(--color-border-primary)]'
                             : s.status === 'unknown'
-                                ? 'border-gray-700/50 bg-gray-950/10'
+                                ? 'border-[var(--color-border-secondary)]/50 bg-[var(--color-bg-primary)]/10'
                                 : 'border-red-900/50 bg-red-950/10'
                             }`}
                     >
@@ -437,7 +437,7 @@ export default function SettingsPage() {
                             />
                             <div className="flex flex-col">
                                 <span className="font-mono font-bold text-gray-200">{s.name}</span>
-                                <span className="text-xs text-gray-500">
+                                <span className="text-xs text-[var(--color-text-tertiary)]">
                                     {s.config.type === 'Sse' ? 'SSE' : 'Stdio'}
                                     {s.config.type === 'Sse' ? ` (${s.config.url})` : ` (${s.config.command})`}
                                 </span>
@@ -448,7 +448,7 @@ export default function SettingsPage() {
                                 className={`text-xs font-bold px-2 py-1 rounded ${s.status === 'connected'
                                     ? 'text-green-500 bg-green-500/10'
                                     : s.status === 'unknown'
-                                        ? 'text-gray-300 bg-gray-500/10'
+                                        ? 'text-[var(--color-text-secondary)] bg-gray-500/10'
                                         : 'text-red-400 bg-red-500/10'
                                     }`}
                             >
@@ -456,14 +456,14 @@ export default function SettingsPage() {
                             </div>
                             <button
                                 onClick={() => openEditModal(s.name, s.config)}
-                                className="p-2 hover:bg-gray-800 rounded-lg text-gray-400 hover:text-white transition-colors"
+                                className="p-2 hover:bg-[var(--color-bg-tertiary)] rounded-lg text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors"
                                 title="Edit"
                             >
                                 <Edit2 size={16} />
                             </button>
                             <button
                                 onClick={() => handleDeleteServer(s.name)}
-                                className="p-2 hover:bg-red-900/30 rounded-lg text-gray-400 hover:text-red-400 transition-colors"
+                                className="p-2 hover:bg-red-900/30 rounded-lg text-[var(--color-text-secondary)] hover:text-red-400 transition-colors"
                                 title="Delete"
                             >
                                 <Trash2 size={16} />
@@ -474,13 +474,13 @@ export default function SettingsPage() {
 
                 <button
                     onClick={openAddModal}
-                    className="w-full py-4 border-2 border-dashed border-gray-800 rounded-xl text-gray-500 hover:border-gray-600 hover:text-gray-300 transition-colors flex items-center justify-center gap-2 font-semibold"
+                    className="w-full py-4 border-2 border-dashed border-[var(--color-border-primary)] rounded-xl text-[var(--color-text-tertiary)] hover:border-gray-600 hover:text-[var(--color-text-secondary)] transition-colors flex items-center justify-center gap-2 font-semibold"
                 >
                     <Plus className="w-5 h-5" /> Add MCP Server
                 </button>
             </div>
 
-            <div className="bg-gray-900 p-6 rounded-xl border border-gray-800 shadow-xl mb-8">
+            <div className="bg-[var(--color-bg-secondary)] p-6 rounded-xl border border-[var(--color-border-primary)] shadow-xl mb-8">
                 <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
                     <Plus className="w-5 h-5 text-blue-500" /> Model Providers
                 </h3>
@@ -490,7 +490,7 @@ export default function SettingsPage() {
                 <div className="mt-6 flex justify-end">
                     <button
                         onClick={saveSettings}
-                        className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-6 rounded-lg transition-all shadow-lg shadow-blue-500/20"
+                        className="bg-blue-600 hover:bg-blue-500 text-[var(--color-text-primary)] font-bold py-2 px-6 rounded-lg transition-all shadow-lg shadow-blue-500/20"
                     >
                         Save Configuration
                     </button>
@@ -501,18 +501,18 @@ export default function SettingsPage() {
             {
                 isModalOpen && (
                     <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-                        <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg shadow-2xl overflow-hidden">
-                            <div className="p-6 border-b border-gray-800 flex justify-between items-center">
+                        <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border-secondary)] rounded-xl w-full max-w-lg shadow-2xl overflow-hidden">
+                            <div className="p-6 border-b border-[var(--color-border-primary)] flex justify-between items-center">
                                 <h3 className="text-xl font-bold">{editingServer ? 'Edit Server' : 'Add Server'}</h3>
-                                <button onClick={() => setIsModalOpen(false)} className="text-gray-500 hover:text-white">&times;</button>
+                                <button onClick={() => setIsModalOpen(false)} className="text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]">&times;</button>
                             </div>
 
                             <div className="p-6 space-y-4">
                                 {!editingServer && (
                                     <div>
-                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Server Name</label>
+                                        <label className="block text-xs font-bold text-[var(--color-text-tertiary)] uppercase tracking-wider mb-1">Server Name</label>
                                         <input
-                                            className="w-full bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                                            className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded-lg p-3 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
                                             value={name}
                                             onChange={e => setName(e.target.value)}
                                             placeholder="e.g. filesystem"
@@ -521,17 +521,17 @@ export default function SettingsPage() {
                                 )}
 
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Transport Type</label>
+                                    <label className="block text-xs font-bold text-[var(--color-text-tertiary)] uppercase tracking-wider mb-1">Transport Type</label>
                                     <div className="flex gap-2">
                                         <button
                                             onClick={() => setTransportType("stdio")}
-                                            className={`flex-1 py-2 rounded-lg text-sm font-bold border ${transportType === "stdio" ? "bg-blue-600 border-blue-600 text-white" : "bg-gray-950 border-gray-700 text-gray-400 hover:bg-gray-800"}`}
+                                            className={`flex-1 py-2 rounded-lg text-sm font-bold border ${transportType === "stdio" ? "bg-blue-600 border-blue-600 text-[var(--color-text-primary)]" : "bg-[var(--color-bg-primary)] border-[var(--color-border-secondary)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)]"}`}
                                         >
                                             Stdio (Local)
                                         </button>
                                         <button
                                             onClick={() => setTransportType("sse")}
-                                            className={`flex-1 py-2 rounded-lg text-sm font-bold border ${transportType === "sse" ? "bg-blue-600 border-blue-600 text-white" : "bg-gray-950 border-gray-700 text-gray-400 hover:bg-gray-800"}`}
+                                            className={`flex-1 py-2 rounded-lg text-sm font-bold border ${transportType === "sse" ? "bg-blue-600 border-blue-600 text-[var(--color-text-primary)]" : "bg-[var(--color-bg-primary)] border-[var(--color-border-secondary)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)]"}`}
                                         >
                                             SSE (Remote)
                                         </button>
@@ -541,27 +541,27 @@ export default function SettingsPage() {
                                 {transportType === "stdio" ? (
                                     <>
                                         <div>
-                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Command</label>
+                                            <label className="block text-xs font-bold text-[var(--color-text-tertiary)] uppercase tracking-wider mb-1">Command</label>
                                             <input
-                                                className="w-full bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                                                className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded-lg p-3 text-sm font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
                                                 value={command}
                                                 onChange={e => setCommand(e.target.value)}
                                                 placeholder="e.g. npx"
                                             />
                                         </div>
                                         <div>
-                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Arguments</label>
+                                            <label className="block text-xs font-bold text-[var(--color-text-tertiary)] uppercase tracking-wider mb-1">Arguments</label>
                                             <input
-                                                className="w-full bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                                                className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded-lg p-3 text-sm font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
                                                 value={args}
                                                 onChange={e => setArgs(e.target.value)}
                                                 placeholder="-y, @modelcontextprotocol/server..."
                                             />
                                         </div>
                                         <div>
-                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Environment (KEY=VALUE)</label>
+                                            <label className="block text-xs font-bold text-[var(--color-text-tertiary)] uppercase tracking-wider mb-1">Environment (KEY=VALUE)</label>
                                             <textarea
-                                                className={`w-full bg-gray-950 border rounded-lg p-3 text-sm font-mono focus:ring-1 outline-none min-h-[120px] ${envErrors.length > 0 ? "border-red-600 focus:border-red-500 focus:ring-red-500" : "border-gray-700 focus:border-blue-500 focus:ring-blue-500"}`}
+                                                className={`w-full bg-[var(--color-bg-primary)] border rounded-lg p-3 text-sm font-mono focus:ring-1 outline-none min-h-[120px] ${envErrors.length > 0 ? "border-red-600 focus:border-red-500 focus:ring-red-500" : "border-[var(--color-border-secondary)] focus:border-blue-500 focus:ring-blue-500"}`}
                                                 value={envText}
                                                 onChange={e => {
                                                     setEnvText(e.target.value);
@@ -580,9 +580,9 @@ export default function SettingsPage() {
                                     </>
                                 ) : (
                                     <div>
-                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">SSE URL</label>
+                                        <label className="block text-xs font-bold text-[var(--color-text-tertiary)] uppercase tracking-wider mb-1">SSE URL</label>
                                         <input
-                                            className="w-full bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                                            className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded-lg p-3 text-sm font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
                                             value={url}
                                             onChange={e => setUrl(e.target.value)}
                                             placeholder="http://localhost:3000/sse"
@@ -591,18 +591,18 @@ export default function SettingsPage() {
                                 )}
 
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Allowlist (Comma separated)</label>
+                                    <label className="block text-xs font-bold text-[var(--color-text-tertiary)] uppercase tracking-wider mb-1">Allowlist (Comma separated)</label>
                                     <input
-                                        className="w-full bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                                        className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded-lg p-3 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
                                         value={allowlist}
                                         onChange={e => setAllowlist(e.target.value)}
                                         placeholder="tool_a, tool_b (Leave empty to allow all)"
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Denylist (Comma separated)</label>
+                                    <label className="block text-xs font-bold text-[var(--color-text-tertiary)] uppercase tracking-wider mb-1">Denylist (Comma separated)</label>
                                     <input
-                                        className="w-full bg-gray-950 border border-gray-700 rounded-lg p-3 text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
+                                        className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded-lg p-3 text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
                                         value={denylist}
                                         onChange={e => setDenylist(e.target.value)}
                                         placeholder="dangerous_tool, delete_all"
@@ -616,16 +616,16 @@ export default function SettingsPage() {
                                 )}
                             </div>
 
-                            <div className="p-6 border-t border-gray-800 flex justify-end gap-2">
+                            <div className="p-6 border-t border-[var(--color-border-primary)] flex justify-end gap-2">
                                 <button
                                     onClick={() => setIsModalOpen(false)}
-                                    className="px-4 py-2 rounded-lg hover:bg-gray-800 text-gray-400 font-bold text-sm"
+                                    className="px-4 py-2 rounded-lg hover:bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)] font-bold text-sm"
                                 >
                                     Cancel
                                 </button>
                                 <button
                                     onClick={handleSaveServer}
-                                    className="px-6 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm shadow-lg shadow-blue-600/20"
+                                    className="px-6 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-[var(--color-text-primary)] font-bold text-sm shadow-lg shadow-blue-600/20"
                                 >
                                     {editingServer ? 'Save Changes' : 'Connect Server'}
                                 </button>
