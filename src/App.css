@@ -75,20 +75,7 @@ button {
   box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
 }
 
-/* Force dark theme for select elements regardless of system preference */
-select {
-  color: #ffffff !important;
-  background-color: #0f0f0f !important;
-  -webkit-appearance: none;
-  -moz-appearance: none;
-  appearance: none;
-}
-
-/* Ensure select text is always visible */
-select:not([multiple]) {
-  color: white !important;
-  background-color: #030712 !important;
-}
+/* Select elements now inherit theme colors - no forced dark mode */
 
 button {
   cursor: pointer;
@@ -123,8 +110,7 @@ button {
   }
 
   input,
-  button,
-  select {
+  button {
     color: #ffffff;
     background-color: #0f0f0f98;
   }
@@ -132,79 +118,4 @@ button {
   button:active {
     background-color: #0f0f0f69;
   }
-
-  select option {
-    background-color: #1a1a1a;
-    color: white;
-  }
-}
-/* Ensure options are readable in dark-styled selects regardless of system theme */
-select.bg-gray-950 option {
-  background-color: #030712;
-  color: white;
-}
-
-/* Specific fix for Intelligence Settings dropdown to prevent white-on-white */
-select[style*="background-color: #030712"] option,
-select[style*="background-color: #030712"] optgroup,
-select[style*="background-color: #030712"] option:checked {
-  background-color: #030712 !important;
-  color: white !important;
-}
-
-/* Ensure dropdown options are always readable in dark mode */
-@media (prefers-color-scheme: dark) {
-  select option,
-  select optgroup {
-    background-color: #1a1a1a !important;
-    color: white !important;
-  }
-}
-
-/* Specific styling for Intelligence Settings dropdown */
-.intelligence-settings-dropdown {
-  background-color: #030712 !important;
-  color: white !important;
-}
-
-.intelligence-settings-dropdown option,
-.intelligence-settings-dropdown optgroup {
-  background-color: #030712 !important;
-  color: white !important;
-}
-
-.intelligence-settings-dropdown option:hover,
-.intelligence-settings-dropdown option:focus {
-  background-color: #1a1a1a !important;
-  color: white !important;
-}
-
-/* Styling for chat interface dropdowns */
-.chat-model-dropdown option,
-.chat-model-dropdown optgroup,
-.chat-prompt-dropdown option,
-.chat-prompt-dropdown optgroup {
-  background-color: #2a2a2a !important;
-  color: white !important;
-}
-
-.chat-model-dropdown option:hover,
-.chat-model-dropdown option:focus,
-.chat-prompt-dropdown option:hover,
-.chat-prompt-dropdown option:focus {
-  background-color: #3a3a3a !important;
-  color: white !important;
-}
-
-/* Fix for all dark dropdowns - ensure text is always visible */
-select option,
-select optgroup {
-  color: white !important;
-}
-
-/* Ensure selected option is readable */
-select option:checked,
-select option:selected {
-  background-color: #3a3a3a !important;
-  color: white !important;
 }
