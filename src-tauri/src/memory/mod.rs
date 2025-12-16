@@ -5,6 +5,7 @@ pub mod sqlite_manager;
 pub mod tantivy_index;
 
 use tantivy_index::SearchResult;
+pub use librarian::SearchOptions;
 
 /// Lightweight DTO for memory hits optimized for strategist consumption.
 /// Contains metadata + truncated snippet instead of full content.
