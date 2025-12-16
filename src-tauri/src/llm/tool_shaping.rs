@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-pub const MAX_PREVIEW_CHARS: usize = 1000;
+pub const MAX_PREVIEW_CHARS: usize = 50000;
 
 pub fn shape_tool_output(output: &Value) -> (String, String) {
     let full_json = serde_json::to_string(output).unwrap_or_default();

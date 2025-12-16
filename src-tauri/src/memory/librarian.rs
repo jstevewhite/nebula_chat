@@ -169,6 +169,11 @@ impl Librarian {
         self.tantivy.clear_index()
     }
 
+    /// Check if a tool_call_id exists in assistant messages for a given conversation
+    pub fn tool_call_id_exists(&self, conversation_id: &str, tool_call_id: &str) -> Result<bool> {
+        self.sqlite.tool_call_id_exists(conversation_id, tool_call_id)
+    }
+
     pub fn search(&self, query: &str) -> Result<Vec<SearchResult>> {
         self.tantivy.search(query, 10)
     }

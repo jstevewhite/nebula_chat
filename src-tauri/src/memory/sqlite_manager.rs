@@ -2,7 +2,7 @@ use anyhow::Result;
 use rusqlite::{params, Connection};
 
 pub struct SqliteManager {
-    conn: Connection,
+    pub conn: Connection, // Made public for testing purposes
 }
 
 impl SqliteManager {
@@ -28,6 +28,12 @@ impl SqliteManager {
                 created_at TEXT,
                 FOREIGN KEY(conversation_id) REFERENCES conversations(id)
             )",
+            [],
+        )?;
+
+        // Create index for better performance on conversation lookups
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_messages_conversation_created ON messages(conversation_id, created_at)",
             [],
         )?;
 
@@ -199,6 +205,44 @@ impl SqliteManager {
             params![id, conversation_id, role, content, timestamp],
         )?;
         Ok((id, timestamp.to_string()))
+    }
+
+    /// Check if a tool_call_id exists in assistant messages for a given conversation
+    /// Returns true if the tool_call_id is found in any assistant message's tool_calls JSON
+    pub fn tool_call_id_exists(&self, conversation_id: &str, tool_call_id: &str) -> Result<bool> {
+        // Try using SQLite JSON functions first (JSON1 extension)
+        let query = "
+            SELECT EXISTS(
+                SELECT 1 FROM messages m
+                WHERE m.conversation_id = ?1
+                AND m.role = 'assistant'
+                AND m.tool_calls IS NOT NULL
+                AND EXISTS (
+                    SELECT 1 FROM json_each(m.tool_calls)
+                    WHERE json_extract(json_each.value, '$.id') = ?2
+                )
+            )
+        ";
+        
+        match self.conn.query_row(query, params![conversation_id, tool_call_id], |row| {
+            row.get::<_, bool>(0)
+        }) {
+            Ok(exists) => Ok(exists),
+            Err(_) => {
+                // Fallback to conservative check if JSON1 is not available
+                // This is less precise but prevents false positives
+                let fallback_query = "
+                    SELECT EXISTS(
+                        SELECT 1 FROM messages m
+                        WHERE m.conversation_id = ?1
+                        AND m.role = 'assistant'
+                        AND m.tool_calls IS NOT NULL
+                        AND m.tool_calls LIKE ?2
+                    )
+                ";
+                Ok(self.conn.query_row(fallback_query, params![conversation_id, format!("%{}", tool_call_id)], |row| row.get::<_, bool>(0))?)
+            }
+        }
     }
 
     pub fn get_message_count(&self, conversation_id: &str) -> Result<usize> {

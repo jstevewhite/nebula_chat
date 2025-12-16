@@ -22,6 +22,18 @@ impl McpManager {
     }
 
     pub async fn shutdown(&self) {
+        // Stop all clients cleanly before clearing
+        let client_names: Vec<String> = {
+            let clients = self.clients.read().await;
+            clients.keys().cloned().collect()
+        };
+        
+        for name in client_names {
+            if let Some(client) = self.get_client(&name).await {
+                client.stop();
+            }
+        }
+
         let mut clients = self.clients.write().await;
         clients.clear();
         let mut starting = self.starting.write().await;
@@ -123,6 +135,11 @@ impl McpManager {
             starting.insert(name.clone());
         }
 
+        // Stop existing client cleanly before removing
+        if let Some(client) = self.get_client(&name).await {
+            client.stop();
+        }
+
         // Remove existing client (short lock)
         {
             let mut clients = self.clients.write().await;
@@ -162,6 +179,11 @@ impl McpManager {
     }
 
     pub async fn remove_server(&self, name: &str) {
+        // Stop the client cleanly before removing
+        if let Some(client) = self.get_client(name).await {
+            client.stop();
+        }
+
         {
             let mut clients = self.clients.write().await;
             clients.remove(name);
