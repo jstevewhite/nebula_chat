@@ -86,6 +86,13 @@ impl SqliteManager {
         Ok(())
     }
 
+    pub fn migrate_v3(&self) -> Result<()> {
+        let _ = self
+            .conn
+            .execute("ALTER TABLE messages ADD COLUMN reasoning_content TEXT", []);
+        Ok(())
+    }
+
     /// Initial migration for the structured facts table backing the knowledge graph.
     /// Uses IF NOT EXISTS to remain idempotent across app startups.
     pub fn migrate_facts_v1(&self) -> Result<()> {
@@ -422,30 +429,32 @@ impl SqliteManager {
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<String>, // reasoning_content
             String, // created_at
             String,
         )>,
     > {
-        // Returns (id, role, content, tool_calls_json, tool_call_id, created_at, attachments_json)
+        // Returns (id, role, content, tool_calls_json, tool_call_id, reasoning_content, created_at, attachments_json)
         let mut stmt = self.conn.prepare(
-            "SELECT 
-                m.id, 
-                m.role, 
-                m.content, 
-                m.tool_calls, 
-                m.tool_call_id, 
+            "SELECT
+                m.id,
+                m.role,
+                m.content,
+                m.tool_calls,
+                m.tool_call_id,
+                m.reasoning_content,
                 m.created_at,
                 (SELECT json_group_array(
                     json_object(
-                        'id', a.id, 
-                        'name', a.filename, 
-                        'media_type', a.media_type, 
+                        'id', a.id,
+                        'name', a.filename,
+                        'media_type', a.media_type,
                         'data', a.data,
                         'is_binary', a.is_binary
                     )
                 ) FROM attachments a WHERE a.message_id = m.id) as attachments
              FROM messages m
-             WHERE m.conversation_id = ?1 
+             WHERE m.conversation_id = ?1
              ORDER BY m.created_at ASC",
         )?;
 
@@ -458,6 +467,7 @@ impl SqliteManager {
                 row.get(4)?,
                 row.get(5)?,
                 row.get(6)?,
+                row.get(7)?,
             ))
         })?;
 
@@ -475,12 +485,13 @@ impl SqliteManager {
         content: Option<&str>,
         tool_calls: Option<&str>,
         tool_call_id: Option<&str>,
+        reasoning_content: Option<&str>,
     ) -> Result<(String, String)> {
         let id = uuid::Uuid::new_v4().to_string();
         let created_at = chrono::Utc::now().to_rfc3339();
         self.conn.execute(
-            "INSERT INTO messages (id, conversation_id, role, content, tool_calls, tool_call_id, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO messages (id, conversation_id, role, content, tool_calls, tool_call_id, reasoning_content, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 id,
                 conversation_id,
@@ -488,6 +499,7 @@ impl SqliteManager {
                 content,
                 tool_calls,
                 tool_call_id,
+                reasoning_content,
                 created_at
             ],
         )?;

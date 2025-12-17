@@ -1,4 +1,6 @@
-use crate::llm::provider::{GenerationOptions, LlmProvider, Message, ToolDefinition};
+use crate::llm::provider::{
+    GenerationOptions, LlmProvider, Message, StreamContent, ToolDefinition,
+};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -181,6 +183,13 @@ impl LlmProvider for AnthropicProvider {
                     .unwrap()
                     .insert("top_p".to_string(), json!(top_p));
             }
+            if let Some(max_tokens) = opts.max_tokens {
+                body.as_object_mut()
+                    .unwrap()
+                    .insert("max_tokens".to_string(), json!(max_tokens));
+            }
+            // Note: Anthropic doesn't support presence_penalty, frequency_penalty, or reasoning_effort
+            // These are OpenAI-specific parameters
         }
 
         if !system_prompt.is_empty() {
@@ -246,19 +255,28 @@ impl LlmProvider for AnthropicProvider {
             }
         }
 
+        let id = json["id"]
+            .as_str()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        let role = json["role"].as_str().unwrap_or("assistant");
+        let content = if final_content.is_empty() {
+            None
+        } else {
+            Some(final_content)
+        };
+        let tool_calls = if tool_calls.is_empty() {
+            None
+        } else {
+            Some(tool_calls)
+        };
+
         Ok(Message {
-            id: None,
-            role: "assistant".to_string(),
-            content: if final_content.is_empty() {
-                None
-            } else {
-                Some(final_content)
-            },
-            tool_calls: if tool_calls.is_empty() {
-                None
-            } else {
-                Some(tool_calls)
-            },
+            id: Some(id),
+            role: role.to_string(),
+            content,
+            reasoning_content: None, // Anthropic doesn't use this field yet (unless via thinking blocks in content)
+            tool_calls,
             tool_call_id: None,
             attachments: None,
         })
@@ -269,7 +287,7 @@ impl LlmProvider for AnthropicProvider {
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
         options: Option<GenerationOptions>,
-        on_token: Box<dyn Fn(String) + Send + Sync>,
+        on_token: Box<dyn Fn(StreamContent) + Send + Sync>,
     ) -> Result<Message> {
         let anthropic_tools: Vec<Value> = tools
             .into_iter()
@@ -328,6 +346,13 @@ impl LlmProvider for AnthropicProvider {
                     .unwrap()
                     .insert("top_p".to_string(), json!(top_p));
             }
+            if let Some(max_tokens) = opts.max_tokens {
+                body.as_object_mut()
+                    .unwrap()
+                    .insert("max_tokens".to_string(), json!(max_tokens));
+            }
+            // Note: Anthropic doesn't support presence_penalty, frequency_penalty, or reasoning_effort
+            // These are OpenAI-specific parameters
         }
 
         if !system_prompt.is_empty() {
@@ -370,11 +395,9 @@ impl LlmProvider for AnthropicProvider {
                     if let Some(event_type) = json["type"].as_str() {
                         if event_type == "content_block_delta" {
                             if let Some(delta) = json.get("delta") {
-                                if delta["type"] == "text_delta" {
-                                    if let Some(text) = delta["text"].as_str() {
-                                        on_token(text.to_string());
-                                        full_content.push_str(text);
-                                    }
+                                if let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
+                                    on_token(StreamContent::Text(text.to_string()));
+                                    full_content.push_str(text);
                                 }
                             }
                         }
@@ -394,6 +417,7 @@ impl LlmProvider for AnthropicProvider {
             tool_calls: None, // Streaming tools for Anthropic omitted for brevity in this step
             tool_call_id: None,
             attachments: None,
+            reasoning_content: None,
         })
     }
 }

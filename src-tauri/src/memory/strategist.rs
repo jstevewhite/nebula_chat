@@ -1,6 +1,6 @@
 use crate::llm::provider::{LlmProvider, Message};
-use crate::memory::{librarian::Librarian, MemoryHit, RelevantFact, SearchOptions};
 use crate::mcp::config::Settings;
+use crate::memory::{librarian::Librarian, MemoryHit, RelevantFact, SearchOptions};
 use anyhow::Result;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -186,8 +186,7 @@ impl StrategistMemoryOrchestrator {
         let mut all_hits = initial_hits;
         let plan_for_result = if let Some(mut plan) = search_plan {
             plan.validate_and_clamp();
-            let follow_up_hits =
-                Self::execute_search_plan(&plan, librarian).await?;
+            let follow_up_hits = Self::execute_search_plan(&plan, librarian).await?;
             all_hits.extend(follow_up_hits);
             Some(plan)
         } else {
@@ -227,7 +226,9 @@ impl StrategistMemoryOrchestrator {
         model_name: &str,
         settings: &Settings,
     ) -> Result<Box<dyn LlmProvider + Send + Sync>> {
-        use crate::llm::{anthropic::AnthropicProvider, ollama::OllamaProvider, openai::OpenAiProvider};
+        use crate::llm::{
+            anthropic::AnthropicProvider, ollama::OllamaProvider, openai::OpenAiProvider,
+        };
         use crate::mcp::config::ProviderType;
 
         let config = settings
@@ -349,6 +350,7 @@ OUTPUT (JSON only, no prose):"#,
             tool_calls: None,
             attachments: None,
             tool_call_id: None,
+            reasoning_content: None,
         }];
 
         match provider.chat(messages, vec![], None).await {
@@ -384,8 +386,7 @@ OUTPUT (JSON only, no prose):"#,
             content
         };
 
-        serde_json::from_str(json_str)
-            .map_err(|e| anyhow::anyhow!("JSON parse error: {}", e))
+        serde_json::from_str(json_str).map_err(|e| anyhow::anyhow!("JSON parse error: {}", e))
     }
 
     /// Execute the search plan
@@ -493,6 +494,7 @@ OUTPUT:"#,
             tool_calls: None,
             attachments: None,
             tool_call_id: None,
+            reasoning_content: None,
         }];
 
         match provider.chat(messages, vec![], None).await {
@@ -609,9 +611,9 @@ OUTPUT:"#,
     /// entity keys after lowercasing and removing common stopwords.
     fn extract_candidate_entities(query: &str, max_entities: usize) -> Vec<String> {
         const STOPWORDS: &[&str] = &[
-            "the", "and", "for", "with", "that", "this", "from", "have", "about", "your",
-            "you", "are", "was", "were", "will", "would", "should", "could", "into",
-            "what", "when", "where", "how", "why", "can", "please", "just", "like",
+            "the", "and", "for", "with", "that", "this", "from", "have", "about", "your", "you",
+            "are", "was", "were", "will", "would", "should", "could", "into", "what", "when",
+            "where", "how", "why", "can", "please", "just", "like",
         ];
 
         let lower = query.to_lowercase();

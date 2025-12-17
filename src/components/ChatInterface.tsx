@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check, Pin, FileText, Book, Paperclip, X, Brain, Square, Sliders, Download, Eye, EyeOff } from "lucide-react";
+import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check, Pin, FileText, Book, Paperclip, X, Brain, Square, Sliders, Download, Eye, EyeOff, ChevronRight, ChevronDown } from "lucide-react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile, readFile, readTextFile } from "@tauri-apps/plugin-fs";
 import ReactMarkdown from "react-markdown";
@@ -27,6 +27,7 @@ interface Message {
     content: string | null;
     tool_calls?: ToolCall[];
     tool_call_id?: string;
+    reasoning_content?: string;
     attachments?: {
         name: string;
         media_type: string;
@@ -39,6 +40,7 @@ interface StreamChunkEvent {
     request_id?: string | null;
     conversation_id?: string | null;
     chunk: string;
+    chunk_type?: "text" | "reasoning";
 }
 
 interface ChatInterfaceProps {
@@ -62,6 +64,10 @@ interface GenerationSettings {
     temperature: number;
     top_p: number;
     stream: boolean;
+    max_tokens?: number;
+    presence_penalty?: number;
+    frequency_penalty?: number;
+    reasoning_effort?: string; // "low", "medium", "high"
 }
 
 export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
@@ -668,9 +674,16 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                             const idx = prev.findIndex(m => m.id === tempMsgId);
                             if (idx === -1) return prev;
                             const msg = prev[idx];
-                            const newContent = (msg.content || "") + payload.chunk;
                             const next = [...prev];
-                            next[idx] = { ...msg, content: newContent };
+
+                            if (payload.chunk_type === "reasoning") {
+                                const newReasoning = (msg.reasoning_content || "") + payload.chunk;
+                                next[idx] = { ...msg, reasoning_content: newReasoning };
+                            } else {
+                                const newContent = (msg.content || "") + payload.chunk;
+                                next[idx] = { ...msg, content: newContent };
+                            }
+
                             return next;
                         });
                     });
@@ -689,6 +702,10 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 temperature: genSettings.temperature,
                 topP: genSettings.top_p,
                 stream: genSettings.stream,
+                maxTokens: genSettings.max_tokens,
+                presencePenalty: genSettings.presence_penalty,
+                frequencyPenalty: genSettings.frequency_penalty,
+                reasoningEffort: genSettings.reasoning_effort,
                 requestId
             }).then(response => {
                 console.log("✅ Invoke completed at", new Date().toISOString());
@@ -1030,6 +1047,70 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                                             className="w-full h-1 bg-[var(--color-bg-tertiary)] rounded-lg appearance-none cursor-pointer accent-blue-500"
                                         />
                                     </div>
+
+                                    {/* Max Tokens */}
+                                    <div className="space-y-1">
+                                        <div className="flex justify-between text-xs text-[var(--color-text-secondary)]">
+                                            <span>Max Tokens</span>
+                                            <span>{genSettings.max_tokens || 'Auto'}</span>
+                                        </div>
+                                        <input
+                                            type="number"
+                                            placeholder="Auto"
+                                            min="1" max="32000" step="100"
+                                            value={genSettings.max_tokens || ''}
+                                            onChange={(e) => setGenSettings({ ...genSettings, max_tokens: e.target.value ? parseInt(e.target.value) : undefined })}
+                                            className="w-full px-2 py-1 bg-[var(--color-bg-tertiary)] border border-[var(--color-border-primary)] rounded text-xs text-[var(--color-text-primary)]"
+                                        />
+                                    </div>
+
+                                    {/* Presence Penalty */}
+                                    <div className="space-y-1">
+                                        <div className="flex justify-between text-xs text-[var(--color-text-secondary)]">
+                                            <span>Presence Penalty</span>
+                                            <span>{genSettings.presence_penalty ?? 0}</span>
+                                        </div>
+                                        <input
+                                            type="range"
+                                            min="-2" max="2" step="0.1"
+                                            value={genSettings.presence_penalty ?? 0}
+                                            onChange={(e) => setGenSettings({ ...genSettings, presence_penalty: parseFloat(e.target.value) })}
+                                            className="w-full h-1 bg-[var(--color-bg-tertiary)] rounded-lg appearance-none cursor-pointer accent-blue-500"
+                                        />
+                                    </div>
+
+                                    {/* Frequency Penalty */}
+                                    <div className="space-y-1">
+                                        <div className="flex justify-between text-xs text-[var(--color-text-secondary)]">
+                                            <span>Frequency Penalty</span>
+                                            <span>{genSettings.frequency_penalty ?? 0}</span>
+                                        </div>
+                                        <input
+                                            type="range"
+                                            min="-2" max="2" step="0.1"
+                                            value={genSettings.frequency_penalty ?? 0}
+                                            onChange={(e) => setGenSettings({ ...genSettings, frequency_penalty: parseFloat(e.target.value) })}
+                                            className="w-full h-1 bg-[var(--color-bg-tertiary)] rounded-lg appearance-none cursor-pointer accent-blue-500"
+                                        />
+                                    </div>
+
+                                    {/* Reasoning Effort */}
+                                    <div className="space-y-1">
+                                        <div className="flex justify-between text-xs text-[var(--color-text-secondary)]">
+                                            <span>Reasoning Effort</span>
+                                            <span className="capitalize">{genSettings.reasoning_effort || 'None'}</span>
+                                        </div>
+                                        <select
+                                            value={genSettings.reasoning_effort || ''}
+                                            onChange={(e) => setGenSettings({ ...genSettings, reasoning_effort: e.target.value || undefined })}
+                                            className="w-full px-2 py-1 bg-gray-800 border border-gray-600 rounded text-xs text-gray-100 focus:ring-1 focus:ring-blue-500 outline-none"
+                                        >
+                                            <option value="">None</option>
+                                            <option value="low">Low</option>
+                                            <option value="medium">Medium</option>
+                                            <option value="high">High</option>
+                                        </select>
+                                    </div>
                                 </div>
                             </div>
                         )}
@@ -1312,6 +1393,28 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
 
 
+
+function ThinkingBlock({ content }: { content: string }) {
+    const [collapsed, setCollapsed] = useState(true);
+
+    return (
+        <div className="mb-2 border border-[var(--color-border-secondary)] rounded-lg overflow-hidden bg-[var(--color-bg-tertiary)]/30">
+            <button
+                onClick={() => setCollapsed(!collapsed)}
+                className="w-full flex items-center gap-2 px-3 py-2 text-xs font-bold text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)] transition-colors select-none"
+            >
+                {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                <span className="uppercase tracking-wider">Reasoning Process</span>
+            </button>
+            {!collapsed && (
+                <div className="p-3 text-sm text-[var(--color-text-secondary)] font-mono whitespace-pre-wrap bg-black/10 border-t border-[var(--color-border-secondary)]/50">
+                    {content}
+                </div>
+            )}
+        </div>
+    );
+}
+
 function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegenerate }: any) {
     const [isExpanded, setIsExpanded] = useState(m.role !== "tool");
     const [showRaw, setShowRaw] = useState(false);
@@ -1338,6 +1441,26 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
         setCopiedCodeVal(text);
     };
 
+    // Parsing logic for <thinking> or <reasoning> tags
+    const { cleanContent, thinkingContent } = (() => {
+        // Priority 1: Dedicated reasoning content (e.g. from DeepSeek/Qwen via backend)
+        if (m.reasoning_content) {
+            return { cleanContent: displayContent || "", thinkingContent: m.reasoning_content };
+        }
+
+        // Priority 2: Tag parsing (fallback)
+        if (!displayContent) return { cleanContent: "", thinkingContent: null };
+        const match = /<(thinking|reasoning)>([\s\S]*?)(<\/\1>|$)/i.exec(displayContent);
+        if (match) {
+            const fullMatch = match[0];
+            const innerContent = match[2];
+            // Remove the thinking block from the display content
+            const clean = displayContent.replace(fullMatch, "").trim();
+            return { cleanContent: clean, thinkingContent: innerContent };
+        }
+        return { cleanContent: displayContent, thinkingContent: null };
+    })();
+
     // Icons based on role
     const AvatarIcon = () => {
         if (m.role === "user") return <div className="w-8 h-8 rounded-full bg-orange-500 flex items-center justify-center text-[var(--color-text-primary)]"><span className="text-xs font-bold">U</span></div>;
@@ -1357,10 +1480,6 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
             <div className="flex-1 min-w-0">
                 {/* Name & Content wrapper */}
                 <div className="flex flex-col gap-1">
-                    {/* Role Label - minimal, maybe optional, but good for context */}
-                    {/* <div className="text-xs text-[var(--color-text-tertiary)] font-bold uppercase tracking-wider mb-1">
-                        {m.role === "assistant" ? "Nebula" : "You"}
-                    </div> */}
 
                     {/* Message Body */}
                     <div className={`${m.role === "user"
@@ -1368,6 +1487,11 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
                         : "text-[var(--color-text-primary)] pl-0"
                         }`}
                     >
+                        {/* Thinking Block */}
+                        {m.role === "assistant" && thinkingContent && (
+                            <ThinkingBlock content={thinkingContent} />
+                        )}
+
                         {/* Attachments */}
                         {m.attachments && m.attachments.length > 0 && (
                             <div className="flex flex-wrap gap-2 mb-3">
@@ -1412,7 +1536,7 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
                                         {displayContent}
                                     </pre>
                                 ) : (
-                                    displayContent && (
+                                    (cleanContent || (m.role === "tool" && displayContent)) && (
                                         <div className={`prose max-w-none prose-p:leading-relaxed prose-pre:bg-[var(--color-bg-tertiary)] prose-pre:rounded-lg prose-pre:border prose-pre:border-[var(--color-border-primary)]`}>
                                             <ReactMarkdown
                                                 remarkPlugins={[remarkGfm]}
@@ -1461,7 +1585,7 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
                                                     }
                                                 }}
                                             >
-                                                {displayContent}
+                                                {m.role === "tool" ? displayContent : cleanContent}
                                             </ReactMarkdown>
 
                                             {/* Show Full Logic */}

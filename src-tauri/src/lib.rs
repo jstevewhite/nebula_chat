@@ -6,6 +6,7 @@ use crate::mcp::manager::McpManager;
 use crate::memory::tantivy_index::SearchResult;
 use crate::memory::{Fact as MemoryFact, NewFact, ObjectKind};
 use anyhow::Result;
+use serde::Serialize;
 use std::sync::Arc;
 use tauri::{Manager, State};
 use tokio::sync::Mutex;
@@ -60,6 +61,14 @@ async fn respond_to_context_inspection(
         let _ = sender.send(approved);
     }
     Ok(())
+}
+
+#[derive(Clone, Serialize)]
+struct StreamChunkEvent {
+    request_id: Option<String>,
+    conversation_id: Option<String>,
+    chunk: String,
+    chunk_type: String, // "text" or "reasoning"
 }
 
 #[derive(serde::Serialize)]
@@ -140,7 +149,7 @@ async fn generate_title(
     }
 
     let mut prompt = String::new();
-    for (_, (_, role, content, _, _, _, _)) in history.iter().enumerate().take(6) {
+    for (_, (_, role, content, _, _, _, _, _)) in history.iter().enumerate().take(6) {
         if let Some(c) = content {
             prompt.push_str(&format!("{}: {}\n", role, c));
         }
@@ -167,6 +176,7 @@ async fn generate_title(
         id: None,
         role: "user".to_string(),
         content: Some(prompt),
+        reasoning_content: None,
         tool_calls: None,
         tool_call_id: None,
         attachments: None,
@@ -235,7 +245,7 @@ async fn get_chat_history(
         .map_err(|e| e.to_string())?;
 
     let mut messages = Vec::new();
-    for (id, role, content, tool_calls_json, tool_call_id, _, attachments_json) in raw {
+    for (id, role, content, tool_calls_json, tool_call_id, reasoning_content, _created_at, attachments_json) in raw {
         let tool_calls = if let Some(json_str) = tool_calls_json {
             if !json_str.is_empty() {
                 serde_json::from_str(&json_str).ok()
@@ -256,20 +266,13 @@ async fn get_chat_history(
             id: Some(id),
             role,
             content,
+            reasoning_content,
             tool_calls,
             tool_call_id,
             attachments,
         });
     }
     Ok(messages)
-}
-
-#[derive(serde::Serialize)]
-struct StreamChunkEvent {
-    // Optional IDs so older callers / non-chat flows can still stream without extra wiring
-    request_id: Option<String>,
-    conversation_id: Option<String>,
-    chunk: String,
 }
 
 #[tauri::command]
@@ -284,6 +287,10 @@ async fn send_message(
     temperature: Option<f32>,
     top_p: Option<f32>,
     stream: bool,
+    max_tokens: Option<u32>,
+    presence_penalty: Option<f32>,
+    frequency_penalty: Option<f32>,
+    reasoning_effort: Option<String>,
     request_id: Option<String>,
 ) -> Result<Message, String> {
     // Clone necessary data for the async task
@@ -369,6 +376,7 @@ async fn send_message(
                             last.content.as_deref(),
                             tool_calls_json.as_deref(),
                             last.tool_call_id.as_deref(),
+                            None, // reasoning_content (users don't have reasoning)
                             last.attachments.as_deref(),
                         ) {
                             tracing::error!("Failed to save user message for facts: {}", e);
@@ -380,6 +388,7 @@ async fn send_message(
                             last.content.as_deref(),
                             tool_calls_json.as_deref(),
                             last.tool_call_id.as_deref(),
+                            None, // reasoning_content (tool messages don't have reasoning)
                             last.attachments.as_deref(),
                         );
                     }
@@ -457,6 +466,7 @@ async fn send_message(
                     "You have access to the following long-term memories:\n{}",
                     context_text
                 )),
+                reasoning_content: None,
                 tool_calls: None,
                 tool_call_id: None,
                 attachments: None,
@@ -476,6 +486,7 @@ async fn send_message(
                         id: Some(uuid::Uuid::new_v4().to_string()),
                         role: "system".to_string(),
                         content: Some(prompt.content.clone()),
+                        reasoning_content: None,
                         tool_call_id: None,
                         tool_calls: None,
                         attachments: None,
@@ -493,6 +504,7 @@ async fn send_message(
                 "CURRENT DATE: {}",
                 now.format("%A, %B %d, %Y %H:%M")
             )),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
             attachments: None,
@@ -584,6 +596,7 @@ async fn send_message(
                     serde_json::json!({
                         "role": msg.role,
                         "content": msg.content.clone().unwrap_or_default(),
+                        "reasoning_content": msg.reasoning_content.clone().unwrap_or_default(),
                         "tool_calls": msg.tool_calls.as_ref().map(|tc| serde_json::to_string(tc).unwrap_or_default()),
                         "tool_call_id": msg.tool_call_id.clone(),
                     })
@@ -633,25 +646,34 @@ async fn send_message(
             temperature,
             top_p,
             stream,
+            max_tokens,
+            presence_penalty,
+            frequency_penalty,
+            reasoning_effort,
         });
 
         let app_handle_for_stream = app_handle.clone();
         let stream_conversation_id = conversation_id.clone();
         let stream_request_id = request_id.clone();
-        let on_token = Box::new(move |token: String| {
+        let assistant_message_id = uuid::Uuid::new_v4().to_string(); // Generate ID for the assistant's response
+        let on_token = Box::new(move |content: crate::llm::provider::StreamContent| {
             use tauri::Emitter;
-            tracing::debug!("🔊 Emitting stream chunk: {} chars", token.len());
+            tracing::debug!("🔊 Emitting stream chunk: {:?}", content);
             // Emit stream chunk event with routing metadata
-            let payload = StreamChunkEvent {
-                request_id: stream_request_id.clone(),
-                conversation_id: stream_conversation_id.clone(),
-                chunk: token,
+            let (chunk_content, chunk_type_str) = match content {
+                crate::llm::provider::StreamContent::Text(s) => (s, "text".to_string()),
+                crate::llm::provider::StreamContent::Reasoning(s) => (s, "reasoning".to_string()),
             };
-            if let Err(e) = app_handle_for_stream.emit("stream-chunk", &payload) {
-                tracing::error!("Failed to emit stream chunk: {}", e);
-            } else {
-                tracing::debug!("✅ Stream chunk emitted successfully");
-            }
+
+            let _ = app_handle_for_stream.emit(
+                "stream-chunk",
+                StreamChunkEvent {
+                    request_id: stream_request_id.clone(),
+                    conversation_id: stream_conversation_id.clone(),
+                    chunk: chunk_content,
+                    chunk_type: chunk_type_str,
+                },
+            );
         });
 
         // Provider Execution
@@ -701,7 +723,8 @@ async fn send_message(
             }
         };
 
-        let response = response_result.map_err(|e| e.to_string())?;
+        let mut response = response_result.map_err(|e| e.to_string())?;
+        response.id = Some(assistant_message_id.clone()); // Assign the generated ID
 
         // Handle Response (Save & Prune triggers)
         if let Some(conv_id) = conversation_id.clone() {
@@ -714,12 +737,13 @@ async fn send_message(
 
             // Note: If streaming, 'response' contains the FULL aggregated content at the end, so saving works fine.
 
-            let assistant_message_id = match lib.save_full_message_returning_id(
+            let assistant_message_id_for_save = match lib.save_full_message_returning_id(
                 &conv_id,
                 "assistant",
                 response.content.as_deref(),
                 tool_calls_json.as_deref(),
                 response.tool_call_id.as_deref(),
+                response.reasoning_content.as_deref(),
                 None,
             ) {
                 Ok(id) => Some(id),
@@ -749,7 +773,7 @@ async fn send_message(
             if memory_enabled {
                 if let (Some(context_model), Some(msg_id), Some(content)) = (
                     extraction_model.clone(),
-                    assistant_message_id,
+                    assistant_message_id_for_save,
                     response.content.clone(),
                 ) {
                     let app_for_facts = app_handle.clone();
@@ -959,20 +983,30 @@ Normalization:
 
 If there are **no** facts that meet the criteria above, return:
 {{"facts": []}}
-
-MESSAGE ({role}):
-{content}
 "#
     );
 
-    let messages = vec![Message {
+    let _app_state = app.state::<AppState>();
+    let prompt_msg = Message {
         id: None,
         role: "user".to_string(),
         content: Some(prompt),
+        reasoning_content: None,
         tool_calls: None,
-        attachments: None,
         tool_call_id: None,
-    }];
+        attachments: None,
+    };
+    let content_msg = Message {
+        id: None,
+        role: role.to_string(),
+        content: Some(content.to_string()),
+        reasoning_content: None,
+        tool_calls: None,
+        tool_call_id: None,
+        attachments: None,
+    };
+
+    let messages = vec![prompt_msg, content_msg];
 
     let response = match provider.chat(messages, vec![], None).await {
         Ok(r) => r,
@@ -1504,7 +1538,7 @@ async fn rebuild_memory_index(state: State<'_, AppState>) -> Result<(), String> 
             .get_complete_history(&conv_id)
             .map_err(|e| e.to_string())?;
 
-        for (msg_id, role, content, _, _, created_at, _) in messages {
+        for (msg_id, role, content, _, _, _, created_at, _) in messages {
             if let Some(text) = content {
                 lib.index_existing_message(&conv_id, &role, &text, &msg_id, &created_at)
                     .map_err(|e| e.to_string())?;
@@ -1558,7 +1592,7 @@ async fn export_conversation(
         .map_err(|e| e.to_string())?;
 
     let mut messages = Vec::new();
-    for (id, role, content, tool_calls_txt, tool_call_id, _created, attachments_json) in raw_msgs {
+    for (id, role, content, tool_calls_txt, tool_call_id, reasoning_content, _created, attachments_json) in raw_msgs {
         let tool_calls = if let Some(json) = tool_calls_txt {
             if !json.is_empty() {
                 serde_json::from_str(&json).ok()
@@ -1579,6 +1613,7 @@ async fn export_conversation(
             id: Some(id),
             role,
             content,
+            reasoning_content,
             tool_calls,
             tool_call_id,
             attachments,
@@ -1653,6 +1688,7 @@ async fn import_conversation(
             msg.content.as_deref(),
             tool_calls_str,
             msg.tool_call_id.as_deref(),
+            msg.reasoning_content.as_deref(),
             None,
         )
         .map_err(|e| e.to_string())?;
@@ -1732,6 +1768,7 @@ async fn attempt_pruning(
                     tool_calls: None,
                     tool_call_id: None,
                     attachments: None,
+                    reasoning_content: None,
                 }], vec![], None).await
             }
             ProviderType::Anthropic => {
@@ -1744,6 +1781,7 @@ async fn attempt_pruning(
                     tool_calls: None,
                     tool_call_id: None,
                     attachments: None,
+                    reasoning_content: None,
                 }], vec![], None).await
             }
             ProviderType::Ollama => {
@@ -1759,6 +1797,7 @@ async fn attempt_pruning(
                     tool_calls: None,
                     tool_call_id: None,
                     attachments: None,
+                    reasoning_content: None,
                 }], vec![], None).await
             }
         };

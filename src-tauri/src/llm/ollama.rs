@@ -1,4 +1,6 @@
-use crate::llm::provider::{GenerationOptions, LlmProvider, Message, ToolDefinition};
+use crate::llm::provider::{
+    GenerationOptions, LlmProvider, Message, StreamContent, ToolDefinition,
+};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -112,6 +114,28 @@ impl LlmProvider for OllamaProvider {
                     .unwrap()
                     .insert("top_p".to_string(), json!(top_p));
             }
+            if let Some(max_tokens) = opts.max_tokens {
+                body.as_object_mut()
+                    .unwrap()
+                    .insert("max_tokens".to_string(), json!(max_tokens));
+            }
+            if let Some(presence_penalty) = opts.presence_penalty {
+                body.as_object_mut()
+                    .unwrap()
+                    .insert("presence_penalty".to_string(), json!(presence_penalty));
+            }
+            if let Some(frequency_penalty) = opts.frequency_penalty {
+                body.as_object_mut()
+                    .unwrap()
+                    .insert("frequency_penalty".to_string(), json!(frequency_penalty));
+            }
+            // Note: reasoning_effort is specific to certain models (DeepSeek, OpenAI o1)
+            // Ollama may or may not support it depending on the model
+            if let Some(reasoning_effort) = opts.reasoning_effort {
+                body.as_object_mut()
+                    .unwrap()
+                    .insert("reasoning_effort".to_string(), json!(reasoning_effort));
+            }
         }
 
         if !openai_tools.is_empty() {
@@ -158,6 +182,7 @@ impl LlmProvider for OllamaProvider {
             tool_calls,
             tool_call_id: None,
             attachments: None,
+            reasoning_content: None,
         })
     }
 
@@ -166,7 +191,7 @@ impl LlmProvider for OllamaProvider {
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
         options: Option<GenerationOptions>,
-        on_token: Box<dyn Fn(String) + Send + Sync>,
+        on_token: Box<dyn Fn(StreamContent) + Send + Sync>,
     ) -> Result<Message> {
         let openai_tools: Vec<Value> = tools
             .into_iter()
@@ -234,6 +259,26 @@ impl LlmProvider for OllamaProvider {
                     .unwrap()
                     .insert("top_p".to_string(), json!(top_p));
             }
+            if let Some(max_tokens) = opts.max_tokens {
+                body.as_object_mut()
+                    .unwrap()
+                    .insert("max_tokens".to_string(), json!(max_tokens));
+            }
+            if let Some(presence_penalty) = opts.presence_penalty {
+                body.as_object_mut()
+                    .unwrap()
+                    .insert("presence_penalty".to_string(), json!(presence_penalty));
+            }
+            if let Some(frequency_penalty) = opts.frequency_penalty {
+                body.as_object_mut()
+                    .unwrap()
+                    .insert("frequency_penalty".to_string(), json!(frequency_penalty));
+            }
+            if let Some(reasoning_effort) = opts.reasoning_effort {
+                body.as_object_mut()
+                    .unwrap()
+                    .insert("reasoning_effort".to_string(), json!(reasoning_effort));
+            }
         }
 
         if !openai_tools.is_empty() {
@@ -287,7 +332,7 @@ impl LlmProvider for OllamaProvider {
                         if let Some(choice) = choices.first() {
                             if let Some(delta) = choice.get("delta") {
                                 if let Some(content) = delta["content"].as_str() {
-                                    on_token(content.to_string());
+                                    on_token(StreamContent::Text(content.to_string()));
                                     full_content.push_str(content);
                                 }
 
@@ -357,6 +402,7 @@ impl LlmProvider for OllamaProvider {
             },
             tool_call_id: None,
             attachments: None,
+            reasoning_content: None, // Ollama might support this in future but generic for now
         })
     }
 }
