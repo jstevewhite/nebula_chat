@@ -108,6 +108,9 @@ pub struct Settings {
     #[serde(default = "default_true_bool")]
     pub memory_enabled: bool,
 
+    #[serde(default = "default_true_bool")]
+    pub enable_keychain: bool,
+
     // Enables context inspection mode: shows full context before sending to model
     // with Cancel/OK dialog for debugging and transparency.
     #[serde(default)]
@@ -211,6 +214,19 @@ impl Settings {
                 if let Ok(key) = std::env::var("NEBULA_ANTHROPIC_KEY") {
                     if let Some(p) = settings.providers.get_mut("anthropic") {
                         p.api_key = Some(key);
+                    }
+                }
+
+                // Load keys from keychain if enabled
+                if settings.enable_keychain {
+                    for (name, provider) in settings.providers.iter_mut() {
+                        if let Ok(Some(secret)) =
+                            crate::security::keychain::get_secret("nebula_chat", name)
+                        {
+                            if !secret.is_empty() {
+                                provider.api_key = Some(secret);
+                            }
+                        }
                     }
                 }
 
@@ -333,7 +349,29 @@ impl Settings {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let content = serde_json::to_string_pretty(self)?;
+
+        let mut to_save = self.clone();
+
+        if self.enable_keychain {
+            for (name, provider) in self.providers.iter() {
+                if let Some(key) = &provider.api_key {
+                    if !key.trim().is_empty() {
+                        if let Err(e) =
+                            crate::security::keychain::set_secret("nebula_chat", name, key)
+                        {
+                            eprintln!("Failed to save key for {} to keychain: {}", name, e);
+                        } else {
+                            // Strip from file payload
+                            if let Some(p) = to_save.providers.get_mut(name) {
+                                p.api_key = None;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let content = serde_json::to_string_pretty(&to_save)?;
         std::fs::write(path, content)?;
         Ok(())
     }
