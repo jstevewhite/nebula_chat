@@ -12,6 +12,8 @@ pub struct Message {
     // OpenAI supports null content for tool calls
     pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>, // For tool role messages
@@ -39,6 +41,20 @@ pub struct GenerationOptions {
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
     pub stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub presence_penalty: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frequency_penalty: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>, // "low", "medium", "high" for reasoning models
+}
+
+#[derive(Debug)]
+pub enum StreamContent {
+    Text(String),
+    Reasoning(String),
 }
 
 #[async_trait]
@@ -50,21 +66,11 @@ pub trait LlmProvider: Send + Sync {
         options: Option<GenerationOptions>,
     ) -> Result<Message>;
 
-    // Default implementation handles standard blocking chat
-    // Providers can override this if they support streaming
-    // on_token callback is called with each text chunk
     async fn stream(
         &self,
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
         options: Option<GenerationOptions>,
-        on_token: Box<dyn Fn(String) + Send + Sync>,
-    ) -> Result<Message> {
-        // Fallback to chat if streaming not implemented
-        let msg = self.chat(messages, tools, options).await?;
-        if let Some(content) = &msg.content {
-            on_token(content.clone());
-        }
-        Ok(msg)
-    }
+        on_token: Box<dyn Fn(StreamContent) + Send + Sync>,
+    ) -> Result<Message>;
 }

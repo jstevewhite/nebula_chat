@@ -1,4 +1,6 @@
-use crate::llm::provider::{GenerationOptions, LlmProvider, Message, ToolDefinition};
+use crate::llm::provider::{
+    GenerationOptions, LlmProvider, Message, StreamContent, ToolDefinition,
+};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -149,6 +151,26 @@ impl LlmProvider for OpenAiProvider {
                     .unwrap()
                     .insert("top_p".to_string(), json!(top_p));
             }
+            if let Some(max_tokens) = opts.max_tokens {
+                body.as_object_mut()
+                    .unwrap()
+                    .insert("max_tokens".to_string(), json!(max_tokens));
+            }
+            if let Some(presence_penalty) = opts.presence_penalty {
+                body.as_object_mut()
+                    .unwrap()
+                    .insert("presence_penalty".to_string(), json!(presence_penalty));
+            }
+            if let Some(frequency_penalty) = opts.frequency_penalty {
+                body.as_object_mut()
+                    .unwrap()
+                    .insert("frequency_penalty".to_string(), json!(frequency_penalty));
+            }
+            if let Some(reasoning_effort) = opts.reasoning_effort {
+                body.as_object_mut()
+                    .unwrap()
+                    .insert("reasoning_effort".to_string(), json!(reasoning_effort));
+            }
         }
 
         if !openai_tools.is_empty() {
@@ -185,6 +207,11 @@ impl LlmProvider for OpenAiProvider {
             .cloned()
             .and_then(|v| v.as_array().cloned());
 
+        let reasoning_content = choice
+            .get("reasoning_content")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
         if content_text.is_empty()
             && (tool_calls.is_none() || tool_calls.as_ref().unwrap().is_empty())
         {
@@ -210,6 +237,7 @@ impl LlmProvider for OpenAiProvider {
             id: None,
             role: "assistant".to_string(),
             content,
+            reasoning_content,
             tool_calls,
             tool_call_id: None,
             attachments: None,
@@ -221,7 +249,7 @@ impl LlmProvider for OpenAiProvider {
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
         options: Option<GenerationOptions>,
-        on_token: Box<dyn Fn(String) + Send + Sync>,
+        on_token: Box<dyn Fn(StreamContent) + Send + Sync>,
     ) -> Result<Message> {
         let openai_tools: Vec<Value> = tools
             .into_iter()
@@ -240,7 +268,6 @@ impl LlmProvider for OpenAiProvider {
         let formatted_messages: Vec<Value> = messages
             .into_iter()
             .map(|msg| {
-                // Simplified attachment handling for streaming reuse (same as chat)
                 if let Some(attachments) = &msg.attachments {
                     let mut content_parts = Vec::new();
                     let mut text_content = msg.content.clone().unwrap_or_default();
@@ -276,7 +303,14 @@ impl LlmProvider for OpenAiProvider {
         let mut body = json!({
             "model": self.model,
             "messages": formatted_messages,
-            "stream": true
+            "model": self.model,
+            "messages": formatted_messages,
+            "stream": true,
+            // Attempt to request reasoning for compatible models (like DeepSeek via specialized providers)
+            // Most standard providers ignore unknown fields, but strict ones might fail.
+            // We'll add it if the model name suggests DeepSeek or similar, or just try it.
+            // For now, let's only add it if it's NOT a standard OpenAI model to avoid validation errors.
+            // "include_reasoning": true
         });
 
         if let Some(opts) = options {
@@ -289,6 +323,26 @@ impl LlmProvider for OpenAiProvider {
                 body.as_object_mut()
                     .unwrap()
                     .insert("top_p".to_string(), json!(top_p));
+            }
+            if let Some(max_tokens) = opts.max_tokens {
+                body.as_object_mut()
+                    .unwrap()
+                    .insert("max_tokens".to_string(), json!(max_tokens));
+            }
+            if let Some(presence_penalty) = opts.presence_penalty {
+                body.as_object_mut()
+                    .unwrap()
+                    .insert("presence_penalty".to_string(), json!(presence_penalty));
+            }
+            if let Some(frequency_penalty) = opts.frequency_penalty {
+                body.as_object_mut()
+                    .unwrap()
+                    .insert("frequency_penalty".to_string(), json!(frequency_penalty));
+            }
+            if let Some(reasoning_effort) = opts.reasoning_effort {
+                body.as_object_mut()
+                    .unwrap()
+                    .insert("reasoning_effort".to_string(), json!(reasoning_effort));
             }
         }
 
@@ -326,13 +380,12 @@ impl LlmProvider for OpenAiProvider {
         let mut stream = response.bytes_stream();
 
         let mut full_content = String::new();
-        let mut tool_calls_acc: Vec<Value> = Vec::new(); // Accumulate tool calls logic if needed (complex)
+        let mut full_reasoning = String::new();
+        let mut tool_calls_acc: Vec<Value> = Vec::new();
 
-        // Maintain an SSE buffer across chunks to avoid losing partial lines
         let mut sse_buffer = String::new();
         let mut saw_any_delta = false;
 
-        // OpenAI streaming tool calls send parts we need to reassemble.
         let mut current_tool_index: Option<usize> = None;
         let mut current_tool_id = String::new();
         let mut current_tool_name = String::new();
@@ -340,24 +393,20 @@ impl LlmProvider for OpenAiProvider {
 
         'outer: while let Some(item) = stream.next().await {
             let chunk = item?;
-            // Normalize CRLF to LF to make splitting robust across platforms
             let chunk_norm = String::from_utf8_lossy(&chunk).replace("\r\n", "\n");
             sse_buffer.push_str(&chunk_norm);
 
-            // Process complete SSE events separated by double newlines
             loop {
                 if let Some(idx) = sse_buffer.find("\n\n") {
                     let event = sse_buffer[..idx].to_string();
                     sse_buffer.drain(..idx + 2);
 
-                    // Each event may contain multiple lines; extract data lines
                     for line in event.lines() {
                         if !line.starts_with("data: ") {
                             continue;
                         }
                         let data = line[6..].trim();
                         if data == "[DONE]" {
-                            // End of stream
                             sse_buffer.clear();
                             break 'outer;
                         }
@@ -366,9 +415,10 @@ impl LlmProvider for OpenAiProvider {
                             if let Some(choices) = json["choices"].as_array() {
                                 if let Some(choice) = choices.first() {
                                     if let Some(delta) = choice.get("delta") {
-                                        // Handle Content (string or array of parts)
+                                        tracing::debug!("Raw delta: {:?}", delta);
+                                        // Content
                                         if let Some(content_str) = delta["content"].as_str() {
-                                            on_token(content_str.to_string());
+                                            on_token(StreamContent::Text(content_str.to_string()));
                                             full_content.push_str(content_str);
                                             saw_any_delta = true;
                                         } else if let Some(parts) = delta["content"].as_array() {
@@ -379,7 +429,9 @@ impl LlmProvider for OpenAiProvider {
                                                     if let Some(txt) =
                                                         part.get("text").and_then(|v| v.as_str())
                                                     {
-                                                        on_token(txt.to_string());
+                                                        on_token(StreamContent::Text(
+                                                            txt.to_string(),
+                                                        ));
                                                         full_content.push_str(txt);
                                                         saw_any_delta = true;
                                                     }
@@ -387,7 +439,26 @@ impl LlmProvider for OpenAiProvider {
                                             }
                                         }
 
-                                        // Handle Tool Calls (Accumulation)
+                                        // Reasoning (DeepSeek/Qwen) - Check common fields
+                                        let reasoning_chunk = delta
+                                            .get("reasoning_content")
+                                            .or_else(|| delta.get("reasoning"))
+                                            .or_else(|| delta.get("thinking"))
+                                            .and_then(|v| v.as_str());
+
+                                        if let Some(reasoning_str) = reasoning_chunk {
+                                            tracing::debug!(
+                                                "🧩 Reasoning chunk: {}",
+                                                reasoning_str
+                                            );
+                                            on_token(StreamContent::Reasoning(
+                                                reasoning_str.to_string(),
+                                            ));
+                                            full_reasoning.push_str(reasoning_str);
+                                            saw_any_delta = true;
+                                        }
+
+                                        // Tool Calls
                                         if let Some(delta_tool_calls) =
                                             delta["tool_calls"].as_array()
                                         {
@@ -395,9 +466,7 @@ impl LlmProvider for OpenAiProvider {
                                                 let index =
                                                     tc["index"].as_u64().unwrap_or(0) as usize;
 
-                                                // New Tool Call?
                                                 if current_tool_index != Some(index) {
-                                                    // Push previous if exists
                                                     if !current_tool_id.is_empty() {
                                                         tool_calls_acc.push(json!({
                                                             "id": current_tool_id,
@@ -409,7 +478,6 @@ impl LlmProvider for OpenAiProvider {
                                                         }));
                                                     }
 
-                                                    // Reset
                                                     current_tool_index = Some(index);
                                                     current_tool_id =
                                                         tc["id"].as_str().unwrap_or("").to_string();
@@ -422,7 +490,6 @@ impl LlmProvider for OpenAiProvider {
                                                         .unwrap_or("")
                                                         .to_string();
                                                 } else {
-                                                    // Append args
                                                     if let Some(args) =
                                                         tc["function"]["arguments"].as_str()
                                                     {
@@ -437,12 +504,11 @@ impl LlmProvider for OpenAiProvider {
                         }
                     }
                 } else {
-                    break; // wait for more data
+                    break;
                 }
             }
         }
 
-        // Push last tool call if any
         if !current_tool_id.is_empty() {
             tool_calls_acc.push(json!({
                 "id": current_tool_id,
@@ -454,7 +520,11 @@ impl LlmProvider for OpenAiProvider {
             }));
         }
 
-        if full_content.is_empty() && tool_calls_acc.is_empty() && !saw_any_delta {
+        if full_content.is_empty()
+            && full_reasoning.is_empty()
+            && tool_calls_acc.is_empty()
+            && !saw_any_delta
+        {
             return Err(anyhow::anyhow!("OpenAI streaming returned no content"));
         }
 
@@ -465,6 +535,11 @@ impl LlmProvider for OpenAiProvider {
                 None
             } else {
                 Some(full_content)
+            },
+            reasoning_content: if full_reasoning.is_empty() {
+                None
+            } else {
+                Some(full_reasoning)
             },
             tool_calls: if tool_calls_acc.is_empty() {
                 None

@@ -28,12 +28,13 @@ impl ContextAssembler {
             (parts[0], parts[1])
         } else {
             // Fallback or error
-            return Ok(memory_hits.iter().map(|h| h.snippet.clone()).collect::<Vec<_>>().join("\n"));
+            return Ok(memory_hits
+                .iter()
+                .map(|h| h.snippet.clone())
+                .collect::<Vec<_>>()
+                .join("\n"));
         };
 
-        // 2. Instantiate local provider (stateless for this call)
-        // Note: We need the API keys/URL from settings.
-        // This is a bit duplicative of McpManager logic but simpler for this isolated task.
         // 2. Instantiate local provider (stateless for this call)
         let provider: Box<dyn LlmProvider + Send + Sync> =
             if let Some(config) = settings.providers.get(provider_id) {
@@ -58,12 +59,14 @@ impl ContextAssembler {
                 }
             } else {
                 // If provider config not found, fallback to raw snippets
-                return Ok(memory_hits.iter().map(|h| h.snippet.clone()).collect::<Vec<_>>().join("\n"));
+                return Ok(memory_hits
+                    .iter()
+                    .map(|h| h.snippet.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n"));
             };
 
         // 3. Construct Prompt
-        // Use recent conversation turns (if configured) to better judge relevance.
-        // Format memory hits with metadata for better context
         let memory_block = memory_hits
             .iter()
             .map(|hit| {
@@ -78,7 +81,6 @@ impl ContextAssembler {
         let recent_context = if context_turns == 0 {
             String::new()
         } else {
-            // Treat turns as user/assistant pairs; approximate by taking last 2*turns user/assistant messages.
             let max_msgs = context_turns.saturating_mul(2);
             let mut recent: Vec<String> = Vec::new();
 
@@ -108,16 +110,8 @@ impl ContextAssembler {
             }
         };
 
-        let prompt = format!(
-            "You are a helpful assistant acting as a Memory Manager.
+        let system_prompt = "You are a helpful assistant acting as a Memory Manager.
 Your goal is to prepare a concise context block for the main LLM.
-
-USER QUERY: {}{}
-
-RETRIEVED MEMORIES (Fragments):
----
-{}
----
 
 INSTRUCTIONS:
 1. Use the user query AND the recent conversation to determine relevance.
@@ -125,19 +119,42 @@ INSTRUCTIONS:
 3. Filter out duplicates or irrelevant noise.
 4. Summarize the relevant facts into a single coherent block of text.
 5. If nothing is relevant, just say 'No relevant context.'
-6. Do NOT output conversational filler. Just the facts.
-",
+6. Do NOT output conversational filler. Just the facts."
+            .to_string();
+
+        let user_prompt = format!(
+            "USER QUERY: {}{}
+            
+RETRIEVED MEMORIES (Fragments):
+---
+{}
+---",
             query, recent_context, memory_block
         );
 
-        let msgs = vec![Message {
+        let mut msgs = Vec::new();
+
+        if !system_prompt.is_empty() {
+            msgs.push(Message {
+                id: None,
+                role: "system".to_string(),
+                content: Some(system_prompt),
+                reasoning_content: None,
+                tool_calls: None,
+                tool_call_id: None,
+                attachments: None,
+            });
+        }
+
+        msgs.push(Message {
             id: None,
             role: "user".to_string(),
-            content: Some(prompt),
+            content: Some(user_prompt),
+            reasoning_content: None,
             tool_calls: None,
             attachments: None,
             tool_call_id: None,
-        }];
+        });
 
         // 4. Call Model
         match provider.chat(msgs, vec![], None).await {
@@ -152,7 +169,11 @@ INSTRUCTIONS:
             Err(e) => {
                 eprintln!("Context Assembly Failed: {}", e);
                 // Fallback to raw snippets
-                Ok(memory_hits.iter().map(|h| h.snippet.clone()).collect::<Vec<_>>().join("\n"))
+                Ok(memory_hits
+                    .iter()
+                    .map(|h| h.snippet.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n"))
             }
         }
     }

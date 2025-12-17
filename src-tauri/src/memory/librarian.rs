@@ -46,6 +46,7 @@ impl Librarian {
         let sqlite = SqliteManager::new(db_path.to_str().unwrap())?;
         // Attempt migration (ignore error if cols exist)
         let _ = sqlite.migrate_v2();
+        let _ = sqlite.migrate_v3();
         // Initialize facts schema; uses IF NOT EXISTS so this is safe to run repeatedly.
         sqlite.migrate_facts_v1()?;
 
@@ -137,6 +138,7 @@ impl Librarian {
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<String>, // reasoning_content
             String, // created_at added
             String, // attachments
         )>,
@@ -151,6 +153,7 @@ impl Librarian {
         content: Option<&str>,
         tool_calls: Option<&str>,
         tool_call_id: Option<&str>,
+        reasoning_content: Option<&str>,
         attachments: Option<&[crate::llm::provider::Attachment]>,
     ) -> Result<(String, String)> {
         let (id, created_at) = self.sqlite.save_full_message(
@@ -159,6 +162,7 @@ impl Librarian {
             content,
             tool_calls,
             tool_call_id,
+            reasoning_content,
         )?;
 
         if let Some(atts) = attachments {
@@ -193,6 +197,7 @@ impl Librarian {
         content: Option<&str>,
         tool_calls: Option<&str>,
         tool_call_id: Option<&str>,
+        reasoning_content: Option<&str>,
         attachments: Option<&[crate::llm::provider::Attachment]>,
     ) -> Result<String> {
         let (id, _created_at) = self.save_full_message_internal(
@@ -201,6 +206,7 @@ impl Librarian {
             content,
             tool_calls,
             tool_call_id,
+            reasoning_content,
             attachments,
         )?;
         Ok(id)
@@ -213,6 +219,7 @@ impl Librarian {
         content: Option<&str>,
         tool_calls: Option<&str>,
         tool_call_id: Option<&str>,
+        reasoning_content: Option<&str>,
         attachments: Option<&[crate::llm::provider::Attachment]>,
     ) -> Result<()> {
         let _ = self.save_full_message_internal(
@@ -221,6 +228,7 @@ impl Librarian {
             content,
             tool_calls,
             tool_call_id,
+            reasoning_content,
             attachments,
         )?;
         Ok(())
