@@ -1370,6 +1370,7 @@ async fn add_mcp_server(
     args: Option<Vec<String>>,
     env: Option<HashMap<String, String>>,
     url: Option<String>,
+    headers: Option<HashMap<String, String>>,
     auto_approve: Option<bool>,
 ) -> Result<(), String> {
     use crate::mcp::config::McpTransport;
@@ -1382,6 +1383,7 @@ async fn add_mcp_server(
         },
         "sse" => McpTransport::Sse {
             url: url.ok_or("URL required for SSE")?,
+            headers: headers.unwrap_or_default(),
         },
         _ => return Err("Invalid transport type".to_string()),
     };

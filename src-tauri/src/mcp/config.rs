@@ -12,6 +12,8 @@ pub enum McpTransport {
     },
     Sse {
         url: String,
+        #[serde(default)]
+        headers: HashMap<String, String>,
     },
 }
 

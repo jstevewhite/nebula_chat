@@ -2,6 +2,7 @@ use crate::mcp::config::McpTransport;
 use anyhow::{Context, Result};
 use futures::StreamExt;
 use reqwest::Client as HttpClient;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -82,6 +83,7 @@ impl Transport for StdioTransport {
 struct SseTransport {
     url: String,
     client: HttpClient,
+    headers: HeaderMap,
     session_id: Arc<Mutex<Option<String>>>,
     sse_handle: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value>>>>>,
@@ -89,10 +91,23 @@ struct SseTransport {
     disconnected_flag: Arc<AtomicBool>,
 }
 
+fn build_header_map(headers: &HashMap<String, String>) -> Result<HeaderMap> {
+    let mut map = HeaderMap::new();
+    for (k, v) in headers {
+        let name = HeaderName::from_bytes(k.as_bytes())
+            .with_context(|| format!("Invalid header name: '{}'", k))?;
+        let value = HeaderValue::from_str(v)
+            .with_context(|| format!("Invalid header value for '{}': value is not valid HTTP header text", k))?;
+        map.insert(name, value);
+    }
+    Ok(map)
+}
+
 impl SseTransport {
     fn start_sse_loop(&self, session_id_val: String) {
         let client = self.client.clone();
         let url = self.url.clone();
+        let headers = self.headers.clone();
         let pending = self.pending.clone();
         let session_id_str = session_id_val.clone(); // Keep for retries
         let shutdown_flag = self.shutdown_flag.clone();
@@ -115,6 +130,7 @@ impl SseTransport {
 
                 let req_builder = client
                     .get(&url)
+                    .headers(headers.clone())
                     .header("Accept", "text/event-stream")
                     .header("mcp-session-id", &session_id_str);
 
@@ -196,6 +212,7 @@ impl Transport for SseTransport {
 
         let mut req_builder = client
             .post(&self.url)
+            .headers(self.headers.clone())
             .header("Accept", "application/json, text/event-stream")
             .json(&req);
         if let Some(sid) = &session_id_str {
@@ -344,8 +361,9 @@ impl McpClient {
                     stderr_log,
                 })
             }
-            McpTransport::Sse { url } => {
+            McpTransport::Sse { url, headers } => {
                 let client = HttpClient::new();
+                let headers = build_header_map(headers)?;
                 let session_id = Arc::new(Mutex::new(None));
                 let sse_handle = Arc::new(std::sync::Mutex::new(None));
                 let shutdown_flag = Arc::new(AtomicBool::new(false));
@@ -354,6 +372,7 @@ impl McpClient {
                 Arc::new(SseTransport {
                     url: url.clone(),
                     client,
+                    headers,
                     session_id,
                     sse_handle,
                     pending: pending_clone,

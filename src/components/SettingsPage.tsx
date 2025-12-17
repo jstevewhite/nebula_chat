@@ -75,6 +75,8 @@ export default function SettingsPage() {
     const [envText, setEnvText] = useState("");
     const [envErrors, setEnvErrors] = useState<string[]>([]);
     const [url, setUrl] = useState("");
+    const [headersText, setHeadersText] = useState("");
+    const [headersErrors, setHeadersErrors] = useState<string[]>([]);
     const [allowlist, setAllowlist] = useState("");
 
     const [denylist, setDenylist] = useState("");
@@ -194,6 +196,8 @@ export default function SettingsPage() {
         setEnvText("");
         setEnvErrors([]);
         setUrl("");
+        setHeadersText("");
+        setHeadersErrors([]);
         setAllowlist("");
 
         setDenylist("");
@@ -210,6 +214,15 @@ export default function SettingsPage() {
         if (config.type === "Sse") {
             setTransportType("sse");
             setUrl(config.url || "");
+
+            const headersObj = (config.headers || {}) as Record<string, string>;
+            const headerLines = Object.entries(headersObj)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([k, v]) => `${k}: ${v}`)
+                .join("\n");
+            setHeadersText(headerLines);
+            setHeadersErrors([]);
+
             setCommand("");
             setArgs("");
             setEnvText("");
@@ -227,6 +240,8 @@ export default function SettingsPage() {
             setEnvText(envLines);
             setEnvErrors([]);
             setUrl("");
+            setHeadersText("");
+            setHeadersErrors([]);
         }
 
         // Permissions
@@ -282,6 +297,53 @@ export default function SettingsPage() {
             return { env, errors };
         };
 
+        const parseHeadersValidated = (text: string): { headers: Record<string, string>, errors: string[] } => {
+            const headers: Record<string, string> = {};
+            const errors: string[] = [];
+            const lines = text.split("\n");
+
+            // RFC 7230 token (header name) - a pragmatic subset
+            const nameRe = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+
+            lines.forEach((rawLine, idx) => {
+                const lineNo = idx + 1;
+                const trimmed = rawLine.trim();
+                if (!trimmed || trimmed.startsWith("#")) return;
+
+                const colon = trimmed.indexOf(":");
+                const eq = trimmed.indexOf("=");
+                const sep = colon >= 0 ? ":" : (eq >= 0 ? "=" : null);
+
+                if (!sep) {
+                    errors.push(`Line ${lineNo}: expected Header: Value (or Header=Value)`);
+                    return;
+                }
+
+                const splitAt = sep === ":" ? colon : eq;
+                const key = trimmed.slice(0, splitAt).trim();
+                const value = trimmed.slice(splitAt + 1).trim();
+
+                if (!key) {
+                    errors.push(`Line ${lineNo}: missing header name`);
+                    return;
+                }
+
+                if (!nameRe.test(key)) {
+                    errors.push(`Line ${lineNo}: invalid header name '${key}'`);
+                    return;
+                }
+
+                if (value.includes("\u0000")) {
+                    errors.push(`Line ${lineNo}: value contains NUL (\\u0000), which is not allowed`);
+                    return;
+                }
+
+                headers[key] = value;
+            });
+
+            return { headers, errors };
+        };
+
         try {
             // Construct config with flattened structure
             let newConfig: any = {
@@ -299,6 +361,7 @@ export default function SettingsPage() {
                     setStatus("Error: Invalid environment variables.");
                     return;
                 }
+                setHeadersErrors([]);
 
                 newConfig.type = "Stdio";
                 newConfig.command = command;
@@ -306,8 +369,17 @@ export default function SettingsPage() {
                 newConfig.env = parsed.env;
             } else {
                 setEnvErrors([]);
+
+                const parsedHeaders = parseHeadersValidated(headersText);
+                setHeadersErrors(parsedHeaders.errors);
+                if (parsedHeaders.errors.length > 0) {
+                    setStatus("Error: Invalid HTTP headers.");
+                    return;
+                }
+
                 newConfig.type = "Sse";
                 newConfig.url = url;
+                newConfig.headers = parsedHeaders.headers;
             }
 
             if (editingServer) {
@@ -320,6 +392,8 @@ export default function SettingsPage() {
                 // Add
                 const argList = args.split(",").map(s => s.trim()).filter(s => s);
                 let env: Record<string, string> | null = null;
+                let headers: Record<string, string> | null = null;
+
                 if (transportType === "stdio") {
                     const parsed = parseEnvValidated(envText);
                     setEnvErrors(parsed.errors);
@@ -327,9 +401,18 @@ export default function SettingsPage() {
                         setStatus("Error: Invalid environment variables.");
                         return;
                     }
+                    setHeadersErrors([]);
                     env = parsed.env;
                 } else {
                     setEnvErrors([]);
+
+                    const parsedHeaders = parseHeadersValidated(headersText);
+                    setHeadersErrors(parsedHeaders.errors);
+                    if (parsedHeaders.errors.length > 0) {
+                        setStatus("Error: Invalid HTTP headers.");
+                        return;
+                    }
+                    headers = parsedHeaders.headers;
                 }
 
                 // add_mcp_server takes transportType etc as args, not a full config object
@@ -341,6 +424,7 @@ export default function SettingsPage() {
                     env: transportType === "stdio" ? env : null,
 
                     url: transportType === "sse" ? url : null,
+                    headers: transportType === "sse" ? headers : null,
                     auto_approve: autoApprove
                 });
             }
@@ -910,15 +994,37 @@ export default function SettingsPage() {
                                         </div>
                                     </>
                                 ) : (
-                                    <div>
-                                        <label className="block text-xs font-bold text-[var(--color-text-tertiary)] uppercase tracking-wider mb-1">SSE URL</label>
-                                        <input
-                                            className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded-lg p-3 text-sm font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
-                                            value={url}
-                                            onChange={e => setUrl(e.target.value)}
-                                            placeholder="http://localhost:3000/sse"
-                                        />
-                                    </div>
+                                    <>
+                                        <div>
+                                            <label className="block text-xs font-bold text-[var(--color-text-tertiary)] uppercase tracking-wider mb-1">SSE URL</label>
+                                            <input
+                                                className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded-lg p-3 text-sm font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                                                value={url}
+                                                onChange={e => setUrl(e.target.value)}
+                                                placeholder="http://localhost:3000/sse"
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-xs font-bold text-[var(--color-text-tertiary)] uppercase tracking-wider mb-1">Headers (Header: Value)</label>
+                                            <textarea
+                                                className={`w-full bg-[var(--color-bg-primary)] border rounded-lg p-3 text-sm font-mono focus:ring-1 outline-none min-h-[120px] ${headersErrors.length > 0 ? "border-red-600 focus:border-red-500 focus:ring-red-500" : "border-[var(--color-border-secondary)] focus:border-blue-500 focus:ring-blue-500"}`}
+                                                value={headersText}
+                                                onChange={e => {
+                                                    setHeadersText(e.target.value);
+                                                    if (headersErrors.length) setHeadersErrors([]);
+                                                }}
+                                                placeholder={"Authorization: Bearer ...\nX-API-Key: ...\n# comments allowed"}
+                                            />
+                                            {headersErrors.length > 0 && (
+                                                <div className="mt-2 text-xs text-red-300 bg-red-900/20 border border-red-700/40 rounded-lg p-2 space-y-1">
+                                                    {headersErrors.map((err, i) => (
+                                                        <div key={i}>{err}</div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </>
                                 )}
 
                                 <div>
