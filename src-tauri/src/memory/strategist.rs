@@ -1,5 +1,5 @@
 use crate::llm::provider::{LlmProvider, Message};
-use crate::memory::{librarian::Librarian, MemoryHit, SearchOptions};
+use crate::memory::{librarian::Librarian, MemoryHit, RelevantFact, SearchOptions};
 use crate::mcp::config::Settings;
 use anyhow::Result;
 use std::collections::HashSet;
@@ -11,6 +11,10 @@ const MAX_RETRIEVAL_ROUNDS: usize = 2;
 const MAX_QUERIES_PER_ROUND: usize = 3;
 const MAX_TOTAL_HITS: usize = 20;
 const DEFAULT_SNIPPET_CHARS: usize = 400;
+
+// Fact retrieval safety bounds
+const MAX_FACT_ENTITIES: usize = 10;
+const MAX_TOTAL_FACTS: usize = 20;
 
 /// A single search query requested by the planner
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -70,6 +74,7 @@ impl StrategistMemoryOrchestrator {
         context_turns: usize,
         context_model_id: Option<&str>,
         settings: &Settings,
+        conversation_id: Option<&str>,
     ) -> Result<StrategistContextResult> {
         // Step 1: Initial retrieval (fast, deterministic)
         let initial_options = SearchOptions {
@@ -78,10 +83,20 @@ impl StrategistMemoryOrchestrator {
             ..Default::default()
         };
 
-        let initial_results = {
+        let (initial_results, facts) = {
             let lib = librarian.lock().await;
-            lib.search_with_options(query, initial_options)?
+            let initial_results = lib.search_with_options(query, initial_options)?;
+            let facts = Self::collect_relevant_facts(&lib, query, conversation_id)?;
+            (initial_results, facts)
         };
+
+        if !facts.is_empty() {
+            let facts_preview = Self::format_facts_block(&facts);
+            tracing::debug!("Strategist relevant facts block:\n{}", facts_preview);
+        } else {
+            tracing::debug!("Strategist relevant facts: (none)");
+        }
+
         let initial_hits: Vec<MemoryHit> = initial_results
             .into_iter()
             .map(|res| MemoryHit::from_search_result(res, DEFAULT_SNIPPET_CHARS))
@@ -89,7 +104,7 @@ impl StrategistMemoryOrchestrator {
 
         // If no context model, return baseline formatted context
         let Some(model_id) = context_model_id else {
-            return Ok(Self::baseline_context(&initial_hits));
+            return Ok(Self::baseline_context(&initial_hits, &facts));
         };
 
         // Step 2: Run strategist planner loop
@@ -98,6 +113,7 @@ impl StrategistMemoryOrchestrator {
             recent_history,
             context_turns,
             initial_hits,
+            facts,
             librarian,
             model_id,
             settings,
@@ -106,25 +122,27 @@ impl StrategistMemoryOrchestrator {
     }
 
     /// Fallback: baseline context without strategist
-    fn baseline_context(hits: &[MemoryHit]) -> StrategistContextResult {
-        if hits.is_empty() {
-            return StrategistContextResult {
-                context_text: String::new(),
-                selected_message_ids: vec![],
-                search_plan: None,
-            };
+    fn baseline_context(hits: &[MemoryHit], facts: &[RelevantFact]) -> StrategistContextResult {
+        let mut sections: Vec<String> = Vec::new();
+
+        if !facts.is_empty() {
+            sections.push(Self::format_facts_block(facts));
         }
 
-        let context_text = hits
-            .iter()
-            .map(|h| format!("[{}] {}", h.role, h.snippet))
-            .collect::<Vec<_>>()
-            .join("\n\n");
+        if !hits.is_empty() {
+            let memories_block = hits
+                .iter()
+                .map(|h| format!("[{}] {}", h.role, h.snippet))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            sections.push(format!("Relevant Memories:\n{}", memories_block));
+        }
 
+        let context_text = sections.join("\n\n");
         let selected_ids = hits.iter().map(|h| h.message_id.clone()).collect();
 
         StrategistContextResult {
-            context_text: format!("Relevant Memories:\n{}", context_text),
+            context_text,
             selected_message_ids: selected_ids,
             search_plan: None,
         }
@@ -136,6 +154,7 @@ impl StrategistMemoryOrchestrator {
         recent_history: &[Message],
         context_turns: usize,
         initial_hits: Vec<MemoryHit>,
+        facts: Vec<RelevantFact>,
         librarian: Arc<Mutex<Librarian>>,
         model_id: &str,
         settings: &Settings,
@@ -144,7 +163,7 @@ impl StrategistMemoryOrchestrator {
         let parts: Vec<&str> = model_id.split("::").collect();
         if parts.len() != 2 {
             tracing::warn!("Invalid context_model format, falling back to baseline");
-            return Ok(Self::baseline_context(&initial_hits));
+            return Ok(Self::baseline_context(&initial_hits, &facts));
         }
 
         let (provider_id, model_name) = (parts[0], parts[1]);
@@ -158,6 +177,7 @@ impl StrategistMemoryOrchestrator {
             recent_history,
             context_turns,
             &initial_hits,
+            &facts,
             provider.as_ref(),
         )
         .await?;
@@ -187,6 +207,7 @@ impl StrategistMemoryOrchestrator {
             recent_history,
             context_turns,
             &all_hits,
+            &facts,
             provider.as_ref(),
         )
         .await?;
@@ -201,7 +222,7 @@ impl StrategistMemoryOrchestrator {
     }
 
     /// Create LLM provider instance
-    fn create_provider(
+    pub(crate) fn create_provider(
         provider_id: &str,
         model_name: &str,
         settings: &Settings,
@@ -242,10 +263,14 @@ impl StrategistMemoryOrchestrator {
         recent_history: &[Message],
         context_turns: usize,
         initial_hits: &[MemoryHit],
+        facts: &[RelevantFact],
         provider: &dyn LlmProvider,
     ) -> Result<Option<SearchPlan>> {
         // Format recent conversation context
         let recent_context = Self::format_recent_context(recent_history, context_turns);
+
+        // Format facts
+        let facts_block = Self::format_facts_block(facts);
 
         // Format initial hits
         let hits_preview = initial_hits
@@ -266,9 +291,12 @@ impl StrategistMemoryOrchestrator {
             .join("\n");
 
         let prompt = format!(
-            r#"You are a Memory Search Planner. Analyze the user query and initial search results to decide if additional targeted searches would improve context quality.
+            r#"You are a Memory Search Planner. Analyze the user query, known facts, and initial search results to decide if additional targeted searches would improve context quality.
 
 USER QUERY: {}{}
+
+FACTS:
+{}
 
 INITIAL SEARCH RESULTS ({} hits):
 {}
@@ -305,6 +333,7 @@ OUTPUT (JSON only, no prose):"#,
             } else {
                 format!("\n\n{}", recent_context)
             },
+            facts_block,
             initial_hits.len(),
             if hits_preview.is_empty() {
                 "(none)".to_string()
@@ -400,9 +429,12 @@ OUTPUT (JSON only, no prose):"#,
         recent_history: &[Message],
         context_turns: usize,
         all_hits: &[MemoryHit],
+        facts: &[RelevantFact],
         provider: &dyn LlmProvider,
     ) -> Result<String> {
         let recent_context = Self::format_recent_context(recent_history, context_turns);
+
+        let facts_block = Self::format_facts_block(facts);
 
         let hits_block = all_hits
             .iter()
@@ -419,6 +451,9 @@ OUTPUT (JSON only, no prose):"#,
             r#"You are a Memory Context Synthesizer. Create a concise, relevant context block for the main LLM.
 
 USER QUERY: {}{}
+
+FACTS:
+{}
 
 RETRIEVED MEMORIES ({} hits):
 ---
@@ -442,6 +477,7 @@ OUTPUT:"#,
             } else {
                 format!("\n\n{}", recent_context)
             },
+            facts_block,
             all_hits.len(),
             if hits_block.is_empty() {
                 "(none)".to_string()
@@ -514,5 +550,131 @@ OUTPUT:"#,
                 recent.join("\n")
             )
         }
+    }
+
+    /// Collect relevant facts for the current query, including a small set of
+    /// user-profile facts and entity-centric facts derived from simple
+    /// heuristics over the query text.
+    fn collect_relevant_facts(
+        librarian: &Librarian,
+        query: &str,
+        _conversation_id: Option<&str>,
+    ) -> Result<Vec<RelevantFact>> {
+        let mut results: Vec<RelevantFact> = Vec::new();
+
+        // 1) Always include some user profile facts.
+        let profile_facts = librarian.get_user_profile_facts(MAX_TOTAL_FACTS.min(10))?;
+        for fact in profile_facts {
+            results.push(RelevantFact::from_fact(fact));
+        }
+
+        if results.len() >= MAX_TOTAL_FACTS {
+            return Ok(results);
+        }
+
+        // 2) Extract candidate entities from the query.
+        let entities = Self::extract_candidate_entities(query, MAX_FACT_ENTITIES);
+        if entities.is_empty() {
+            return Ok(results);
+        }
+
+        // 3) For each entity, pull a small number of facts.
+        use std::collections::HashSet;
+        let mut seen_ids: HashSet<String> = results.iter().map(|rf| rf.fact.id.clone()).collect();
+
+        for entity in entities {
+            if results.len() >= MAX_TOTAL_FACTS {
+                break;
+            }
+
+            let remaining = MAX_TOTAL_FACTS - results.len();
+            let per_entity_limit = remaining.min(5);
+            let facts = librarian.get_facts_about_entity(&entity, per_entity_limit)?;
+
+            for fact in facts {
+                if seen_ids.insert(fact.id.clone()) {
+                    results.push(RelevantFact::from_fact(fact));
+                    if results.len() >= MAX_TOTAL_FACTS {
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Very lightweight entity extraction from the query. This is intentionally
+    /// simple for v0: we treat non-trivial alphanumeric tokens as candidate
+    /// entity keys after lowercasing and removing common stopwords.
+    fn extract_candidate_entities(query: &str, max_entities: usize) -> Vec<String> {
+        const STOPWORDS: &[&str] = &[
+            "the", "and", "for", "with", "that", "this", "from", "have", "about", "your",
+            "you", "are", "was", "were", "will", "would", "should", "could", "into",
+            "what", "when", "where", "how", "why", "can", "please", "just", "like",
+        ];
+
+        let lower = query.to_lowercase();
+        let mut entities = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        for raw in lower.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-') {
+            let token = raw.trim();
+            if token.len() < 3 {
+                continue;
+            }
+            if STOPWORDS.contains(&token) {
+                continue;
+            }
+            if seen.insert(token.to_string()) {
+                entities.push(token.to_string());
+                if entities.len() >= max_entities {
+                    break;
+                }
+            }
+        }
+
+        entities
+    }
+
+    /// Format facts into USER PROFILE and KNOWN FACTS blocks for prompts.
+    fn format_facts_block(facts: &[RelevantFact]) -> String {
+        if facts.is_empty() {
+            return "USER PROFILE:\n(none)\n\nKNOWN FACTS:\n(none)".to_string();
+        }
+
+        let mut profile_lines = Vec::new();
+        let mut other_lines = Vec::new();
+
+        for rf in facts {
+            let f = &rf.fact;
+            let provenance = if rf.has_provenance {
+                "sourced"
+            } else {
+                "inferred"
+            };
+            let line = format!(
+                "- {} {} {} (conf={:.2}, {})",
+                f.subject, f.predicate, f.object, f.confidence, provenance
+            );
+            if f.subject == "user" {
+                profile_lines.push(line);
+            } else {
+                other_lines.push(line);
+            }
+        }
+
+        if profile_lines.is_empty() {
+            profile_lines.push("(none)".to_string());
+        }
+        if other_lines.is_empty() {
+            other_lines.push("(none)".to_string());
+        }
+
+        format!(
+            "USER PROFILE:\n{}\n\nKNOWN FACTS:\n{}",
+            profile_lines.join("\n"),
+            other_lines.join("\n")
+        )
     }
 }

@@ -144,7 +144,7 @@ impl Librarian {
         self.sqlite.get_conversation_messages(conversation_id)
     }
 
-    pub fn save_full_message(
+    fn save_full_message_internal(
         &self,
         conversation_id: &str,
         role: &str,
@@ -152,7 +152,7 @@ impl Librarian {
         tool_calls: Option<&str>,
         tool_call_id: Option<&str>,
         attachments: Option<&[crate::llm::provider::Attachment]>,
-    ) -> Result<()> {
+    ) -> Result<(String, String)> {
         let (id, created_at) = self.sqlite.save_full_message(
             conversation_id,
             role,
@@ -177,6 +177,52 @@ impl Librarian {
             self.tantivy
                 .add_document(conversation_id, role, text, &id, &created_at)?;
         }
+
+        Ok((id, created_at))
+    }
+
+    /// Save a message and return its generated message id.
+    ///
+    /// This is a thin wrapper around the internal save helper that preserves
+    /// existing behavior (SQLite + attachments + Tantivy indexing) while
+    /// exposing the id for provenance-aware features like fact extraction.
+    pub fn save_full_message_returning_id(
+        &self,
+        conversation_id: &str,
+        role: &str,
+        content: Option<&str>,
+        tool_calls: Option<&str>,
+        tool_call_id: Option<&str>,
+        attachments: Option<&[crate::llm::provider::Attachment]>,
+    ) -> Result<String> {
+        let (id, _created_at) = self.save_full_message_internal(
+            conversation_id,
+            role,
+            content,
+            tool_calls,
+            tool_call_id,
+            attachments,
+        )?;
+        Ok(id)
+    }
+
+    pub fn save_full_message(
+        &self,
+        conversation_id: &str,
+        role: &str,
+        content: Option<&str>,
+        tool_calls: Option<&str>,
+        tool_call_id: Option<&str>,
+        attachments: Option<&[crate::llm::provider::Attachment]>,
+    ) -> Result<()> {
+        let _ = self.save_full_message_internal(
+            conversation_id,
+            role,
+            content,
+            tool_calls,
+            tool_call_id,
+            attachments,
+        )?;
         Ok(())
     }
 
@@ -208,6 +254,21 @@ impl Librarian {
     pub fn get_user_profile_facts(&self, limit: usize) -> Result<Vec<crate::memory::Fact>> {
         self.sqlite
             .query_facts(Some("user"), None, None, None, limit)
+    }
+
+    /// Retrieve facts that mention the given entity either as subject or as an
+    /// inbound ENTITY object.
+    pub fn get_facts_about_entity(
+        &self,
+        entity: &str,
+        limit: usize,
+    ) -> Result<Vec<crate::memory::Fact>> {
+        self.sqlite.get_facts_about_entity(entity, limit)
+    }
+
+    /// Upsert a fact into the knowledge-graph layer and return its canonical id.
+    pub fn upsert_fact(&self, fact: crate::memory::NewFact) -> Result<String> {
+        self.sqlite.upsert_fact(fact)
     }
 
     pub fn search(&self, query: &str) -> Result<Vec<SearchResult>> {
