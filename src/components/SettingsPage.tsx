@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Server, Plus, Edit2, Book, Trash2, Palette } from "lucide-react";
+import { Server, Plus, Edit2, Book, Trash2, Palette, Brain, RefreshCw } from "lucide-react";
 import ProvidersSettings, { ProviderConfig } from "./ProvidersSettings";
 import PromptsSettings from "./PromptsSettings";
 import { ThemeSelector } from "./ThemeSelector";
@@ -36,6 +36,18 @@ const FONT_WEIGHTS = [
     { id: "700", label: "Bold", value: "700" },
 ];
 
+interface Fact {
+    id: string;
+    subject: string;
+    predicate: string;
+    object: string;
+    object_kind: "entity" | "literal";
+    confidence: number;
+    source_message_id?: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
 export default function SettingsPage() {
     const { fontSettings, setFontSettings } = useTheme();
     // const colorScheme = theme === 'light' || theme === 'solarized-light' ? 'light' : 'dark'; // Unused
@@ -44,6 +56,10 @@ export default function SettingsPage() {
     const [providers, setProviders] = useState<Record<string, ProviderConfig>>({});
     const [fullSettings, setFullSettings] = useState<any>({});
     const [status, setStatus] = useState("");
+
+    const [userFacts, setUserFacts] = useState<Fact[]>([]);
+    const [factsLoading, setFactsLoading] = useState(false);
+    const [factsError, setFactsError] = useState<string | null>(null);
 
     // Modal State
     const [isModalOpen, setIsModalOpen] = useState(false);
@@ -81,6 +97,23 @@ export default function SettingsPage() {
 
             setFullSettings(settings);
             setProviders(settings.providers || {});
+
+            // Load user-profile facts for review when memory is enabled
+            if (settings.memory_enabled ?? true) {
+                try {
+                    setFactsLoading(true);
+                    const facts = await invoke<Fact[]>("list_user_facts");
+                    setUserFacts(facts);
+                    setFactsError(null);
+                } catch (e) {
+                    console.error("Failed to load user facts", e);
+                    setFactsError(String(e));
+                } finally {
+                    setFactsLoading(false);
+                }
+            } else {
+                setUserFacts([]);
+            }
 
             const baseServers = Object.entries(settings.mcp_servers || {}).map(([key, val]: [string, any]) => ({
                 name: key,
@@ -415,6 +448,171 @@ export default function SettingsPage() {
                             className={!(fullSettings.memory_enabled ?? true) ? "opacity-50" : ""}
                         />
 
+                    </div>
+
+                    {/* Fact Memory (User Profile) */}
+                    <div className="mt-6 border-t border-[var(--color-border-primary)] pt-4">
+                        <div className="flex items-center justify-between mb-3">
+                            <div>
+                                <label className="block text-sm font-bold text-[var(--color-text-secondary)]">
+                                    Fact Memory (User Profile)
+                                </label>
+                                <p className="text-xs text-[var(--color-text-tertiary)]">
+                                    Review and edit durable facts about you that are used for personalization.
+                                </p>
+                            </div>
+                            <button
+                                onClick={async () => {
+                                    if (!(fullSettings.memory_enabled ?? true)) return;
+                                    try {
+                                        setFactsLoading(true);
+                                        const facts = await invoke<Fact[]>("list_user_facts");
+                                        setUserFacts(facts);
+                                        setFactsError(null);
+                                    } catch (e) {
+                                        console.error("Failed to refresh user facts", e);
+                                        setFactsError(String(e));
+                                    } finally {
+                                        setFactsLoading(false);
+                                    }
+                                }}
+                                disabled={factsLoading || !(fullSettings.memory_enabled ?? true)}
+                                className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-colors
+                                    ${(fullSettings.memory_enabled ?? true)
+                                        ? "border-[var(--color-border-secondary)] bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-hover-bg)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                                        : "border-[var(--color-border-secondary)]/40 bg-transparent text-[var(--color-text-tertiary)] cursor-not-allowed"}
+                                `}
+                            >
+                                <RefreshCw className={`w-3 h-3 ${factsLoading ? "animate-spin" : ""}`} />
+                                Refresh
+                            </button>
+                        </div>
+
+                        {factsError && (
+                            <div className="mb-2 text-xs text-red-300 bg-red-900/30 border border-red-700/40 rounded-lg p-2">
+                                {factsError}
+                            </div>
+                        )}
+
+                        <div className={`space-y-2 max-h-64 overflow-y-auto custom-scrollbar ${!(fullSettings.memory_enabled ?? true) ? "opacity-50" : ""}`}>
+                            {(userFacts || []).length === 0 && !factsLoading ? (
+                                <div className="text-xs text-[var(--color-text-tertiary)] italic">
+                                    No user profile facts stored yet. They will appear here as they are inferred from conversations.
+                                </div>
+                            ) : (
+                                userFacts.map((fact) => (
+                                    <div
+                                        key={fact.id}
+                                        className="border border-[var(--color-border-secondary)] rounded-lg p-2 bg-[var(--color-bg-tertiary)]/40 flex flex-col gap-2 text-xs"
+                                    >
+                                        <div className="flex items-center justify-between gap-2">
+                                            <div className="flex items-center gap-1 text-[var(--color-text-tertiary)]">
+                                                <Brain className="w-3 h-3 text-purple-400" />
+                                                <span className="font-mono text-[10px] truncate">{fact.id}</span>
+                                            </div>
+                                            <button
+                                                onClick={async () => {
+                                                    if (!confirm("Delete this fact?")) return;
+                                                    try {
+                                                        await invoke("delete_fact", { id: fact.id });
+                                                        setUserFacts(prev => prev.filter(f => f.id !== fact.id));
+                                                    } catch (e) {
+                                                        console.error("Failed to delete fact", e);
+                                                        setFactsError(String(e));
+                                                    }
+                                                }}
+                                                className="p-1 rounded hover:bg-red-900/40 text-[var(--color-text-tertiary)] hover:text-red-300"
+                                                title="Delete fact"
+                                            >
+                                                <Trash2 className="w-3 h-3" />
+                                            </button>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <div>
+                                                <label className="block text-[10px] uppercase tracking-wide text-[var(--color-text-tertiary)] mb-0.5">Subject</label>
+                                                <input
+                                                    className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded px-2 py-1 text-[11px]"
+                                                    value={fact.subject}
+                                                    onChange={(e) => setUserFacts(prev => prev.map(f => f.id === fact.id ? { ...f, subject: e.target.value } : f))}
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-[10px] uppercase tracking-wide text-[var(--color-text-tertiary)] mb-0.5">Predicate</label>
+                                                <input
+                                                    className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded px-2 py-1 text-[11px]"
+                                                    value={fact.predicate}
+                                                    onChange={(e) => setUserFacts(prev => prev.map(f => f.id === fact.id ? { ...f, predicate: e.target.value } : f))}
+                                                />
+                                            </div>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-2 items-center">
+                                            <div>
+                                                <label className="block text-[10px] uppercase tracking-wide text-[var(--color-text-tertiary)] mb-0.5">Object</label>
+                                                <input
+                                                    className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded px-2 py-1 text-[11px]"
+                                                    value={fact.object}
+                                                    onChange={(e) => setUserFacts(prev => prev.map(f => f.id === fact.id ? { ...f, object: e.target.value } : f))}
+                                                />
+                                            </div>
+                                            <div className="flex gap-2 items-center">
+                                                <div className="flex-1">
+                                                    <label className="block text-[10px] uppercase tracking-wide text-[var(--color-text-tertiary)] mb-0.5">Kind</label>
+                                                    <select
+                                                        className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded px-2 py-1 text-[11px]"
+                                                        value={fact.object_kind}
+                                                        onChange={(e) => setUserFacts(prev => prev.map(f => f.id === fact.id ? { ...f, object_kind: e.target.value as Fact["object_kind"] } : f))}
+                                                    >
+                                                        <option value="literal">literal</option>
+                                                        <option value="entity">entity</option>
+                                                    </select>
+                                                </div>
+                                                <div className="flex-1">
+                                                    <label className="block text-[10px] uppercase tracking-wide text-[var(--color-text-tertiary)] mb-0.5">Confidence</label>
+                                                    <input
+                                                        type="number"
+                                                        min={0}
+                                                        max={1}
+                                                        step={0.05}
+                                                        className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded px-2 py-1 text-[11px]"
+                                                        value={fact.confidence}
+                                                        onChange={(e) => {
+                                                            const val = parseFloat(e.target.value);
+                                                            setUserFacts(prev => prev.map(f => f.id === fact.id ? { ...f, confidence: isNaN(val) ? f.confidence : val } : f));
+                                                        }}
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center justify-between mt-1">
+                                            <div className="text-[10px] text-[var(--color-text-tertiary)]">
+                                                <span className="mr-2">Created: {new Date(fact.created_at).toLocaleString()}</span>
+                                            </div>
+                                            <button
+                                                onClick={async () => {
+                                                    try {
+                                                        await invoke("update_fact", {
+                                                            id: fact.id,
+                                                            subject: fact.subject,
+                                                            predicate: fact.predicate,
+                                                            object: fact.object,
+                                                            objectKind: fact.object_kind,
+                                                            confidence: fact.confidence,
+                                                        });
+                                                        setFactsError(null);
+                                                    } catch (e) {
+                                                        console.error("Failed to update fact", e);
+                                                        setFactsError(String(e));
+                                                    }
+                                                }}
+                                                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] text-[10px] font-semibold hover:bg-[var(--color-hover-bg)]"
+                                            >
+                                                <Edit2 className="w-3 h-3" /> Save
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
                     </div>
 
                     <div className="mt-6 border-t border-[var(--color-border-primary)] pt-4">

@@ -35,6 +35,12 @@ interface Message {
     }[];
 }
 
+interface StreamChunkEvent {
+    request_id?: string | null;
+    conversation_id?: string | null;
+    chunk: string;
+}
+
 interface ChatInterfaceProps {
     conversationId: string | null;
 }
@@ -134,6 +140,12 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
     const scrollRef = useRef<HTMLDivElement>(null);
 
+    const activeStreamRef = useRef<{
+        requestId: string;
+        tempMsgId: string;
+        conversationId: string | null;
+    } | null>(null);
+
     // Track whether we should keep auto-scrolling to bottom.
     // This prevents fighting the user's scrollbar drag / text selection while they're reading older messages.
     const autoScrollRef = useRef(true);
@@ -180,6 +192,76 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             setMessages([]);
         }
     }, [conversationId]);
+
+    // If the window/tab was backgrounded during generation, re-sync on return.
+    // Note: partial streaming isn't persisted; this only helps recover the *final* assistant message + tool calls.
+    useEffect(() => {
+        const maybeRecoverCompletedGeneration = async () => {
+            const active = activeStreamRef.current;
+            if (!active) return;
+            if (!conversationId) return;
+            if (active.conversationId !== conversationId) return;
+
+            try {
+                const history = await invoke<Message[]>("get_chat_history", { conversationId });
+                const last = history[history.length - 1];
+                if (!last || last.role !== "assistant") {
+                    return; // still generating (DB won't have the assistant message yet)
+                }
+
+                // Replace UI state with DB-backed history (includes tool_calls + real IDs)
+                setMessages(history);
+
+                // Reconstruct pending tool approvals if we missed the normal response handler
+                if (last.tool_calls && last.tool_calls.length > 0) {
+                    const toolsToRun = last.tool_calls
+                        .map(tc => {
+                            try {
+                                return {
+                                    name: tc.function.name,
+                                    args: JSON.parse(tc.function.arguments),
+                                    callId: tc.id || "call_" + Math.random().toString(36).substr(2, 9)
+                                };
+                            } catch (e) {
+                                console.error("Failed to parse tool args (recovery)", e);
+                                return null;
+                            }
+                        })
+                        .filter(t => t !== null) as { name: string, args: any, callId: string }[];
+
+                    if (toolsToRun.length > 0) {
+                        const allAuto = toolsToRun.every(t => toolPolicies[t.name]);
+                        if (allAuto) {
+                            runTools(toolsToRun, history);
+                        } else {
+                            setPendingTools(toolsToRun);
+                            setLoading(false);
+                        }
+                    }
+                }
+
+                activeStreamRef.current = null;
+                setLoading(false);
+            } catch (e) {
+                console.error("Failed to recover chat state on focus", e);
+            }
+        };
+
+        const onFocus = () => { void maybeRecoverCompletedGeneration(); };
+        const onVisibilityChange = () => {
+            if (document.visibilityState === "visible") {
+                void maybeRecoverCompletedGeneration();
+            }
+        };
+
+        window.addEventListener("focus", onFocus);
+        document.addEventListener("visibilitychange", onVisibilityChange);
+
+        return () => {
+            window.removeEventListener("focus", onFocus);
+            document.removeEventListener("visibilitychange", onVisibilityChange);
+        };
+    }, [conversationId, toolPolicies]);
 
     useEffect(() => {
         const el = scrollRef.current;
@@ -531,7 +613,13 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             })) : null;
 
             let unlistenTransform: (() => void) | null = null;
-            let tempMsgId = "streaming-" + Math.random().toString(36);
+            const tempMsgId = "streaming-" + Math.random().toString(36);
+            const requestId = (typeof crypto !== "undefined" && "randomUUID" in crypto)
+                // @ts-ignore
+                ? crypto.randomUUID()
+                : "req-" + Math.random().toString(36).slice(2);
+
+            activeStreamRef.current = { requestId, tempMsgId, conversationId };
 
             // Setup Streaming Listener if enabled
             if (genSettings.stream) {
@@ -542,24 +630,28 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                     content: ""
                 }]);
 
-                const unlisten = await listen<string>("stream-chunk", (event) => {
-                    console.log("📨 STREAM CHUNK:", new Date().toISOString(), event.payload.substring(0, 50));
+                const unlisten = await listen<StreamChunkEvent>("stream-chunk", (event) => {
+                    const payload = event.payload;
+
+                    // Ignore unrelated streams (e.g. if another conversation is generating)
+                    if (payload.request_id && payload.request_id !== requestId) return;
+                    if (payload.conversation_id && conversationId && payload.conversation_id !== conversationId) return;
+
+                    console.log("📨 STREAM CHUNK:", new Date().toISOString(), payload.chunk.substring(0, 50));
                     // Visual indicator - flash the window title
-                    document.title = `📨 Chunk (${event.payload.length} chars)`;
+                    document.title = `📨 Chunk (${payload.chunk.length} chars)`;
                     setTimeout(() => document.title = "Nebula", 100);
 
                     // Use flushSync to force immediate rendering in React 19
                     flushSync(() => {
                         setMessages(prev => {
-                            const lastIdx = prev.length - 1;
-                            const last = prev[lastIdx];
-                            console.log("   → Updating message, temp ID match:", last?.id === tempMsgId);
-                            if (last && last.id === tempMsgId) {
-                                const newContent = (last.content || "") + event.payload;
-                                console.log("   → New content length:", newContent.length);
-                                return [...prev.slice(0, -1), { ...last, content: newContent }];
-                            }
-                            return prev;
+                            const idx = prev.findIndex(m => m.id === tempMsgId);
+                            if (idx === -1) return prev;
+                            const msg = prev[idx];
+                            const newContent = (msg.content || "") + payload.chunk;
+                            const next = [...prev];
+                            next[idx] = { ...msg, content: newContent };
+                            return next;
                         });
                     });
                 });
@@ -576,22 +668,28 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 attachments: attachmentPayload,
                 temperature: genSettings.temperature,
                 topP: genSettings.top_p,
-                stream: genSettings.stream
+                stream: genSettings.stream,
+                requestId
             }).then(response => {
                 console.log("✅ Invoke completed at", new Date().toISOString());
+                activeStreamRef.current = null;
+
                 if (unlistenTransform) {
                     unlistenTransform();
                 }
 
-                // Replace/Append Final Message
+                // Replace/Append Final Message (do not assume placeholder is last)
                 setMessages(prev => {
                     if (genSettings.stream) {
-                        // Replace the temp message with the final complete message
-                        // (It should roughly match, but final has tool calls etc resolved cleanly)
-                        return [...prev.slice(0, -1), response];
-                    } else {
-                        return [...prev, response];
+                        const idx = prev.findIndex(m => m.id === tempMsgId);
+                        if (idx === -1) {
+                            return [...prev, response];
+                        }
+                        const next = [...prev];
+                        next[idx] = response;
+                        return next;
                     }
+                    return [...prev, response];
                 });
 
                 // Auto-Title Trigger (If this was the first exchange)
@@ -639,6 +737,8 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 }
             }).catch((error: any) => {
                 console.error(error);
+                activeStreamRef.current = null;
+
                 if (unlistenTransform) {
                     unlistenTransform();
                 }
@@ -667,6 +767,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     const handleStop = async () => {
         try {
             await invoke("stop_generation");
+            activeStreamRef.current = null;
             setLoading(false);
         } catch (e) {
             console.error("Failed to stop generation", e);

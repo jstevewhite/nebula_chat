@@ -108,13 +108,33 @@ pub struct MemoryHit {
 }
 
 impl MemoryHit {
-    /// Create a MemoryHit from a SearchResult with configurable snippet length
+    /// Create a MemoryHit from a SearchResult with configurable snippet length.
+    ///
+    /// `max_snippet_chars` is interpreted in terms of Unicode scalar values,
+    /// not raw bytes, to avoid slicing in the middle of a multi-byte
+    /// character (which would panic on invalid UTF-8 boundaries).
     pub fn from_search_result(result: SearchResult, max_snippet_chars: usize) -> Self {
-        let snippet = if result.content.len() > max_snippet_chars {
-            format!("{}...", &result.content[..max_snippet_chars])
+        let mut snippet = String::new();
+        let mut truncated = false;
+
+        for (i, ch) in result.content.chars().enumerate() {
+            if i >= max_snippet_chars {
+                truncated = true;
+                break;
+            }
+            snippet.push(ch);
+        }
+
+        if !truncated {
+            // Either the string was shorter than the limit or exactly equal;
+            // in either case we want the full content.
+            // If snippet is empty here, just clone the original.
+            if snippet.is_empty() && !result.content.is_empty() {
+                snippet = result.content.clone();
+            }
         } else {
-            result.content.clone()
-        };
+            snippet.push_str("...");
+        }
 
         Self {
             message_id: result.message_id,
