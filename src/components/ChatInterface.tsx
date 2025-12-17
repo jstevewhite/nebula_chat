@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect } from "react";
-import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check, Pin, FileText, Book, Paperclip, X, Brain, Square, Sliders, Download, Eye, EyeOff, ChevronRight, ChevronDown } from "lucide-react";
@@ -155,6 +154,19 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         tempMsgId: string;
         conversationId: string | null;
     } | null>(null);
+
+    // Streaming accumulator for throttled updates
+    const streamAccumulatorRef = useRef<{
+        content: string;
+        reasoning: string;
+        lastUpdate: number;
+        pendingFlush: number | null;
+    }>({
+        content: "",
+        reasoning: "",
+        lastUpdate: 0,
+        pendingFlush: null
+    });
 
     // Track whether we should keep auto-scrolling to bottom.
     // This prevents fighting the user's scrollbar drag / text selection while they're reading older messages.
@@ -659,37 +671,65 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                     content: ""
                 }]);
 
-                const unlisten = await listen<StreamChunkEvent>("stream-chunk", (event) => {
-                    const payload = event.payload;
+                // Reset accumulator
+                streamAccumulatorRef.current = {
+                    content: "",
+                    reasoning: "",
+                    lastUpdate: Date.now(),
+                    pendingFlush: null
+                };
 
-                    // Ignore unrelated streams (e.g. if another conversation is generating)
-                    if (payload.request_id && payload.request_id !== requestId) return;
-                    if (payload.conversation_id && conversationId && payload.conversation_id !== conversationId) return;
-
-                    console.log("📨 STREAM CHUNK:", new Date().toISOString(), payload.chunk.substring(0, 50));
-                    // Visual indicator - flash the window title
-                    document.title = `📨 Chunk (${payload.chunk.length} chars)`;
-                    setTimeout(() => document.title = "Nebula", 100);
-
-                    // Use flushSync to force immediate rendering in React 19
-                    flushSync(() => {
+                // Throttled flush function (max 20 updates/sec = 50ms)
+                const THROTTLE_MS = 50;
+                const flushToUI = () => {
+                    const acc = streamAccumulatorRef.current;
+                    if (acc.content || acc.reasoning) {
                         setMessages(prev => {
                             const idx = prev.findIndex(m => m.id === tempMsgId);
                             if (idx === -1) return prev;
-                            const msg = prev[idx];
                             const next = [...prev];
-
-                            if (payload.chunk_type === "reasoning") {
-                                const newReasoning = (msg.reasoning_content || "") + payload.chunk;
-                                next[idx] = { ...msg, reasoning_content: newReasoning };
-                            } else {
-                                const newContent = (msg.content || "") + payload.chunk;
-                                next[idx] = { ...msg, content: newContent };
-                            }
-
+                            next[idx] = {
+                                ...next[idx],
+                                content: acc.content,
+                                reasoning_content: acc.reasoning || undefined
+                            };
                             return next;
                         });
-                    });
+                        acc.lastUpdate = Date.now();
+                    }
+                };
+
+                const unlisten = await listen<StreamChunkEvent>("stream-chunk", (event) => {
+                    const payload = event.payload;
+
+                    // Ignore unrelated streams
+                    if (payload.request_id && payload.request_id !== requestId) return;
+                    if (payload.conversation_id && conversationId && payload.conversation_id !== conversationId) return;
+
+                    const acc = streamAccumulatorRef.current;
+
+                    // Accumulate chunks
+                    if (payload.chunk_type === "reasoning") {
+                        acc.reasoning += payload.chunk;
+                    } else {
+                        acc.content += payload.chunk;
+                    }
+
+                    // Throttle UI updates
+                    const timeSinceLastUpdate = Date.now() - acc.lastUpdate;
+                    if (timeSinceLastUpdate >= THROTTLE_MS) {
+                        flushToUI();
+                        if (acc.pendingFlush) {
+                            clearTimeout(acc.pendingFlush);
+                            acc.pendingFlush = null;
+                        }
+                    } else if (!acc.pendingFlush) {
+                        // Schedule a flush if one isn't pending
+                        acc.pendingFlush = setTimeout(() => {
+                            flushToUI();
+                            acc.pendingFlush = null;
+                        }, THROTTLE_MS - timeSinceLastUpdate);
+                    }
                 });
                 unlistenTransform = unlisten;
             }
@@ -716,6 +756,12 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
                 if (unlistenTransform) {
                     unlistenTransform();
+                }
+
+                // Clean up pending flush
+                if (streamAccumulatorRef.current.pendingFlush) {
+                    clearTimeout(streamAccumulatorRef.current.pendingFlush);
+                    streamAccumulatorRef.current.pendingFlush = null;
                 }
 
                 // Replace/Append Final Message (do not assume placeholder is last)
@@ -782,6 +828,13 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 if (unlistenTransform) {
                     unlistenTransform();
                 }
+
+                // Clean up pending flush
+                if (streamAccumulatorRef.current.pendingFlush) {
+                    clearTimeout(streamAccumulatorRef.current.pendingFlush);
+                    streamAccumulatorRef.current.pendingFlush = null;
+                }
+
                 setLoading(false);
 
                 const errStr = String(error);
