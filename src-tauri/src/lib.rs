@@ -418,12 +418,16 @@ async fn send_message(
 
                         // Emit memory-context event for UI
                         use tauri::Emitter;
-                        if let Err(e) = app_handle.emit("memory-context", &vec![result.context_text.clone()]) {
+                        if let Err(e) =
+                            app_handle.emit("memory-context", &vec![result.context_text.clone()])
+                        {
                             tracing::error!("Failed to emit memory-context: {}", e);
                         }
 
                         // Emit memory-hits event with selected IDs (for debugging/UI)
-                        if let Err(e) = app_handle.emit("memory-selected-ids", &result.selected_message_ids) {
+                        if let Err(e) =
+                            app_handle.emit("memory-selected-ids", &result.selected_message_ids)
+                        {
                             tracing::error!("Failed to emit memory-selected-ids: {}", e);
                         }
 
@@ -1203,7 +1207,12 @@ async fn get_settings(app: tauri::AppHandle) -> Result<Settings, String> {
 async fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<(), String> {
     let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     let settings_path = config_dir.join("settings.json");
-    settings.save(&settings_path).map_err(|e| e.to_string())
+    settings.save(&settings_path).map_err(|e| e.to_string())?;
+
+    use tauri::Emitter;
+    app.emit("settings-updated", ())
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -1780,7 +1789,12 @@ async fn set_default_model(app: tauri::AppHandle, model_target: String) -> Resul
     let mut settings = Settings::load_migrated(&settings_path);
 
     settings.default_model = Some(model_target);
-    settings.save(&settings_path).map_err(|e| e.to_string())
+    settings.save(&settings_path).map_err(|e| e.to_string())?;
+
+    use tauri::Emitter;
+    app.emit("settings-updated", ())
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[derive(serde::Serialize)]
@@ -2022,7 +2036,12 @@ async fn set_active_system_prompt(app: tauri::AppHandle, id: Option<String>) -> 
 
     settings.active_system_prompt_id = id;
 
-    settings.save(&settings_path).map_err(|e| e.to_string())
+    settings.save(&settings_path).map_err(|e| e.to_string())?;
+
+    use tauri::Emitter;
+    app.emit("settings-updated", ())
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
