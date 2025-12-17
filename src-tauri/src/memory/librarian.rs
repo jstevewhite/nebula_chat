@@ -266,6 +266,11 @@ impl Librarian {
         self.sqlite.get_facts_about_entity(entity, limit)
     }
 
+    /// List distinct entity keys present in the fact store.
+    pub fn list_fact_entities(&self, limit: usize) -> Result<Vec<String>> {
+        self.sqlite.list_fact_entities(limit)
+    }
+
     /// Upsert a fact into the knowledge-graph layer and return its canonical id.
     pub fn upsert_fact(&self, fact: crate::memory::NewFact) -> Result<String> {
         self.sqlite.upsert_fact(fact)

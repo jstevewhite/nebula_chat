@@ -362,7 +362,7 @@ impl SqliteManager {
         )?;
 
         let rows = stmt.query_map(params![entity, limit], |row| {
-            let object_kind_str: String = row.get(3 + 1)?; // object_kind column index
+            let object_kind_str: String = row.get(4)?; // object_kind column index
             let object_kind = ObjectKind::from_str(&object_kind_str).unwrap_or(ObjectKind::Literal);
             let confidence_f64: f64 = row.get(5)?;
 
@@ -384,6 +384,32 @@ impl SqliteManager {
             facts.push(row?);
         }
         Ok(facts)
+    }
+
+    /// List distinct entity keys seen in the facts table.
+    ///
+    /// For now we treat subjects as the canonical entity keys. Objects
+    /// (even when tagged as ENTITY) can still be surfaced via
+    /// `get_facts_about_entity`, but they are not listed as top-level
+    /// entities here.
+    pub fn list_fact_entities(&self, limit: usize) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT subject AS key
+             FROM facts
+             WHERE subject != ''
+             ORDER BY key
+             LIMIT ?1",
+        )?;
+
+        let rows = stmt.query_map(params![limit], |row| row.get(0))?;
+        let mut entities = Vec::new();
+        for row in rows {
+            let key: String = row?;
+            if !key.is_empty() {
+                entities.push(key);
+            }
+        }
+        Ok(entities)
     }
 
     pub fn get_conversation_messages(

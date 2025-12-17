@@ -57,7 +57,9 @@ export default function SettingsPage() {
     const [fullSettings, setFullSettings] = useState<any>({});
     const [status, setStatus] = useState("");
 
-    const [userFacts, setUserFacts] = useState<Fact[]>([]);
+    const [entities, setEntities] = useState<string[]>(["user"]);
+    const [selectedEntity, setSelectedEntity] = useState<string>("user");
+    const [entityFacts, setEntityFacts] = useState<Fact[]>([]);
     const [factsLoading, setFactsLoading] = useState(false);
     const [factsError, setFactsError] = useState<string | null>(null);
 
@@ -82,6 +84,44 @@ export default function SettingsPage() {
         loadServers();
     }, []);
 
+    const reloadFactsForEntity = async (
+        entityOverride?: string,
+        settingsOverride?: any,
+    ) => {
+        const settings = settingsOverride ?? fullSettings;
+        const memoryEnabled = settings.memory_enabled ?? true;
+        if (!memoryEnabled) {
+            setEntityFacts([]);
+            return;
+        }
+
+        const targetEntity = entityOverride || selectedEntity || "user";
+
+        try {
+            setFactsLoading(true);
+            const [rawEntities, facts] = await Promise.all([
+                invoke<string[]>("list_fact_entities", { limit: 100 }).catch(() => []),
+                targetEntity === "user"
+                    ? invoke<Fact[]>("list_user_facts")
+                    : invoke<Fact[]>("list_facts_for_entity", { entity: targetEntity, limit: 200 }),
+            ]);
+
+            const baseEntities = ["user", ...rawEntities.filter(Boolean)];
+            if (!baseEntities.includes(targetEntity)) {
+                baseEntities.push(targetEntity);
+            }
+            const uniqueEntities = Array.from(new Set(baseEntities));
+            setEntities(uniqueEntities);
+            setEntityFacts(facts);
+            setFactsError(null);
+        } catch (e) {
+            console.error("Failed to load facts/entities", e);
+            setFactsError(String(e));
+        } finally {
+            setFactsLoading(false);
+        }
+    };
+
     const loadServers = async () => {
         setStatus("Loading settings...");
         try {
@@ -98,22 +138,8 @@ export default function SettingsPage() {
             setFullSettings(settings);
             setProviders(settings.providers || {});
 
-            // Load user-profile facts for review when memory is enabled
-            if (settings.memory_enabled ?? true) {
-                try {
-                    setFactsLoading(true);
-                    const facts = await invoke<Fact[]>("list_user_facts");
-                    setUserFacts(facts);
-                    setFactsError(null);
-                } catch (e) {
-                    console.error("Failed to load user facts", e);
-                    setFactsError(String(e));
-                } finally {
-                    setFactsLoading(false);
-                }
-            } else {
-                setUserFacts([]);
-            }
+            // Load entity list + facts for the currently selected entity when memory is enabled
+            await reloadFactsForEntity(undefined, settings);
 
             const baseServers = Object.entries(settings.mcp_servers || {}).map(([key, val]: [string, any]) => ({
                 name: key,
@@ -450,31 +476,43 @@ export default function SettingsPage() {
 
                     </div>
 
-                    {/* Fact Memory (User Profile) */}
+                    {/* Fact Memory (Entities) */}
                     <div className="mt-6 border-t border-[var(--color-border-primary)] pt-4">
-                        <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center justify-between mb-3 gap-4">
                             <div>
                                 <label className="block text-sm font-bold text-[var(--color-text-secondary)]">
-                                    Fact Memory (User Profile)
+                                    Fact Memory (Entities)
                                 </label>
                                 <p className="text-xs text-[var(--color-text-tertiary)]">
-                                    Review and edit durable facts about you that are used for personalization.
+                                    Review and edit durable facts about the selected entity (defaults to you as "user").
                                 </p>
+                                <div className="flex items-center gap-2 mt-2 text-xs">
+                                    <span className="text-[var(--color-text-tertiary)]">Entity:</span>
+                                    <div className="w-40">
+                                        <CustomSelect
+                                            disabled={!(fullSettings.memory_enabled ?? true)}
+                                            value={selectedEntity}
+                                            onChange={(val) => {
+                                                const next = val || "user";
+                                                setSelectedEntity(next);
+                                                reloadFactsForEntity(next);
+                                            }}
+                                            options={(entities || []).map((e) => ({
+                                                id: e,
+                                                label: e === "user" ? "user (you)" : e,
+                                                value: e,
+                                            }))}
+                                            className={!(fullSettings.memory_enabled ?? true) ? "opacity-50" : ""}
+                                            filterable
+                                            filterPlaceholder="Filter entities..."
+                                        />
+                                    </div>
+                                </div>
                             </div>
                             <button
                                 onClick={async () => {
                                     if (!(fullSettings.memory_enabled ?? true)) return;
-                                    try {
-                                        setFactsLoading(true);
-                                        const facts = await invoke<Fact[]>("list_user_facts");
-                                        setUserFacts(facts);
-                                        setFactsError(null);
-                                    } catch (e) {
-                                        console.error("Failed to refresh user facts", e);
-                                        setFactsError(String(e));
-                                    } finally {
-                                        setFactsLoading(false);
-                                    }
+                                    await reloadFactsForEntity();
                                 }}
                                 disabled={factsLoading || !(fullSettings.memory_enabled ?? true)}
                                 className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-colors
@@ -495,12 +533,12 @@ export default function SettingsPage() {
                         )}
 
                         <div className={`space-y-2 max-h-64 overflow-y-auto custom-scrollbar ${!(fullSettings.memory_enabled ?? true) ? "opacity-50" : ""}`}>
-                            {(userFacts || []).length === 0 && !factsLoading ? (
+                            {(entityFacts || []).length === 0 && !factsLoading ? (
                                 <div className="text-xs text-[var(--color-text-tertiary)] italic">
-                                    No user profile facts stored yet. They will appear here as they are inferred from conversations.
+                                    No facts stored yet for this entity. They will appear here as they are inferred from conversations.
                                 </div>
                             ) : (
-                                userFacts.map((fact) => (
+                                entityFacts.map((fact) => (
                                     <div
                                         key={fact.id}
                                         className="border border-[var(--color-border-secondary)] rounded-lg p-2 bg-[var(--color-bg-tertiary)]/40 flex flex-col gap-2 text-xs"
@@ -515,7 +553,7 @@ export default function SettingsPage() {
                                                     if (!confirm("Delete this fact?")) return;
                                                     try {
                                                         await invoke("delete_fact", { id: fact.id });
-                                                        setUserFacts(prev => prev.filter(f => f.id !== fact.id));
+                                                        setEntityFacts(prev => prev.filter(f => f.id !== fact.id));
                                                     } catch (e) {
                                                         console.error("Failed to delete fact", e);
                                                         setFactsError(String(e));
@@ -533,7 +571,7 @@ export default function SettingsPage() {
                                                 <input
                                                     className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded px-2 py-1 text-[11px]"
                                                     value={fact.subject}
-                                                    onChange={(e) => setUserFacts(prev => prev.map(f => f.id === fact.id ? { ...f, subject: e.target.value } : f))}
+                                                    onChange={(e) => setEntityFacts(prev => prev.map(f => f.id === fact.id ? { ...f, subject: e.target.value } : f))}
                                                 />
                                             </div>
                                             <div>
@@ -541,7 +579,7 @@ export default function SettingsPage() {
                                                 <input
                                                     className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded px-2 py-1 text-[11px]"
                                                     value={fact.predicate}
-                                                    onChange={(e) => setUserFacts(prev => prev.map(f => f.id === fact.id ? { ...f, predicate: e.target.value } : f))}
+                                                    onChange={(e) => setEntityFacts(prev => prev.map(f => f.id === fact.id ? { ...f, predicate: e.target.value } : f))}
                                                 />
                                             </div>
                                         </div>
@@ -551,7 +589,7 @@ export default function SettingsPage() {
                                                 <input
                                                     className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded px-2 py-1 text-[11px]"
                                                     value={fact.object}
-                                                    onChange={(e) => setUserFacts(prev => prev.map(f => f.id === fact.id ? { ...f, object: e.target.value } : f))}
+                                                    onChange={(e) => setEntityFacts(prev => prev.map(f => f.id === fact.id ? { ...f, object: e.target.value } : f))}
                                                 />
                                             </div>
                                             <div className="flex gap-2 items-center">
@@ -560,7 +598,7 @@ export default function SettingsPage() {
                                                     <select
                                                         className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded px-2 py-1 text-[11px]"
                                                         value={fact.object_kind}
-                                                        onChange={(e) => setUserFacts(prev => prev.map(f => f.id === fact.id ? { ...f, object_kind: e.target.value as Fact["object_kind"] } : f))}
+                                                        onChange={(e) => setEntityFacts(prev => prev.map(f => f.id === fact.id ? { ...f, object_kind: e.target.value as Fact["object_kind"] } : f))}
                                                     >
                                                         <option value="literal">literal</option>
                                                         <option value="entity">entity</option>
@@ -577,7 +615,7 @@ export default function SettingsPage() {
                                                         value={fact.confidence}
                                                         onChange={(e) => {
                                                             const val = parseFloat(e.target.value);
-                                                            setUserFacts(prev => prev.map(f => f.id === fact.id ? { ...f, confidence: isNaN(val) ? f.confidence : val } : f));
+                                                            setEntityFacts(prev => prev.map(f => f.id === fact.id ? { ...f, confidence: isNaN(val) ? f.confidence : val } : f));
                                                         }}
                                                     />
                                                 </div>
@@ -595,7 +633,7 @@ export default function SettingsPage() {
                                                             subject: fact.subject,
                                                             predicate: fact.predicate,
                                                             object: fact.object,
-                                                            objectKind: fact.object_kind,
+                                                            object_kind: fact.object_kind,
                                                             confidence: fact.confidence,
                                                         });
                                                         setFactsError(null);

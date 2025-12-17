@@ -1037,6 +1037,16 @@ async fn list_user_facts(state: State<'_, AppState>) -> Result<Vec<MemoryFact>, 
 }
 
 #[tauri::command]
+async fn list_fact_entities(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<String>, String> {
+    let lib = state.librarian.lock().await;
+    lib.list_fact_entities(limit.unwrap_or(100))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn update_fact(
     state: State<'_, AppState>,
     id: String,
@@ -2110,6 +2120,7 @@ pub fn run() {
             toggle_tool_auto_approve,
             import_conversation,
             list_user_facts,
+            list_fact_entities,
             update_fact,
             delete_fact,
             list_facts_for_entity

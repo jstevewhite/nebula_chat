@@ -103,8 +103,9 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     const [activeSidePanel, setActiveSidePanel] = useState<'none' | 'memory'>('none');
     const [recentMemories, setRecentMemories] = useState<string[]>([]);
 
-    // Context Inspection
+    // Settings-driven toggles
     const [contextInspectionEnabled, setContextInspectionEnabled] = useState(false);
+    const [memoryEnabled, setMemoryEnabled] = useState<boolean>(true);
     const [fullSettings, setFullSettings] = useState<any>(null);
     const [showContextModal, setShowContextModal] = useState(false);
     const [contextInspectionData, setContextInspectionData] = useState<any>(null);
@@ -389,6 +390,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             const settings: any = await invoke("get_settings");
             setFullSettings(settings);
             setContextInspectionEnabled(settings.context_inspection_enabled || false);
+            setMemoryEnabled(settings.memory_enabled ?? true);
             const models: ModelOption[] = [];
 
             if (settings.providers) {
@@ -455,6 +457,23 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 console.error("Failed to save context inspection setting:", e);
                 // Revert on error
                 setContextInspectionEnabled(!newValue);
+            }
+        }
+    };
+
+    const toggleMemoryEnabled = async () => {
+        const newValue = !memoryEnabled;
+        setMemoryEnabled(newValue);
+
+        if (fullSettings) {
+            const updatedSettings = { ...fullSettings, memory_enabled: newValue };
+            try {
+                await invoke("save_settings", { settings: updatedSettings });
+                setFullSettings(updatedSettings);
+            } catch (e) {
+                console.error("Failed to save memory_enabled setting:", e);
+                // Revert on error
+                setMemoryEnabled(!newValue);
             }
         }
     };
@@ -1048,6 +1067,14 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                                 <span className="relative inline-flex rounded-full h-3 w-3 bg-purple-500"></span>
                             </span>
                         )}
+                    </button>
+
+                    <button
+                        onClick={toggleMemoryEnabled}
+                        className={`p-2 rounded-lg transition-colors ${memoryEnabled ? 'bg-emerald-500/20 text-emerald-400' : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)]'}`}
+                        title={`Memory: ${memoryEnabled ? 'ON - Use long-term memory and facts' : 'OFF - No long-term memory or fact extraction'}`}
+                    >
+                        <Brain size={18} />
                     </button>
 
                     <button
