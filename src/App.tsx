@@ -68,8 +68,6 @@ export default function App() {
           <Wrench size={20} />
         </button>
 
-
-
         <button
           onClick={() => setActiveTab("settings")}
           className={`p-3 rounded-xl transition-all duration-200 ${activeTab === "settings" ? "btn-primary shadow-lg" : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text-primary)]"}`}
@@ -81,21 +79,22 @@ export default function App() {
 
       {/* Content */}
       <div className="flex-1 overflow-hidden relative flex">
-        {activeTab === "chat" ? (
-          <>
-            <ConversationList
-              activeId={activeConvId}
-              onSelect={setActiveConvId}
-              onCreate={handleNewChat}
-            />
-            <div className="flex-1 flex flex-col h-full overflow-hidden">
-              <ChatInterface conversationId={activeConvId} />
-            </div>
-            {showTools && <ToolsPanel />}
-          </>
-        ) : (
+        {/* Keep Chat mounted so in-flight streaming + tool approval state isn't lost when switching tabs */}
+        <div className={activeTab === "chat" ? "flex flex-1 overflow-hidden" : "hidden"}>
+          <ConversationList
+            activeId={activeConvId}
+            onSelect={setActiveConvId}
+            onCreate={handleNewChat}
+          />
+          <div className="flex-1 flex flex-col h-full overflow-hidden">
+            <ChatInterface conversationId={activeConvId} />
+          </div>
+          {showTools && <ToolsPanel />}
+        </div>
+
+        <div className={activeTab === "settings" ? "flex flex-1 overflow-hidden" : "hidden"}>
           <SettingsPage />
-        )}
+        </div>
       </div>
     </div>
   );

@@ -236,6 +236,39 @@ impl SqliteManager {
         Ok(())
     }
 
+    /// Update all editable fields of a fact while preserving created_at and provenance.
+    pub fn update_fact(
+        &self,
+        id: &str,
+        subject: &str,
+        predicate: &str,
+        object: &str,
+        object_kind: ObjectKind,
+        confidence: f32,
+    ) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE facts
+             SET subject = ?1,
+                 predicate = ?2,
+                 object = ?3,
+                 object_kind = ?4,
+                 confidence = ?5,
+                 updated_at = ?6
+             WHERE id = ?7",
+            params![
+                subject,
+                predicate,
+                object,
+                object_kind.as_str(),
+                confidence,
+                now,
+                id,
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Delete all facts that reference a given source message id.
     /// With foreign keys enabled and ON DELETE SET NULL this is optional,
     /// but can be useful for explicit cleanup flows.

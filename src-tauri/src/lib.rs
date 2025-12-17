@@ -4,7 +4,7 @@ use crate::mcp::config::Settings;
 use crate::mcp::config::{McpServerConfig, ModelConfig, ProviderType};
 use crate::mcp::manager::McpManager;
 use crate::memory::tantivy_index::SearchResult;
-use crate::memory::{NewFact, ObjectKind};
+use crate::memory::{Fact as MemoryFact, NewFact, ObjectKind};
 use anyhow::Result;
 use std::sync::Arc;
 use tauri::{Manager, State};
@@ -263,6 +263,14 @@ async fn get_chat_history(
     Ok(messages)
 }
 
+#[derive(serde::Serialize)]
+struct StreamChunkEvent {
+    // Optional IDs so older callers / non-chat flows can still stream without extra wiring
+    request_id: Option<String>,
+    conversation_id: Option<String>,
+    chunk: String,
+}
+
 #[tauri::command]
 async fn send_message(
     app_handle: tauri::AppHandle,
@@ -275,6 +283,7 @@ async fn send_message(
     temperature: Option<f32>,
     top_p: Option<f32>,
     stream: bool,
+    request_id: Option<String>,
 ) -> Result<Message, String> {
     // Clone necessary data for the async task
     let state_owned = state.inner().clone();
@@ -282,6 +291,7 @@ async fn send_message(
     let provider_id_clone = provider_id.clone();
     let model_clone = model.clone();
     let conversation_id_clone = conversation_id.clone();
+    let request_id_clone = request_id.clone();
     let messages_clone = messages.clone();
     let attachments_clone = attachments.clone();
 
@@ -294,6 +304,7 @@ async fn send_message(
         let provider_id = provider_id_clone;
         let model = model_clone;
         let conversation_id = conversation_id_clone;
+        let request_id = request_id_clone;
         let attachments = attachments_clone;
         let state = state_owned;
         let app_handle = app_handle_clone;
@@ -620,11 +631,18 @@ async fn send_message(
         });
 
         let app_handle_for_stream = app_handle.clone();
+        let stream_conversation_id = conversation_id.clone();
+        let stream_request_id = request_id.clone();
         let on_token = Box::new(move |token: String| {
             use tauri::Emitter;
             tracing::debug!("🔊 Emitting stream chunk: {} chars", token.len());
-            // Emit standard stream chunk event
-            if let Err(e) = app_handle_for_stream.emit("stream-chunk", &token) {
+            // Emit stream chunk event with routing metadata
+            let payload = StreamChunkEvent {
+                request_id: stream_request_id.clone(),
+                conversation_id: stream_conversation_id.clone(),
+                chunk: token,
+            };
+            if let Err(e) = app_handle_for_stream.emit("stream-chunk", &payload) {
                 tracing::error!("Failed to emit stream chunk: {}", e);
             } else {
                 tracing::debug!("✅ Stream chunk emitted successfully");
@@ -898,10 +916,29 @@ async fn extract_facts_for_message(
     };
 
     let prompt = format!(
-        r#"You are a fact extraction engine.
+        r#"You are a long-term memory extraction model for a coding assistant.
 
-Extract durable, reusable facts from the following {role} message. Focus on user preferences, long-term goals, project attributes, and stable decisions. Ignore ephemeral details like greetings or transient status.
+Your job:
+- Read the following {role} message.
+- Decide which facts should be stored as **long-term memory** because they are likely to matter in future conversations with this same user.
+- Only extract facts that would still be useful days or weeks from now.
 
+What to STORE (examples):
+- User identity and role: jobs, seniority, areas of expertise.
+- Stable preferences: editors, languages, frameworks, libraries, tools, workflows.
+- Persistent environment details: OS, CPU/GPU, main devices, IDEs, hosting platforms, CI/CD systems.
+- Long-lived projects: project names, repositories, tech stacks, key decisions.
+- Stable account / organization context (without secrets): "company uses GitHub Enterprise", "deploys to GKE".
+- Clear decisions and constraints: "we decided to use Postgres, not MySQL", "production cluster is Kubernetes 1.30".
+
+What to IGNORE (do NOT store):
+- One-off questions or search queries (e.g. "look up the specs for X", "what is the error in this log?").
+- Ephemeral status: "I'm tired", "today", "this week", "right now I'm running a benchmark".
+- Raw tool outputs, logs, stack traces, and long URLs unless they define a stable choice (e.g. a canonical docs URL).
+- Speculative statements or guesses ("I think maybe we should use Rust").
+- Anything that looks like a secret, password, token, or private key.
+
+Return format:
 Return a JSON object with a single key "facts" whose value is an array of objects with this schema:
 {{
   "subject": "normalized_subject_key",
@@ -911,7 +948,11 @@ Return a JSON object with a single key "facts" whose value is an array of object
   "confidence": 0.0-1.0
 }}
 
-If there are no useful facts, return:
+Normalization:
+- subject and predicate should be lowercase, snake_case keys for stable lookup (e.g. "user", "owns_device", "main_editor").
+- object may be a normalized key (for entities) or a free-form literal string.
+
+If there are **no** facts that meet the criteria above, return:
 {{"facts": []}}
 
 MESSAGE ({role}):
@@ -987,6 +1028,49 @@ MESSAGE ({role}):
     }
 
     Ok(())
+}
+
+#[tauri::command]
+async fn list_user_facts(state: State<'_, AppState>) -> Result<Vec<MemoryFact>, String> {
+    let lib = state.librarian.lock().await;
+    lib.get_user_profile_facts(200).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn update_fact(
+    state: State<'_, AppState>,
+    id: String,
+    subject: String,
+    predicate: String,
+    object: String,
+    object_kind: String,
+    confidence: f32,
+) -> Result<(), String> {
+    let kind = match object_kind.to_lowercase().as_str() {
+        "entity" => ObjectKind::Entity,
+        _ => ObjectKind::Literal,
+    };
+
+    let lib = state.librarian.lock().await;
+    lib.update_fact(&id, &subject, &predicate, &object, kind, confidence)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_fact(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let lib = state.librarian.lock().await;
+    lib.delete_fact(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn list_facts_for_entity(
+    state: State<'_, AppState>,
+    entity: String,
+    limit: Option<usize>,
+) -> Result<Vec<MemoryFact>, String> {
+    let lib = state.librarian.lock().await;
+    lib.get_facts_about_entity(&entity, limit.unwrap_or(50))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -2024,7 +2108,11 @@ pub fn run() {
             get_tool_policies,
             toggle_mcp_server_auto_approve,
             toggle_tool_auto_approve,
-            import_conversation
+            import_conversation,
+            list_user_facts,
+            update_fact,
+            delete_fact,
+            list_facts_for_entity
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

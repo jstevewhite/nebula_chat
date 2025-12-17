@@ -271,6 +271,25 @@ impl Librarian {
         self.sqlite.upsert_fact(fact)
     }
 
+    /// Update an existing fact in-place, preserving its id and provenance.
+    pub fn update_fact(
+        &self,
+        id: &str,
+        subject: &str,
+        predicate: &str,
+        object: &str,
+        object_kind: crate::memory::ObjectKind,
+        confidence: f32,
+    ) -> Result<()> {
+        self.sqlite
+            .update_fact(id, subject, predicate, object, object_kind, confidence)
+    }
+
+    /// Delete a fact by id.
+    pub fn delete_fact(&self, id: &str) -> Result<()> {
+        self.sqlite.delete_fact(id)
+    }
+
     pub fn search(&self, query: &str) -> Result<Vec<SearchResult>> {
         self.search_with_options(query, SearchOptions::with_limit(10))
     }
