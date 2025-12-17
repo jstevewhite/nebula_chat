@@ -1,5 +1,7 @@
 use anyhow::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
+
+use crate::memory::{Fact, NewFact, ObjectKind};
 
 pub struct SqliteManager {
     pub conn: Connection, // Made public for testing purposes
@@ -8,6 +10,10 @@ pub struct SqliteManager {
 impl SqliteManager {
     pub fn new(path: &str) -> Result<Self> {
         let conn = Connection::open(path)?;
+
+        // Ensure foreign key constraints are enforced on this connection.
+        // This is required for ON DELETE SET NULL on fact provenance to work.
+        conn.execute("PRAGMA foreign_keys = ON;", [])?;
 
         // Initialize Tables
         conn.execute(
@@ -80,6 +86,60 @@ impl SqliteManager {
         Ok(())
     }
 
+    /// Initial migration for the structured facts table backing the knowledge graph.
+    /// Uses IF NOT EXISTS to remain idempotent across app startups.
+    pub fn migrate_facts_v1(&self) -> Result<()> {
+        // Core facts table with typed object semantics and provenance.
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS facts (
+                id TEXT PRIMARY KEY,
+                subject TEXT NOT NULL,
+                predicate TEXT NOT NULL,
+                object TEXT NOT NULL,
+                object_kind TEXT NOT NULL,
+                confidence REAL NOT NULL DEFAULT 1.0,
+                source_message_id TEXT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(source_message_id) REFERENCES messages(id) ON DELETE SET NULL
+            )",
+            [],
+        )?;
+
+        // Uniqueness constraint to avoid duplicate canonical facts.
+        self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_facts_unique \
+             ON facts(subject, predicate, object, object_kind)",
+            [],
+        )?;
+
+        // Lookup and traversal helpers.
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_facts_subject ON facts(subject)",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_facts_predicate ON facts(predicate)",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_facts_object ON facts(object)",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_facts_subject_predicate \
+             ON facts(subject, predicate)",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_facts_source_message_id \
+             ON facts(source_message_id)",
+            [],
+        )?;
+
+        Ok(())
+    }
+
     pub fn list_conversations(&self) -> Result<Vec<(String, String, String)>> {
         let mut stmt = self
             .conn
@@ -91,6 +151,206 @@ impl SqliteManager {
             convs.push(row?);
         }
         Ok(convs)
+    }
+
+    /// Insert a new fact row without attempting to deduplicate.
+    /// Most callers should prefer `upsert_fact` to enforce the UNIQUE constraint.
+    pub fn save_fact(&self, fact: NewFact) -> Result<String> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+
+        self.conn.execute(
+            "INSERT INTO facts (
+                id, subject, predicate, object, object_kind,
+                confidence, source_message_id, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                id,
+                fact.subject,
+                fact.predicate,
+                fact.object,
+                fact.object_kind.as_str(),
+                fact.confidence,
+                fact.source_message_id,
+                now,
+                now,
+            ],
+        )?;
+
+        Ok(id)
+    }
+
+    /// Upsert a fact based on its (subject, predicate, object, object_kind) identity.
+    /// Returns the canonical fact id after insert/update.
+    pub fn upsert_fact(&self, fact: NewFact) -> Result<String> {
+        // First, see if a fact with this identity already exists.
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM facts
+             WHERE subject = ?1 AND predicate = ?2 AND object = ?3 AND object_kind = ?4
+             LIMIT 1",
+        )?;
+
+        let existing_id: Option<String> = stmt
+            .query_row(
+                params![
+                    &fact.subject,
+                    &fact.predicate,
+                    &fact.object,
+                    fact.object_kind.as_str(),
+                ],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        let now = chrono::Utc::now().to_rfc3339();
+
+        if let Some(id) = existing_id {
+            // Update existing row: refresh confidence, provenance, and updated_at.
+            self.conn.execute(
+                "UPDATE facts
+                 SET confidence = ?1,
+                     source_message_id = ?2,
+                     updated_at = ?3
+                 WHERE id = ?4",
+                params![fact.confidence, fact.source_message_id, now, id],
+            )?;
+            Ok(id)
+        } else {
+            // Insert new canonical fact.
+            self.save_fact(fact)
+        }
+    }
+
+    pub fn update_fact_confidence(&self, id: &str, confidence: f32) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE facts SET confidence = ?1, updated_at = ?2 WHERE id = ?3",
+            params![confidence, now, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_fact(&self, id: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM facts WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Delete all facts that reference a given source message id.
+    /// With foreign keys enabled and ON DELETE SET NULL this is optional,
+    /// but can be useful for explicit cleanup flows.
+    pub fn delete_facts_by_source_message(&self, message_id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM facts WHERE source_message_id = ?1",
+            params![message_id],
+        )?;
+        Ok(())
+    }
+
+    /// Generic fact query helper with optional filters and a hard limit.
+    pub fn query_facts(
+        &self,
+        subject: Option<&str>,
+        predicate: Option<&str>,
+        object: Option<&str>,
+        object_kind: Option<ObjectKind>,
+        limit: usize,
+    ) -> Result<Vec<Fact>> {
+        let mut sql = String::from(
+            "SELECT id, subject, predicate, object, object_kind,
+                    confidence, source_message_id, created_at, updated_at
+             FROM facts",
+        );
+        let mut conditions: Vec<String> = Vec::new();
+        let mut params: Vec<String> = Vec::new();
+
+        if let Some(s) = subject {
+            conditions.push("subject = ?".to_string());
+            params.push(s.to_string());
+        }
+        if let Some(p) = predicate {
+            conditions.push("predicate = ?".to_string());
+            params.push(p.to_string());
+        }
+        if let Some(o) = object {
+            conditions.push("object = ?".to_string());
+            params.push(o.to_string());
+        }
+        if let Some(kind) = object_kind {
+            conditions.push("object_kind = ?".to_string());
+            params.push(kind.as_str().to_string());
+        }
+
+        if !conditions.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&conditions.join(" AND "));
+        }
+
+        sql.push_str(" ORDER BY updated_at DESC LIMIT ?");
+        params.push(limit.to_string());
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row| {
+            let object_kind_str: String = row.get(4)?;
+            let object_kind = ObjectKind::from_str(&object_kind_str).unwrap_or(ObjectKind::Literal);
+            let confidence_f64: f64 = row.get(5)?;
+
+            Ok(Fact {
+                id: row.get(0)?,
+                subject: row.get(1)?,
+                predicate: row.get(2)?,
+                object: row.get(3)?,
+                object_kind,
+                confidence: confidence_f64 as f32,
+                source_message_id: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
+        })?;
+
+        let mut facts = Vec::new();
+        for row in rows {
+            facts.push(row?);
+        }
+        Ok(facts)
+    }
+
+    /// Get facts about a given entity, including inbound edges where the
+    /// object is that entity and is itself typed as an ENTITY.
+    pub fn get_facts_about_entity(&self, entity: &str, limit: usize) -> Result<Vec<Fact>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, subject, predicate, object, object_kind,
+                    confidence, source_message_id, created_at, updated_at
+             FROM facts
+             WHERE subject = ?1
+                OR (object = ?1 AND object_kind = 'entity')
+             ORDER BY updated_at DESC
+             LIMIT ?2",
+        )?;
+
+        let rows = stmt.query_map(params![entity, limit], |row| {
+            let object_kind_str: String = row.get(3 + 1)?; // object_kind column index
+            let object_kind = ObjectKind::from_str(&object_kind_str).unwrap_or(ObjectKind::Literal);
+            let confidence_f64: f64 = row.get(5)?;
+
+            Ok(Fact {
+                id: row.get(0)?,
+                subject: row.get(1)?,
+                predicate: row.get(2)?,
+                object: row.get(3)?,
+                object_kind,
+                confidence: confidence_f64 as f32,
+                source_message_id: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
+        })?;
+
+        let mut facts = Vec::new();
+        for row in rows {
+            facts.push(row?);
+        }
+        Ok(facts)
     }
 
     pub fn get_conversation_messages(
@@ -375,5 +635,50 @@ impl SqliteManager {
             params![new_title, id],
         )?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn facts_migration_and_upsert_deduplicates() {
+        let mgr = SqliteManager::new(":memory:").expect("in-memory sqlite");
+        mgr.migrate_facts_v1().expect("migrate facts v1");
+
+        let fact1 = NewFact::new(
+            "user",
+            "role",
+            "systems_engineer",
+            ObjectKind::Literal,
+            0.9,
+            None,
+        );
+
+        let id1 = mgr.upsert_fact(fact1).expect("first upsert");
+
+        // Second upsert with same identity but different confidence should
+        // reuse the same id and update confidence.
+        let fact2 = NewFact::new(
+            "user",
+            "role",
+            "systems_engineer",
+            ObjectKind::Literal,
+            0.5,
+            None,
+        );
+
+        let id2 = mgr.upsert_fact(fact2).expect("second upsert");
+        assert_eq!(id1, id2);
+
+        let results = mgr
+            .query_facts(Some("user"), Some("role"), Some("systems_engineer"), None, 10)
+            .expect("query facts");
+
+        assert_eq!(results.len(), 1);
+        let stored = &results[0];
+        assert_eq!(stored.id, id1);
+        assert!((stored.confidence - 0.5).abs() < f32::EPSILON);
     }
 }
