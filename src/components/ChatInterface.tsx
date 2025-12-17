@@ -162,12 +162,13 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     useEffect(() => {
         loadSettings();
 
-        const unlistenPromise = listen("tools-updated", () => {
-            loadSettings();
-        });
+        const unlistenPromise = Promise.all([
+            listen("tools-updated", () => loadSettings()),
+            listen("settings-updated", () => loadSettings())
+        ]);
 
         return () => {
-            unlistenPromise.then(unlisten => unlisten());
+            unlistenPromise.then(unlisteners => unlisteners.forEach(u => u()));
         };
     }, []);
 
@@ -940,6 +941,8 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                             }))}
                             placeholder={availableModels.length === 0 ? "No enabled models" : "Select Model"}
                             disabled={availableModels.length === 0}
+                            filterable={true}
+                            filterPlaceholder="Search models..."
                         />
                     </div>
 
@@ -1256,12 +1259,11 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                             {contextInspectionData.messages?.map((msg: any, idx: number) => (
                                 <div key={idx} className="bg-[var(--color-bg-tertiary)] border border-[var(--color-border-primary)] rounded-xl p-4">
                                     <div className="flex items-center gap-2 mb-2">
-                                        <span className={`px-2 py-1 rounded text-xs font-bold uppercase ${
-                                            msg.role === 'system' ? 'bg-purple-600/20 text-purple-400' :
+                                        <span className={`px-2 py-1 rounded text-xs font-bold uppercase ${msg.role === 'system' ? 'bg-purple-600/20 text-purple-400' :
                                             msg.role === 'user' ? 'bg-orange-600/20 text-orange-400' :
-                                            msg.role === 'assistant' ? 'bg-blue-600/20 text-blue-400' :
-                                            'bg-yellow-600/20 text-yellow-400'
-                                        }`}>
+                                                msg.role === 'assistant' ? 'bg-blue-600/20 text-blue-400' :
+                                                    'bg-yellow-600/20 text-yellow-400'
+                                            }`}>
                                             {msg.role}
                                         </span>
                                         {msg.tool_call_id && (
