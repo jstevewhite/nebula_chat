@@ -19,6 +19,7 @@ pub mod llm;
 pub use llm::capabilities;
 pub mod mcp;
 pub mod memory;
+pub mod security;
 
 #[cfg(test)]
 mod tests {
