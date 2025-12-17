@@ -128,14 +128,14 @@ export default function PromptsSettings() {
                         />
                     </div>
                 </div>
-                <div className="flex-1 relative">
-                    <textarea
-                        className="w-full h-full bg-[var(--color-bg-primary)] p-4 resize-none outline-none text-sm font-mono text-[var(--color-text-secondary)] leading-relaxed custom-scrollbar"
-                        placeholder="Enter system prompt content here..."
-                        value={content}
-                        onChange={(e) => setContent(e.target.value)}
-                    />
-                </div>
+                <textarea
+                    className="flex-1 w-full bg-[var(--color-bg-primary)] p-4 resize-none outline-none text-sm font-mono text-[var(--color-text-secondary)] leading-relaxed border-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                    placeholder="Enter system prompt content here..."
+                    value={content}
+                    onChange={(e) => setContent(e.target.value)}
+                    autoFocus={selectedId === null}
+                    style={{fieldSizing: "content" as any}}
+                />
                 <div className="p-3 border-t border-[var(--color-border-primary)] flex justify-between items-center bg-[var(--color-bg-secondary)]">
                     <span className={`text-xs ${status.startsWith("Error") ? "text-red-400" : "text-green-400"}`}>
                         {status}
