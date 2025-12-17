@@ -9,6 +9,9 @@ import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 import MemoryPanel from "./MemoryPanel";
 import { getProviderIcon } from "../utils/providerIcons";
 import { CustomSelect } from "./ui/CustomSelect";
@@ -1100,16 +1103,18 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                                             <span>Reasoning Effort</span>
                                             <span className="capitalize">{genSettings.reasoning_effort || 'None'}</span>
                                         </div>
-                                        <select
+                                        <CustomSelect
                                             value={genSettings.reasoning_effort || ''}
-                                            onChange={(e) => setGenSettings({ ...genSettings, reasoning_effort: e.target.value || undefined })}
-                                            className="w-full px-2 py-1 bg-gray-800 border border-gray-600 rounded text-xs text-gray-100 focus:ring-1 focus:ring-blue-500 outline-none"
-                                        >
-                                            <option value="">None</option>
-                                            <option value="low">Low</option>
-                                            <option value="medium">Medium</option>
-                                            <option value="high">High</option>
-                                        </select>
+                                            onChange={(val) => setGenSettings({ ...genSettings, reasoning_effort: val || undefined })}
+                                            options={[
+                                                { id: "none", label: "None", value: "" },
+                                                { id: "low", label: "Low", value: "low" },
+                                                { id: "medium", label: "Medium", value: "medium" },
+                                                { id: "high", label: "High", value: "high" },
+                                            ]}
+                                            className="w-full"
+                                            placeholder="None"
+                                        />
                                     </div>
                                 </div>
                             </div>
@@ -1539,7 +1544,8 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
                                     (cleanContent || (m.role === "tool" && displayContent)) && (
                                         <div className={`prose max-w-none prose-p:leading-relaxed prose-pre:bg-[var(--color-bg-tertiary)] prose-pre:rounded-lg prose-pre:border prose-pre:border-[var(--color-border-primary)]`}>
                                             <ReactMarkdown
-                                                remarkPlugins={[remarkGfm]}
+                                                remarkPlugins={[remarkGfm, remarkMath]}
+                                                rehypePlugins={[rehypeKatex]}
                                                 components={{
                                                     ul: ({ node, ...props }) => <ul className="list-disc pl-6 mb-2 space-y-1" {...props} />,
                                                     ol: ({ node, ...props }) => <ol className="list-decimal pl-6 mb-2 space-y-1" {...props} />,

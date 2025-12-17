@@ -130,8 +130,24 @@ impl LlmProvider for OpenAiProvider {
                     }
                 }
 
-                // Default handling
-                json!(msg)
+                // Default handling - exclude 'id' field as OpenAI doesn't accept it
+                let mut obj = json!({
+                    "role": msg.role,
+                });
+
+                if let Some(content) = msg.content {
+                    obj.as_object_mut().unwrap().insert("content".to_string(), json!(content));
+                }
+
+                if let Some(tool_call_id) = msg.tool_call_id {
+                    obj.as_object_mut().unwrap().insert("tool_call_id".to_string(), json!(tool_call_id));
+                }
+
+                if let Some(tool_calls) = msg.tool_calls {
+                    obj.as_object_mut().unwrap().insert("tool_calls".to_string(), json!(tool_calls));
+                }
+
+                obj
             })
             .collect();
 
@@ -296,7 +312,25 @@ impl LlmProvider for OpenAiProvider {
                         return json!({"role": msg.role, "content": content_parts});
                     }
                 }
-                json!(msg)
+
+                // Default handling - exclude 'id' field as OpenAI doesn't accept it
+                let mut obj = json!({
+                    "role": msg.role,
+                });
+
+                if let Some(content) = msg.content {
+                    obj.as_object_mut().unwrap().insert("content".to_string(), json!(content));
+                }
+
+                if let Some(tool_call_id) = msg.tool_call_id {
+                    obj.as_object_mut().unwrap().insert("tool_call_id".to_string(), json!(tool_call_id));
+                }
+
+                if let Some(tool_calls) = msg.tool_calls {
+                    obj.as_object_mut().unwrap().insert("tool_calls".to_string(), json!(tool_calls));
+                }
+
+                obj
             })
             .collect();
 
