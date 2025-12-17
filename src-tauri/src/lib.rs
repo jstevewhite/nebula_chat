@@ -4,6 +4,7 @@ use crate::mcp::config::Settings;
 use crate::mcp::config::{McpServerConfig, ModelConfig, ProviderType};
 use crate::mcp::manager::McpManager;
 use crate::memory::tantivy_index::SearchResult;
+use crate::memory::{NewFact, ObjectKind};
 use anyhow::Result;
 use std::sync::Arc;
 use tauri::{Manager, State};
@@ -349,14 +350,27 @@ async fn send_message(
                     }
 
                     // Save full message
-                    let _ = lib.save_full_message(
-                        conv_id,
-                        &last.role,
-                        last.content.as_deref(),
-                        tool_calls_json.as_deref(),
-                        last.tool_call_id.as_deref(),
-                        last.attachments.as_deref(), // Use last.attachments to avoid borrow error
-                    );
+                    if last.role == "user" {
+                        if let Err(e) = lib.save_full_message_returning_id(
+                            conv_id,
+                            &last.role,
+                            last.content.as_deref(),
+                            tool_calls_json.as_deref(),
+                            last.tool_call_id.as_deref(),
+                            last.attachments.as_deref(),
+                        ) {
+                            tracing::error!("Failed to save user message for facts: {}", e);
+                        }
+                    } else {
+                        let _ = lib.save_full_message(
+                            conv_id,
+                            &last.role,
+                            last.content.as_deref(),
+                            tool_calls_json.as_deref(),
+                            last.tool_call_id.as_deref(),
+                            last.attachments.as_deref(),
+                        );
+                    }
                 }
             }
         }
@@ -368,10 +382,12 @@ async fn send_message(
             .map_err(|e| e.to_string())?;
         let settings_path = config_dir.join("settings.json");
         let settings = Settings::load_migrated(&settings_path);
+        let extraction_model = settings.context_model.clone();
+        let memory_enabled = settings.memory_enabled;
 
         // Retrieve Context (Long-term memory) via Strategist Orchestrator
         let mut context_text = String::new();
-        if settings.memory_enabled && !query.is_empty() {
+        if memory_enabled && !query.is_empty() {
             // Use strategist orchestrator for intelligent context assembly
             match crate::memory::StrategistMemoryOrchestrator::assemble_context(
                 &query,
@@ -380,6 +396,7 @@ async fn send_message(
                 settings.context_turns,
                 settings.context_model.as_deref(),
                 &settings,
+                conversation_id.as_deref(),
             )
             .await
             {
@@ -664,7 +681,7 @@ async fn send_message(
         let response = response_result.map_err(|e| e.to_string())?;
 
         // Handle Response (Save & Prune triggers)
-        if let Some(conv_id) = conversation_id {
+        if let Some(conv_id) = conversation_id.clone() {
             let lib = state.librarian.lock().await;
             let tool_calls_json = if let Some(tc) = &response.tool_calls {
                 serde_json::to_string(tc).ok()
@@ -674,29 +691,62 @@ async fn send_message(
 
             // Note: If streaming, 'response' contains the FULL aggregated content at the end, so saving works fine.
 
-            let _ = lib.save_full_message(
+            let assistant_message_id = match lib.save_full_message_returning_id(
                 &conv_id,
                 "assistant",
                 response.content.as_deref(),
                 tool_calls_json.as_deref(),
                 response.tool_call_id.as_deref(),
                 None,
-            );
+            ) {
+                Ok(id) => Some(id),
+                Err(e) => {
+                    tracing::error!("Failed to save assistant message for facts: {}", e);
+                    None
+                }
+            };
 
             // Trigger Background Pruning (Fire & Forget)
+            let app_handle_for_pruning = app_handle.clone();
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = attempt_pruning(
-                    app_handle,
-                    librarian_arc,
-                    provider_id_bg,
-                    model_bg,
-                    conv_id_bg.unwrap_or_default(),
+                    app_handle_for_pruning,
+                    librarian_arc.clone(),
+                    provider_id_bg.clone(),
+                    model_bg.clone(),
+                    conv_id_bg.clone().unwrap_or_default(),
                 )
                 .await
                 {
                     tracing::error!("Pruning Error: {}", e);
                 }
             });
+
+            // Trigger Background Fact Extraction for assistant message
+            if memory_enabled {
+                if let (Some(context_model), Some(msg_id), Some(content)) = (
+                    extraction_model.clone(),
+                    assistant_message_id,
+                    response.content.clone(),
+                ) {
+                    let app_for_facts = app_handle.clone();
+                    let librarian_for_facts = state.librarian.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(e) = extract_facts_for_message(
+                            app_for_facts,
+                            librarian_for_facts,
+                            &context_model,
+                            "assistant",
+                            &content,
+                            &msg_id,
+                        )
+                        .await
+                        {
+                            tracing::error!("Assistant fact extraction failed: {}", e);
+                        }
+                    });
+                }
+            }
         }
 
         Ok(response)
@@ -728,6 +778,215 @@ async fn send_message(
             }
         }
     }
+}
+
+/// Internal representation of a fact as returned by the extraction model.
+#[derive(Debug, serde::Deserialize)]
+struct ExtractedFactDto {
+    subject: String,
+    predicate: String,
+    object: String,
+    #[serde(default)]
+    object_kind: Option<String>,
+    #[serde(default)]
+    confidence: Option<f32>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ExtractedFactsEnvelope {
+    facts: Vec<ExtractedFactDto>,
+}
+
+/// Extract a JSON snippet from a possibly-noisy LLM response body.
+fn extract_json_snippet(content: &str) -> &str {
+    let trimmed = content.trim();
+
+    // Strip simple ```json fences if present
+    let without_fence = if trimmed.starts_with("```") {
+        let mut body = trimmed.trim_start_matches('`');
+        if body.starts_with("json") {
+            body = body.trim_start_matches("json");
+        }
+        if let Some(end) = body.rfind("```") {
+            &body[..end]
+        } else {
+            body
+        }
+    } else {
+        trimmed
+    };
+
+    if let Some(start) = without_fence.find('{') {
+        if let Some(end) = without_fence.rfind('}') {
+            &without_fence[start..=end]
+        } else {
+            without_fence
+        }
+    } else if let Some(start) = without_fence.find('[') {
+        if let Some(end) = without_fence.rfind(']') {
+            &without_fence[start..=end]
+        } else {
+            without_fence
+        }
+    } else {
+        without_fence
+    }
+}
+
+/// Parse extracted facts JSON into a flat vector of DTOs.
+fn parse_extracted_facts(json_str: &str) -> Vec<ExtractedFactDto> {
+    if json_str.trim().is_empty() {
+        return Vec::new();
+    }
+
+    // Try envelope first
+    if let Ok(env) = serde_json::from_str::<ExtractedFactsEnvelope>(json_str) {
+        return env.facts;
+    }
+
+    // Then try bare array
+    if let Ok(list) = serde_json::from_str::<Vec<ExtractedFactDto>>(json_str) {
+        return list;
+    }
+
+    Vec::new()
+}
+
+/// Normalize a key for lookup: lowercase, trim, collapse whitespace to single underscore.
+fn normalize_key(value: &str) -> String {
+    let lower = value.to_lowercase();
+    let parts: Vec<&str> = lower.split_whitespace().collect();
+    parts.join("_")
+}
+
+/// Perform background fact extraction for a single message.
+async fn extract_facts_for_message(
+    app: tauri::AppHandle,
+    librarian: Arc<Mutex<crate::memory::librarian::Librarian>>,
+    context_model: &str,
+    role: &str,
+    content: &str,
+    message_id: &str,
+) -> Result<(), String> {
+    let content = content.trim();
+    if content.is_empty() {
+        return Ok(());
+    }
+
+    let parts: Vec<&str> = context_model.split("::").collect();
+    if parts.len() != 2 {
+        tracing::warn!("Invalid context_model for extraction: {}", context_model);
+        return Ok(());
+    }
+    let provider_id = parts[0];
+    let model_name = parts[1];
+
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let settings = Settings::load_migrated(&settings_path);
+
+    let provider = match crate::memory::StrategistMemoryOrchestrator::create_provider(
+        provider_id,
+        model_name,
+        &settings,
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("Failed to create provider for fact extraction: {}", e);
+            return Ok(());
+        }
+    };
+
+    let prompt = format!(
+        r#"You are a fact extraction engine.
+
+Extract durable, reusable facts from the following {role} message. Focus on user preferences, long-term goals, project attributes, and stable decisions. Ignore ephemeral details like greetings or transient status.
+
+Return a JSON object with a single key "facts" whose value is an array of objects with this schema:
+{{
+  "subject": "normalized_subject_key",
+  "predicate": "normalized_predicate_key",
+  "object": "raw object value or entity key",
+  "object_kind": "entity" | "literal",
+  "confidence": 0.0-1.0
+}}
+
+If there are no useful facts, return:
+{{"facts": []}}
+
+MESSAGE ({role}):
+{content}
+"#
+    );
+
+    let messages = vec![Message {
+        id: None,
+        role: "user".to_string(),
+        content: Some(prompt),
+        tool_calls: None,
+        attachments: None,
+        tool_call_id: None,
+    }];
+
+    let response = match provider.chat(messages, vec![], None).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("Fact extraction model call failed: {}", e);
+            return Ok(());
+        }
+    };
+
+    let raw = response.content.unwrap_or_default();
+    let json_str = extract_json_snippet(&raw);
+    let dtos = parse_extracted_facts(json_str);
+
+    if dtos.is_empty() {
+        tracing::debug!("Fact extraction returned no facts");
+        return Ok(());
+    }
+
+    let lib = librarian.lock().await;
+    for dto in dtos {
+        let subject = normalize_key(&dto.subject);
+        let predicate = normalize_key(&dto.predicate);
+        let object = dto.object.trim().to_string();
+
+        let kind = match dto
+            .object_kind
+            .as_deref()
+            .map(|s| s.to_lowercase())
+            .as_deref()
+        {
+            Some("entity") => ObjectKind::Entity,
+            _ => ObjectKind::Literal,
+        };
+
+        let mut confidence = dto.confidence.unwrap_or(1.0);
+        if !confidence.is_finite() {
+            confidence = 1.0;
+        }
+        if confidence < 0.0 {
+            confidence = 0.0;
+        }
+        if confidence > 1.0 {
+            confidence = 1.0;
+        }
+
+        let fact = NewFact::new(
+            subject,
+            predicate,
+            object,
+            kind,
+            confidence,
+            Some(message_id.to_string()),
+        );
+
+        if let Err(e) = lib.upsert_fact(fact) {
+            tracing::error!("Failed to upsert extracted fact: {}", e);
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
