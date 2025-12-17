@@ -9,6 +9,92 @@ use tantivy_index::SearchResult;
 pub use librarian::SearchOptions;
 pub use strategist::{SearchPlan, SearchQuery, StrategistContextResult, StrategistMemoryOrchestrator};
 
+/// Kind of fact object: another entity eligible for traversal or a literal value.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub enum ObjectKind {
+    Entity,
+    Literal,
+}
+
+impl ObjectKind {
+    /// Stable string representation used in the SQLite schema.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ObjectKind::Entity => "entity",
+            ObjectKind::Literal => "literal",
+        }
+    }
+
+    /// Parse from the stored TEXT representation; returns None for unknown kinds.
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "entity" => Some(ObjectKind::Entity),
+            "literal" => Some(ObjectKind::Literal),
+            _ => None,
+        }
+    }
+}
+
+/// Canonical fact row backing the knowledge-graph-like memory layer.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Fact {
+    pub id: String,
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub object_kind: ObjectKind,
+    pub confidence: f32,
+    pub source_message_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// DTO used when creating or upserting a fact before it has a canonical id.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct NewFact {
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub object_kind: ObjectKind,
+    pub confidence: f32,
+    pub source_message_id: Option<String>,
+}
+
+impl NewFact {
+    pub fn new(
+        subject: impl Into<String>,
+        predicate: impl Into<String>,
+        object: impl Into<String>,
+        object_kind: ObjectKind,
+        confidence: f32,
+        source_message_id: Option<String>,
+    ) -> Self {
+        Self {
+            subject: subject.into(),
+            predicate: predicate.into(),
+            object: object.into(),
+            object_kind,
+            confidence,
+            source_message_id,
+        }
+    }
+}
+
+/// Strategist-oriented view of a fact with optional extra metadata.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RelevantFact {
+    pub fact: Fact,
+    /// True if this fact still has a provenance message id attached.
+    pub has_provenance: bool,
+}
+
+impl RelevantFact {
+    pub fn from_fact(fact: Fact) -> Self {
+        let has_provenance = fact.source_message_id.is_some();
+        Self { fact, has_provenance }
+    }
+}
+
 /// Lightweight DTO for memory hits optimized for strategist consumption.
 /// Contains metadata + truncated snippet instead of full content.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

@@ -46,6 +46,8 @@ impl Librarian {
         let sqlite = SqliteManager::new(db_path.to_str().unwrap())?;
         // Attempt migration (ignore error if cols exist)
         let _ = sqlite.migrate_v2();
+        // Initialize facts schema; uses IF NOT EXISTS so this is safe to run repeatedly.
+        sqlite.migrate_facts_v1()?;
 
         let tantivy = TantivyIndex::new(idx_path.to_str().unwrap())?;
         let audit = AuditLogger::new(&db_path)?;
@@ -197,6 +199,15 @@ impl Librarian {
     /// Check if a tool_call_id exists in assistant messages for a given conversation
     pub fn tool_call_id_exists(&self, conversation_id: &str, tool_call_id: &str) -> Result<bool> {
         self.sqlite.tool_call_id_exists(conversation_id, tool_call_id)
+    }
+
+    /// Retrieve a bounded set of user-profile facts for personalization.
+    ///
+    /// For v0 we assume the canonical subject key for the current user is "user";
+    /// higher layers are responsible for normalizing subjects consistently.
+    pub fn get_user_profile_facts(&self, limit: usize) -> Result<Vec<crate::memory::Fact>> {
+        self.sqlite
+            .query_facts(Some("user"), None, None, None, limit)
     }
 
     pub fn search(&self, query: &str) -> Result<Vec<SearchResult>> {
