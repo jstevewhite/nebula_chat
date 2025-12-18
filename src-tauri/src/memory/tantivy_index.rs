@@ -91,7 +91,8 @@ impl IndexBatchProcessor {
 
                             // Check if we should commit due to batch size or time
                             let should_commit_by_size = batch.len() >= self.batch_size;
-                            let should_commit_by_time = last_commit_time.elapsed() >= self.max_batch_delay;
+                            let should_commit_by_time =
+                                last_commit_time.elapsed() >= self.max_batch_delay;
 
                             if should_commit_by_size || should_commit_by_time {
                                 if let Err(e) = self.process_batch(&batch).await {
@@ -190,7 +191,7 @@ pub struct TantivyIndex {
     index: Index,
     reader: tantivy::IndexReader,
     sender: mpsc::UnboundedSender<IndexOperation>,
-    processor_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    _processor_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl TantivyIndex {
@@ -247,16 +248,18 @@ impl TantivyIndex {
                 index_clone,
                 reader_clone,
                 receiver,
-                10,      // Batch size: commit after 10 documents
+                10,                     // Batch size: commit after 10 documents
                 Duration::from_secs(2), // Max delay: commit after 2 seconds
-            ).run().await
+            )
+            .run()
+            .await
         }))));
 
         Ok(Self {
             index,
             reader,
             sender,
-            processor_handle,
+            _processor_handle: processor_handle,
         })
     }
 
@@ -269,13 +272,15 @@ impl TantivyIndex {
         created_at: &str,
     ) -> Result<()> {
         // Queue the document for batch processing
-        self.sender.send(IndexOperation::AddDocument {
-            conversation_id: conversation_id.to_string(),
-            role: role.to_string(),
-            content: content.to_string(),
-            message_id: message_id.to_string(),
-            created_at: created_at.to_string(),
-        }).map_err(|e| anyhow::anyhow!("Failed to queue document: {}", e))?;
+        self.sender
+            .send(IndexOperation::AddDocument {
+                conversation_id: conversation_id.to_string(),
+                role: role.to_string(),
+                content: content.to_string(),
+                message_id: message_id.to_string(),
+                created_at: created_at.to_string(),
+            })
+            .map_err(|e| anyhow::anyhow!("Failed to queue document: {}", e))?;
 
         Ok(())
     }
@@ -358,7 +363,8 @@ impl TantivyIndex {
         let fetch_limit = if conversation_id.is_some()
             || include_roles.is_some()
             || exclude_roles.is_some()
-            || max_age_days.is_some() {
+            || max_age_days.is_some()
+        {
             limit * 3 // Fetch 3x to account for filtering
         } else {
             limit
@@ -419,27 +425,35 @@ impl TantivyIndex {
     }
 
     pub fn delete_by_message_id(&self, message_id: &str) -> Result<()> {
-        self.sender.send(IndexOperation::DeleteByMessageId {
-            message_id: message_id.to_string(),
-        }).map_err(|e| anyhow::anyhow!("Failed to queue deletion: {}", e))?;
+        self.sender
+            .send(IndexOperation::DeleteByMessageId {
+                message_id: message_id.to_string(),
+            })
+            .map_err(|e| anyhow::anyhow!("Failed to queue deletion: {}", e))?;
         Ok(())
     }
 
     pub fn delete_by_conversation_id(&self, conversation_id: &str) -> Result<()> {
-        self.sender.send(IndexOperation::DeleteByConversationId {
-            conversation_id: conversation_id.to_string(),
-        }).map_err(|e| anyhow::anyhow!("Failed to queue deletion: {}", e))?;
+        self.sender
+            .send(IndexOperation::DeleteByConversationId {
+                conversation_id: conversation_id.to_string(),
+            })
+            .map_err(|e| anyhow::anyhow!("Failed to queue deletion: {}", e))?;
         Ok(())
     }
 
     pub fn clear_index(&self) -> Result<()> {
-        self.sender.send(IndexOperation::ClearIndex).map_err(|e| anyhow::anyhow!("Failed to queue clear: {}", e))?;
+        self.sender
+            .send(IndexOperation::ClearIndex)
+            .map_err(|e| anyhow::anyhow!("Failed to queue clear: {}", e))?;
         Ok(())
     }
 
     /// Force immediate commit and reload for cases where consistency is needed
     pub fn flush(&self) -> Result<()> {
-        self.sender.send(IndexOperation::CommitAndReload).map_err(|e| anyhow::anyhow!("Failed to queue flush: {}", e))?;
+        self.sender
+            .send(IndexOperation::CommitAndReload)
+            .map_err(|e| anyhow::anyhow!("Failed to queue flush: {}", e))?;
         Ok(())
     }
 }
