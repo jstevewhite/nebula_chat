@@ -654,11 +654,21 @@ impl SqliteManager {
     }
 
     pub fn delete_conversation(&self, id: &str) -> Result<()> {
-        // Cascade delete messages first
+        // Cascade delete in correct order: attachments -> messages -> conversation
+
+        // 1. Delete attachments for all messages in this conversation
+        self.conn.execute(
+            "DELETE FROM attachments WHERE message_id IN (SELECT id FROM messages WHERE conversation_id = ?1)",
+            params![id],
+        )?;
+
+        // 2. Delete messages for this conversation
         self.conn.execute(
             "DELETE FROM messages WHERE conversation_id = ?1",
             params![id],
         )?;
+
+        // 3. Delete the conversation itself
         self.conn
             .execute("DELETE FROM conversations WHERE id = ?1", params![id])?;
         Ok(())
