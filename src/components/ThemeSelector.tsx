@@ -38,8 +38,8 @@ export function ThemeSelector() {
   return (
     <div className="space-y-4">
       <div>
-        <h3 className="text-lg font-semibold text-white mb-1">Theme</h3>
-        <p className="text-sm text-gray-400 mb-4">
+        <h3 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Theme</h3>
+        <p className="text-sm text-[var(--color-text-tertiary)] mb-4">
           Choose your preferred color scheme
         </p>
       </div>
@@ -57,13 +57,13 @@ export function ThemeSelector() {
                 relative flex items-start gap-3 p-4 rounded-lg border transition-all
                 ${
                   isSelected
-                    ? 'bg-blue-600/10 border-blue-600 shadow-lg shadow-blue-600/20'
-                    : 'bg-gray-900 border-gray-700 hover:bg-gray-800 hover:border-gray-600'
+                    ? 'bg-[var(--color-bg-tertiary)] border-[var(--color-accent-primary)] shadow-lg'
+                    : 'bg-[var(--color-bg-secondary)] border-[var(--color-border-primary)] hover:bg-[var(--color-bg-tertiary)] hover:border-[var(--color-border-secondary)]'
                 }
               `}
             >
               <div
-                className="w-10 h-10 rounded-md border-2 border-gray-600 flex items-center justify-center flex-shrink-0"
+                className="w-10 h-10 rounded-md border-2 border-[var(--color-border-primary)] flex items-center justify-center flex-shrink-0"
                 style={{ backgroundColor: themeOption.preview }}
               >
                 <Icon
@@ -80,16 +80,16 @@ export function ThemeSelector() {
                 <div className="flex items-center gap-2">
                   <h4
                     className={`font-medium ${
-                      isSelected ? 'text-blue-400' : 'text-white'
+                      isSelected ? 'text-[var(--color-accent-primary)]' : 'text-[var(--color-text-primary)]'
                     }`}
                   >
                     {themeOption.name}
                   </h4>
                   {isSelected && (
-                    <div className="w-2 h-2 rounded-full bg-blue-400" />
+                    <div className="w-2 h-2 rounded-full bg-[var(--color-accent-primary)]" />
                   )}
                 </div>
-                <p className="text-sm text-gray-400 mt-1">
+                <p className="text-sm text-[var(--color-text-tertiary)] mt-1">
                   {themeOption.description}
                 </p>
               </div>
@@ -98,14 +98,14 @@ export function ThemeSelector() {
         })}
       </div>
 
-      <div className="mt-6 p-4 rounded-lg bg-gray-900 border border-gray-700">
+      <div className="mt-6 p-4 rounded-lg bg-[var(--color-bg-secondary)] border border-[var(--color-border-primary)]">
         <div className="flex items-start gap-3">
-          <Palette size={20} className="text-gray-500 mt-0.5 flex-shrink-0" />
-          <div className="text-sm text-gray-400">
+          <Palette size={20} className="text-[var(--color-text-tertiary)] mt-0.5 flex-shrink-0" />
+          <div className="text-sm text-[var(--color-text-secondary)]">
             <p className="mb-2">
               Theme changes apply instantly and persist across sessions.
             </p>
-            <p className="text-gray-500">
+            <p className="text-[var(--color-text-tertiary)]">
               All components will adapt to your selected color scheme automatically.
             </p>
           </div>
