@@ -7,7 +7,6 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// Hard limits for strategist operation (safety bounds)
-const MAX_RETRIEVAL_ROUNDS: usize = 2;
 const MAX_QUERIES_PER_ROUND: usize = 3;
 const MAX_TOTAL_HITS: usize = 20;
 const DEFAULT_SNIPPET_CHARS: usize = 400;
