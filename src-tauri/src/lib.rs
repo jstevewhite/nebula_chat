@@ -1985,6 +1985,34 @@ async fn toggle_tool(
 }
 
 #[tauri::command]
+async fn restart_mcp_server(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<(), String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let settings = Settings::load_migrated(&settings_path);
+
+    let config = settings
+        .mcp_servers
+        .get(&name)
+        .ok_or_else(|| format!("Server '{}' not found in settings", name))?
+        .clone();
+
+    state
+        .mcp_manager
+        .restart_server(name, config)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    use tauri::Emitter;
+    let _ = app.emit("tools-updated", ());
+
+    Ok(())
+}
+
+#[tauri::command]
 async fn get_mcp_servers(state: State<'_, AppState>) -> Result<Vec<String>, String> {
     Ok(state.mcp_manager.list_servers().await)
 }
@@ -2163,6 +2191,7 @@ pub fn run() {
             add_mcp_server,
             edit_mcp_server,
             delete_mcp_server,
+            restart_mcp_server,
             get_mcp_servers,
             get_active_mcp_servers,
             set_default_model,

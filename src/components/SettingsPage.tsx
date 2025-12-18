@@ -453,6 +453,19 @@ export default function SettingsPage() {
         }
     };
 
+    const handleRestartServer = async (serverName: string) => {
+        try {
+            setStatus(`Restarting MCP server '${serverName}'...`);
+            await invoke("restart_mcp_server", { name: serverName });
+            setStatus("Server restarted successfully.");
+            setTimeout(() => setStatus(""), 2000);
+            loadServers();
+        } catch (e: any) {
+            console.error(e);
+            setStatus("Error restarting server: " + e);
+        }
+    };
+
     const handleRebuildIndex = async () => {
         if (!confirm("Rebuild memory index? This may take a moment.")) {
             return;
@@ -869,6 +882,13 @@ export default function SettingsPage() {
                             >
                                 {s.status.toUpperCase()}
                             </div>
+                            <button
+                                onClick={() => handleRestartServer(s.name)}
+                                className="p-2 hover:bg-blue-900/30 rounded-lg text-[var(--color-text-secondary)] hover:text-blue-400 transition-colors"
+                                title="Restart Server"
+                            >
+                                <RefreshCw size={16} />
+                            </button>
                             <button
                                 onClick={() => openEditModal(s.name, s.config)}
                                 className="p-2 hover:bg-[var(--color-bg-tertiary)] rounded-lg text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors"
