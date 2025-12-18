@@ -33,6 +33,20 @@ export function ThemeSelector() {
       preview: '#002b36',
       icon: Palette,
     },
+    {
+      id: 'kimbie-dark' as const,
+      name: 'Kimbie Dark',
+      description: 'Warm, earthy dark theme',
+      preview: '#221a0f',
+      icon: Moon,
+    },
+    {
+      id: 'quiet-light' as const,
+      name: 'Quiet Light',
+      description: 'Subtle, low-contrast light',
+      preview: '#f5f5f5',
+      icon: Sun,
+    },
   ];
 
   return (
