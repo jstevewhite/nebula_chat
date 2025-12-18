@@ -127,6 +127,68 @@
   --color-overlay: rgba(0, 43, 54, 0.9);
 }
 
+[data-theme="kimbie-dark"] {
+  /* Kimbie Dark - warm, earthy dark theme */
+  --color-bg-primary: #221a0f;
+  --color-bg-secondary: #2b221a;
+  --color-bg-tertiary: #362b23;
+  --color-bg-elevated: #3a312a;
+
+  --color-text-primary: #d3af86;
+  --color-text-secondary: #d9ae80;
+  --color-text-tertiary: #a57a4c;
+
+  --color-border-primary: #3a312a;
+  --color-border-secondary: #4a3d33;
+
+  --color-accent-primary: #dc9656;
+  --color-accent-secondary: #f79a32;
+
+  --color-success: #889b4a;
+  --color-error: #d15e5e;
+  --color-warning: #f79a32;
+
+  --color-input-bg: #2b221a;
+  --color-input-border: #3a312a;
+  --color-input-focus: #dc9656;
+  --color-hover-bg: #362b23;
+  --color-active-bg: #3a312a;
+
+  --color-shadow: rgba(0, 0, 0, 0.4);
+  --color-overlay: rgba(34, 26, 15, 0.9);
+}
+
+[data-theme="quiet-light"] {
+  /* Quiet Light - subtle, low-contrast light theme */
+  --color-bg-primary: #f5f5f5;
+  --color-bg-secondary: #eeeeee;
+  --color-bg-tertiary: #e5e5e5;
+  --color-bg-elevated: #ffffff;
+
+  --color-text-primary: #333333;
+  --color-text-secondary: #555555;
+  --color-text-tertiary: #777777;
+
+  --color-border-primary: #dddddd;
+  --color-border-secondary: #cccccc;
+
+  --color-accent-primary: #4078c0;
+  --color-accent-secondary: #4080d0;
+
+  --color-success: #50a14f;
+  --color-error: #e45649;
+  --color-warning: #c18401;
+
+  --color-input-bg: #ffffff;
+  --color-input-border: #dddddd;
+  --color-input-focus: #4078c0;
+  --color-hover-bg: #eeeeee;
+  --color-active-bg: #e5e5e5;
+
+  --color-shadow: rgba(0, 0, 0, 0.08);
+  --color-overlay: rgba(245, 245, 245, 0.95);
+}
+
 /* Smooth theme transitions */
 * {
   transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
