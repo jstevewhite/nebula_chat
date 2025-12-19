@@ -156,7 +156,10 @@ impl SseTransport {
                                         buffer.extend_from_slice(&bytes);
 
                                         if is_streamable_http {
-                                            // StreamableHTTP: newline-delimited JSON
+                                            // StreamableHTTP: hybrid SSE/NDJSON format
+                                            // - Lines starting with ":" are SSE comments (keep-alive pings)
+                                            // - Lines starting with "data: " contain JSON-RPC responses
+                                            // - Plain JSON lines are also supported
                                             while let Some(idx) = buffer.iter().position(|&b| b == b'\n') {
                                                 let line_bytes = buffer.drain(0..=idx).collect::<Vec<u8>>();
                                                 let line = String::from_utf8_lossy(&line_bytes);
@@ -164,12 +167,27 @@ impl SseTransport {
 
                                                 if !line.is_empty() {
                                                     tracing::debug!("StreamableHTTP line: {}", line);
-                                                    if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(line) {
+
+                                                    // Skip SSE metadata lines (comments, event types, etc.)
+                                                    if line.starts_with(':') || line.starts_with("event:") || line.starts_with("id:") || line.starts_with("retry:") {
+                                                        tracing::trace!("Ignoring SSE metadata: {}", line);
+                                                        continue;
+                                                    }
+
+                                                    // Extract JSON from SSE data events
+                                                    let json_str = if let Some(data) = line.strip_prefix("data: ") {
+                                                        data
+                                                    } else {
+                                                        line
+                                                    };
+
+                                                    // Parse JSON-RPC response
+                                                    if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(json_str) {
                                                         tracing::info!("Received JSON-RPC response: id={:?}, has_result={}, has_error={}",
                                                             resp.id, resp.result.is_some(), resp.error.is_some());
                                                         McpClient::handle_response(resp, &pending).await;
                                                     } else {
-                                                        tracing::warn!("Failed to parse StreamableHTTP line as JSON-RPC: {}", line);
+                                                        tracing::warn!("Failed to parse StreamableHTTP line as JSON-RPC: {}", json_str);
                                                     }
                                                 }
                                             }
@@ -185,8 +203,7 @@ impl SseTransport {
                                                 // Naive parser for "data: " lines within the chunk
                                                 for line in s.lines() {
                                                     tracing::debug!("SSE line received: {}", line);
-                                                    if line.starts_with("data: ") {
-                                                        let data = &line[6..];
+                                                    if let Some(data) = line.strip_prefix("data: ") {
                                                         tracing::debug!("SSE data payload: {}", data);
                                                         // Handle [DONE] or other messages if relevant, mostly JSON
                                                         if let Ok(resp) =
@@ -273,17 +290,59 @@ impl Transport for SseTransport {
 
         if response.status().is_success() {
             if let Some(ct) = response.headers().get("content-type") {
-                tracing::debug!("POST response content-type: {:?}", ct);
-                if ct.to_str().unwrap_or("").contains("application/json") {
-                    tracing::info!("POST response contains JSON, parsing...");
+                let content_type = ct.to_str().unwrap_or("");
+                tracing::debug!("POST response content-type: {}", content_type);
+
+                if content_type.contains("text/event-stream") {
+                    // StreamableHTTP: Parse SSE-formatted response from POST body
                     let body_text = response.text().await.unwrap_or_default();
-                    tracing::info!("POST response body: {}", body_text);
-                    if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&body_text) {
-                        tracing::info!("Received JSON-RPC response in POST: id={:?}", resp.id);
-                        McpClient::handle_response(resp, &self.pending).await;
+
+                    if body_text.trim().is_empty() {
+                        tracing::debug!("POST response body is empty (response expected via GET SSE)");
                     } else {
-                        tracing::warn!("Failed to parse POST response as JSON-RPC. Body: {}",
+                        tracing::debug!("POST response contains SSE data, parsing...");
+
+                        // Parse SSE format: skip metadata lines, extract JSON from data: lines
+                        for line in body_text.lines() {
+                            let line = line.trim();
+
+                            // Skip SSE metadata lines
+                            if line.is_empty() || line.starts_with(':') || line.starts_with("event:")
+                                || line.starts_with("id:") || line.starts_with("retry:") {
+                                continue;
+                            }
+
+                            // Extract JSON from data: lines
+                            let json_str = if let Some(data) = line.strip_prefix("data: ") {
+                                data
+                            } else {
+                                line
+                            };
+
+                            // Parse JSON-RPC response
+                            if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(json_str) {
+                                tracing::info!("Received JSON-RPC response in POST body: id={:?}", resp.id);
+                                McpClient::handle_response(resp, &self.pending).await;
+                            }
+                        }
+                    }
+                } else if content_type.contains("application/json") {
+                    let body_text = response.text().await.unwrap_or_default();
+
+                    // Empty responses are valid for html-streamable (response comes via SSE)
+                    if body_text.trim().is_empty() {
+                        tracing::debug!("POST response body is empty (response expected via SSE)");
+                    } else {
+                        tracing::debug!("POST response body: {}",
                             if body_text.len() > 200 { &body_text[..200] } else { &body_text });
+
+                        if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&body_text) {
+                            tracing::info!("Received JSON-RPC response in POST: id={:?}", resp.id);
+                            McpClient::handle_response(resp, &self.pending).await;
+                        } else {
+                            tracing::warn!("Failed to parse POST response as JSON-RPC. Body: {}",
+                                if body_text.len() > 200 { &body_text[..200] } else { &body_text });
+                        }
                     }
                 }
             } else {

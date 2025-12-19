@@ -47,7 +47,7 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen bg-[var(--color-bg-primary)] text-[var(--color-text-primary)] overflow-hidden font-sans">
+    <div className="flex h-screen bg-[var(--color-bg-primary)] text-[var(--color-text-primary)] overflow-hidden">
       {/* Activity Bar */}
       <div className="w-16 flex flex-col items-center py-6 bg-[var(--color-bg-tertiary)] border-r border-[var(--color-border-primary)] space-y-4 z-20 shrink-0">
         <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-purple-600 rounded-xl mb-4 shadow-lg shadow-blue-500/20" />

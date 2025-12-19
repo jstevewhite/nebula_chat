@@ -7,15 +7,18 @@ import { ThemeSelector } from "./ThemeSelector";
 import { CustomSelect } from "./ui/CustomSelect";
 import { useTheme } from "../contexts/ThemeContext";
 
+const SANS_FALLBACK = "system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif";
+const MONO_FALLBACK = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace";
+
 const AVAILABLE_FONTS = [
-    { id: "Inter", label: "Inter (Default)", value: "Inter" },
-    { id: "system-ui", label: "System UI", value: "system-ui, -apple-system, sans-serif" },
-    { id: "Roboto", label: "Roboto", value: "Roboto" },
-    { id: "Open Sans", label: "Open Sans", value: "Open Sans" },
-    { id: "Lato", label: "Lato", value: "Lato" },
-    { id: "Montserrat", label: "Montserrat", value: "Montserrat" },
-    { id: "Fira Code", label: "Fira Code (Monospace)", value: "Fira Code, monospace" },
-    { id: "JetBrains Mono", label: "JetBrains Mono (Monospace)", value: "JetBrains Mono, monospace" },
+    { id: "Inter", label: "Inter (Default)", value: `Inter, ${SANS_FALLBACK}` },
+    { id: "system-ui", label: "System UI", value: SANS_FALLBACK },
+    { id: "Roboto", label: "Roboto", value: `Roboto, ${SANS_FALLBACK}` },
+    { id: "Open Sans", label: "Open Sans", value: `\"Open Sans\", ${SANS_FALLBACK}` },
+    { id: "Lato", label: "Lato", value: `Lato, ${SANS_FALLBACK}` },
+    { id: "Montserrat", label: "Montserrat", value: `Montserrat, ${SANS_FALLBACK}` },
+    { id: "Fira Code", label: "Fira Code (Monospace)", value: `\"Fira Code\", ${MONO_FALLBACK}` },
+    { id: "JetBrains Mono", label: "JetBrains Mono (Monospace)", value: `\"JetBrains Mono\", ${MONO_FALLBACK}` },
 ];
 
 const FONT_SIZES = [
@@ -178,8 +181,25 @@ export default function SettingsPage() {
 
     const saveSettings = async () => {
         try {
-            const newSettings = { ...fullSettings, providers };
+            // IMPORTANT: Don’t overwrite prompt changes made via PromptsSettings.
+            // PromptsSettings saves directly to settings.json via save_system_prompt, but this SettingsPage
+            // keeps a stale copy of fullSettings. If we spread fullSettings back into save_settings,
+            // we can clobber freshly-saved system prompts.
+            const latest: any = await invoke("get_settings");
+
+            // Start from latest persisted settings (includes system_prompts updates), then apply the
+            // specific fields edited in this component.
+            const newSettings = {
+                ...latest,
+                providers,
+                memory_enabled: fullSettings.memory_enabled ?? latest.memory_enabled,
+                context_model: fullSettings.context_model ?? latest.context_model,
+                context_turns: fullSettings.context_turns ?? latest.context_turns,
+                // Other settings this page may toggle in the future can be added here explicitly.
+            };
+
             await invoke("save_settings", { settings: newSettings });
+            setFullSettings(newSettings);
             setStatus("Settings Saved!");
             setTimeout(() => setStatus(""), 2000);
         } catch (e: any) {
@@ -482,7 +502,7 @@ export default function SettingsPage() {
     };
 
     return (
-        <div className="p-6 bg-[var(--color-bg-primary)] h-full text-[var(--color-text-primary)] overflow-auto font-sans relative">
+        <div className="p-6 bg-[var(--color-bg-primary)] h-full text-[var(--color-text-primary)] overflow-auto relative">
             {/* Status Banner */}
             {status && (
                 <div className={`mb-6 p-4 rounded-lg flex items-center gap-2 border ${status.includes("Error") || status.includes("Warning") || status.includes("Failed")
