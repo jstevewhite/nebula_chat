@@ -160,7 +160,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         content: string;
         reasoning: string;
         lastUpdate: number;
-        pendingFlush: number | null;
+        pendingFlush: ReturnType<typeof setTimeout> | null;
     }>({
         content: "",
         reasoning: "",
@@ -981,7 +981,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
     return (
         <div
-            className="flex flex-col h-full bg-[var(--color-bg-primary)] text-[var(--color-text-primary)] font-sans relative"
+            className="flex flex-col h-full bg-[var(--color-bg-primary)] text-[var(--color-text-primary)] relative"
         >
             {isDragging && (
                 <div className="absolute inset-0 z-50 bg-blue-600/20 backdrop-blur-sm border-4 border-blue-500 border-dashed m-4 rounded-xl flex items-center justify-center animate-pulse pointer-events-none">
@@ -1240,7 +1240,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             }
 
             <div
-                className="flex-1 overflow-y-auto p-4 space-y-6 min-h-0"
+                className="flex-1 overflow-y-auto p-4 space-y-6 min-h-0 font-chat"
                 ref={scrollRef}
                 onScroll={handleScroll}
             >
@@ -1329,7 +1329,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                     </label>
 
                     <textarea
-                        className="flex-1 bg-[var(--color-bg-tertiary)] border border-[var(--color-border-secondary)] rounded-xl p-3 text-[var(--color-text-primary)] placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all resize-none min-h-[46px] max-h-[200px]"
+                        className="flex-1 bg-[var(--color-bg-tertiary)] border border-[var(--color-border-secondary)] rounded-xl p-3 text-[var(--color-text-primary)] placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all resize-none min-h-[46px] max-h-[200px] font-chat"
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
                         onKeyDown={(e) => {
@@ -1595,7 +1595,7 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
                                     </pre>
                                 ) : (
                                     (cleanContent || (m.role === "tool" && displayContent)) && (
-                                        <div className={`prose max-w-none prose-p:leading-relaxed prose-pre:bg-[var(--color-bg-tertiary)] prose-pre:rounded-lg prose-pre:border prose-pre:border-[var(--color-border-primary)]`}>
+                                        <div className={`prose font-chat max-w-none prose-p:leading-relaxed prose-pre:bg-[var(--color-bg-tertiary)] prose-pre:rounded-lg prose-pre:border prose-pre:border-[var(--color-border-primary)]`}>
                                             <ReactMarkdown
                                                 remarkPlugins={[remarkGfm, remarkMath]}
                                                 rehypePlugins={[rehypeKatex]}

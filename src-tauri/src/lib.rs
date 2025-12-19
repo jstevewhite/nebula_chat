@@ -2159,6 +2159,7 @@ async fn save_system_prompt(
     name: String,
     content: String,
 ) -> Result<(), String> {
+    tracing::info!("save_system_prompt called: id={:?}, name={}", id, name);
     let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     let settings_path = config_dir.join("settings.json");
     let mut settings = Settings::load_migrated(&settings_path);
@@ -2166,17 +2167,26 @@ async fn save_system_prompt(
     let new_id = id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let new_prompt = crate::mcp::config::SystemPrompt {
         id: new_id.clone(),
-        name,
-        content,
+        name: name.clone(),
+        content: content.clone(),
     };
 
     if let Some(idx) = settings.system_prompts.iter().position(|p| p.id == new_id) {
+        tracing::info!("Updating existing prompt at index {}", idx);
         settings.system_prompts[idx] = new_prompt;
     } else {
+        tracing::info!("Adding new prompt with id {}", new_id);
         settings.system_prompts.push(new_prompt);
     }
 
-    settings.save(&settings_path).map_err(|e| e.to_string())
+    tracing::info!("Total prompts: {}", settings.system_prompts.len());
+    let result = settings.save(&settings_path).map_err(|e| e.to_string());
+    if result.is_ok() {
+        tracing::info!("Successfully saved settings to {:?}", settings_path);
+    } else {
+        tracing::error!("Failed to save settings: {:?}", result);
+    }
+    result
 }
 
 #[tauri::command]

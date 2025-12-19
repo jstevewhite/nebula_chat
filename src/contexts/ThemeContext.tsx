@@ -11,10 +11,12 @@ export interface FontSettings {
 }
 
 const defaultFontSettings: FontSettings = {
-  interface_font: 'Inter',
+  // IMPORTANT: include fallbacks. If the primary font isn't installed (e.g., Inter on macOS),
+  // a bare "Inter" can fall back to the browser default (often serif).
+  interface_font: 'Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
   interface_font_size: 14,
   interface_font_weight: '400',
-  chat_font: 'Inter',
+  chat_font: 'Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
   chat_font_size: 14,
   chat_font_weight: '400',
 };
@@ -40,14 +42,36 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     root.setAttribute('data-theme', currentTheme);
   }, []);
 
+  const SANS_FALLBACK = 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+  const MONO_FALLBACK = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+
+  const normalizeFontFamily = (fontFamily: string, fallback: string) => {
+    const v = (fontFamily || '').trim();
+    if (!v) return fallback;
+
+    // If it already contains a stack, assume it is intentional.
+    if (v.includes(',')) return v;
+
+    // Otherwise, treat it as a single family name and append a safe fallback stack.
+    return `${v}, ${fallback}`;
+  };
+
   // Function to apply font settings to document
   const updateFonts = useCallback((fonts: FontSettings) => {
     const root = document.documentElement;
-    root.style.setProperty('--font-interface', fonts.interface_font);
+
+    // Use a mono fallback if the selected family clearly intends monospace.
+    const interfaceFont = normalizeFontFamily(fonts.interface_font, SANS_FALLBACK);
+    const chatFallback = (fonts.chat_font || '').toLowerCase().includes('mono')
+      ? MONO_FALLBACK
+      : SANS_FALLBACK;
+    const chatFont = normalizeFontFamily(fonts.chat_font, chatFallback);
+
+    root.style.setProperty('--font-interface', interfaceFont);
     root.style.setProperty('--size-interface', `${fonts.interface_font_size}px`);
     root.style.setProperty('--weight-interface', fonts.interface_font_weight);
 
-    root.style.setProperty('--font-chat', fonts.chat_font);
+    root.style.setProperty('--font-chat', chatFont);
     root.style.setProperty('--size-chat', `${fonts.chat_font_size}px`);
     root.style.setProperty('--weight-chat', fonts.chat_font_weight);
   }, []);
