@@ -43,6 +43,30 @@ option {
   color: var(--color-text-primary);
 }
 
+/* Markdown Table Styles */
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  border: 1px solid var(--color-border-secondary);
+}
+
+.prose th,
+.prose td {
+  border: 1px solid var(--color-border-secondary);
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+}
+
+.prose th {
+  background-color: var(--color-bg-tertiary);
+  font-weight: 600;
+}
+
+.prose tr:nth-child(even) {
+  background-color: var(--color-bg-secondary);
+}
+
 /* Theme-aware button helpers */
 .btn-primary {
   background-color: var(--color-accent-primary);
