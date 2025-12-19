@@ -17,10 +17,12 @@ npm run tauri dev        # Run full Tauri app in dev mode (Rust + React)
 npm run tauri build      # Build production app
 ```
 
-**Linux + NVIDIA Note:** If WebView rendering fails, run:
-```bash
-WEBKIT_DISABLE_DMABUF_RENDERER=1 npm run tauri dev
-```
+**Linux Compatibility:**
+The application automatically sets required environment variables on Linux to fix:
+- IBus input/typing issues (`IBUS_ENABLE_SYNC_MODE`, `GTK_IM_MODULE`)
+- NVIDIA GPU rendering problems (`WEBKIT_DISABLE_DMABUF_RENDERER`)
+
+These fixes are built into the binary (see `lib.rs:2215`), so DEB/RPM/AppImage packages work out of the box.
 
 ### Rust Backend
 ```bash

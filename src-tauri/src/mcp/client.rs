@@ -89,6 +89,7 @@ struct SseTransport {
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value>>>>>,
     shutdown_flag: Arc<AtomicBool>,
     disconnected_flag: Arc<AtomicBool>,
+    is_streamable_http: bool, // true for StreamableHTTP (NDJSON), false for SSE
 }
 
 fn build_header_map(headers: &HashMap<String, String>) -> Result<HeaderMap> {
@@ -111,6 +112,7 @@ impl SseTransport {
         let pending = self.pending.clone();
         let session_id_str = session_id_val.clone(); // Keep for retries
         let shutdown_flag = self.shutdown_flag.clone();
+        let is_streamable_http = self.is_streamable_http;
 
         let mut handle_guard = self.sse_handle.lock().unwrap();
         if handle_guard.is_some() {
@@ -139,6 +141,7 @@ impl SseTransport {
                         if !response.status().is_success() {
                             tracing::error!("SSE connection failed: {}", response.status());
                         } else {
+                            tracing::info!("SSE connection established, reading event stream...");
                             // Reset backoff on successful connection
                             retry_delay = std::time::Duration::from_millis(500);
 
@@ -148,28 +151,56 @@ impl SseTransport {
                             loop {
                                 match event_source.next().await {
                                     Some(Ok(bytes)) => {
+                                        tracing::debug!("Received {} bytes from stream", bytes.len());
+                                        tracing::debug!("Raw bytes: {:?}", String::from_utf8_lossy(&bytes));
                                         buffer.extend_from_slice(&bytes);
 
-                                        // Process buffer for events delimited by \n\n
-                                        while let Some(idx) =
-                                            buffer.windows(2).position(|w| w == b"\n\n")
-                                        {
-                                            let event_bytes =
-                                                buffer.drain(0..idx + 2).collect::<Vec<u8>>();
-                                            let s = String::from_utf8_lossy(&event_bytes);
+                                        if is_streamable_http {
+                                            // StreamableHTTP: newline-delimited JSON
+                                            while let Some(idx) = buffer.iter().position(|&b| b == b'\n') {
+                                                let line_bytes = buffer.drain(0..=idx).collect::<Vec<u8>>();
+                                                let line = String::from_utf8_lossy(&line_bytes);
+                                                let line = line.trim();
 
-                                            // Naive parser for "data: " lines within the chunk
-                                            for line in s.lines() {
-                                                if line.starts_with("data: ") {
-                                                    let data = &line[6..];
-                                                    // Handle [DONE] or other messages if relevant, mostly JSON
-                                                    if let Ok(resp) =
-                                                        serde_json::from_str::<JsonRpcResponse>(
-                                                            data,
-                                                        )
-                                                    {
-                                                        McpClient::handle_response(resp, &pending)
-                                                            .await;
+                                                if !line.is_empty() {
+                                                    tracing::debug!("StreamableHTTP line: {}", line);
+                                                    if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(line) {
+                                                        tracing::info!("Received JSON-RPC response: id={:?}, has_result={}, has_error={}",
+                                                            resp.id, resp.result.is_some(), resp.error.is_some());
+                                                        McpClient::handle_response(resp, &pending).await;
+                                                    } else {
+                                                        tracing::warn!("Failed to parse StreamableHTTP line as JSON-RPC: {}", line);
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            // SSE format: Process buffer for events delimited by \n\n
+                                            while let Some(idx) =
+                                                buffer.windows(2).position(|w| w == b"\n\n")
+                                            {
+                                                let event_bytes =
+                                                    buffer.drain(0..idx + 2).collect::<Vec<u8>>();
+                                                let s = String::from_utf8_lossy(&event_bytes);
+
+                                                // Naive parser for "data: " lines within the chunk
+                                                for line in s.lines() {
+                                                    tracing::debug!("SSE line received: {}", line);
+                                                    if line.starts_with("data: ") {
+                                                        let data = &line[6..];
+                                                        tracing::debug!("SSE data payload: {}", data);
+                                                        // Handle [DONE] or other messages if relevant, mostly JSON
+                                                        if let Ok(resp) =
+                                                            serde_json::from_str::<JsonRpcResponse>(
+                                                                data,
+                                                            )
+                                                        {
+                                                            tracing::info!("Received JSON-RPC response: id={:?}, has_result={}, has_error={}",
+                                                                resp.id, resp.result.is_some(), resp.error.is_some());
+                                                            McpClient::handle_response(resp, &pending)
+                                                                .await;
+                                                        } else {
+                                                            tracing::warn!("Failed to parse SSE data as JSON-RPC: {}", data);
+                                                        }
                                                     }
                                                 }
                                             }
@@ -204,6 +235,7 @@ impl SseTransport {
 #[async_trait::async_trait]
 impl Transport for SseTransport {
     async fn send(&self, req: JsonRpcRequest) -> Result<()> {
+        tracing::debug!("Sending JSON-RPC request: method={}, id={:?}", req.method, req.id);
         let client = self.client.clone();
         let session_id_str = {
             let guard = self.session_id.lock().await;
@@ -226,22 +258,36 @@ impl Transport for SseTransport {
         if let Some(val) = response.headers().get("mcp-session-id") {
             if let Ok(s) = val.to_str() {
                 let new_sid = s.to_string();
+                tracing::info!("Received mcp-session-id: {}", new_sid);
                 let mut guard = self.session_id.lock().await;
                 if guard.as_ref() != Some(&new_sid) {
                     *guard = Some(new_sid.clone());
                     // Start/Restart SSE loop
+                    tracing::info!("Starting SSE loop with session ID: {}", new_sid);
                     self.start_sse_loop(new_sid);
                 }
             }
+        } else {
+            tracing::warn!("No mcp-session-id header in POST response from {}", self.url);
         }
 
         if response.status().is_success() {
             if let Some(ct) = response.headers().get("content-type") {
+                tracing::debug!("POST response content-type: {:?}", ct);
                 if ct.to_str().unwrap_or("").contains("application/json") {
-                    if let Ok(resp) = response.json::<JsonRpcResponse>().await {
+                    tracing::info!("POST response contains JSON, parsing...");
+                    let body_text = response.text().await.unwrap_or_default();
+                    tracing::info!("POST response body: {}", body_text);
+                    if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&body_text) {
+                        tracing::info!("Received JSON-RPC response in POST: id={:?}", resp.id);
                         McpClient::handle_response(resp, &self.pending).await;
+                    } else {
+                        tracing::warn!("Failed to parse POST response as JSON-RPC. Body: {}",
+                            if body_text.len() > 200 { &body_text[..200] } else { &body_text });
                     }
                 }
+            } else {
+                tracing::debug!("POST response has no content-type header");
             }
         }
         Ok(())
@@ -375,9 +421,30 @@ impl McpClient {
                     headers,
                     session_id,
                     sse_handle,
+                    pending: pending_clone.clone(),
+                    shutdown_flag,
+                    disconnected_flag,
+                    is_streamable_http: false,
+                })
+            }
+            McpTransport::StreamableHttp { url, headers } => {
+                let client = HttpClient::new();
+                let headers = build_header_map(headers)?;
+                let session_id = Arc::new(Mutex::new(None));
+                let sse_handle = Arc::new(std::sync::Mutex::new(None));
+                let shutdown_flag = Arc::new(AtomicBool::new(false));
+                let disconnected_flag = Arc::new(AtomicBool::new(false));
+
+                Arc::new(SseTransport {
+                    url: url.clone(),
+                    client,
+                    headers,
+                    session_id,
+                    sse_handle,
                     pending: pending_clone,
                     shutdown_flag,
                     disconnected_flag,
+                    is_streamable_http: true,
                 })
             }
         };

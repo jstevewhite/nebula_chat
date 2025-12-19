@@ -69,7 +69,7 @@ export default function SettingsPage() {
 
     // Form State
     const [name, setName] = useState("");
-    const [transportType, setTransportType] = useState<"stdio" | "sse">("stdio");
+    const [transportType, setTransportType] = useState<"stdio" | "sse" | "streamable-http">("stdio");
     const [command, setCommand] = useState("");
     const [args, setArgs] = useState("");
     const [envText, setEnvText] = useState("");
@@ -211,8 +211,8 @@ export default function SettingsPage() {
         setName(serverName);
 
         // Flattened config checks
-        if (config.type === "Sse") {
-            setTransportType("sse");
+        if (config.type === "Sse" || config.type === "StreamableHttp") {
+            setTransportType(config.type === "Sse" ? "sse" : "streamable-http");
             setUrl(config.url || "");
 
             const headersObj = (config.headers || {}) as Record<string, string>;
@@ -377,7 +377,7 @@ export default function SettingsPage() {
                     return;
                 }
 
-                newConfig.type = "Sse";
+                newConfig.type = transportType === "sse" ? "Sse" : "StreamableHttp";
                 newConfig.url = url;
                 newConfig.headers = parsedHeaders.headers;
             }
@@ -423,8 +423,8 @@ export default function SettingsPage() {
                     args: transportType === "stdio" ? argList : null,
                     env: transportType === "stdio" ? env : null,
 
-                    url: transportType === "sse" ? url : null,
-                    headers: transportType === "sse" ? headers : null,
+                    url: (transportType === "sse" || transportType === "streamable-http") ? url : null,
+                    headers: (transportType === "sse" || transportType === "streamable-http") ? headers : null,
                     auto_approve: autoApprove
                 });
             }
@@ -866,8 +866,8 @@ export default function SettingsPage() {
                             <div className="flex flex-col">
                                 <span className="font-mono font-bold text-[var(--color-text-primary)]">{s.name}</span>
                                 <span className="text-xs text-[var(--color-text-tertiary)]">
-                                    {s.config.type === 'Sse' ? 'SSE' : 'Stdio'}
-                                    {s.config.type === 'Sse' ? ` (${s.config.url})` : ` (${s.config.command})`}
+                                    {s.config.type === 'Sse' ? 'SSE' : s.config.type === 'StreamableHttp' ? 'Streamable HTTP' : 'Stdio'}
+                                    {s.config.type === 'Sse' || s.config.type === 'StreamableHttp' ? ` (${s.config.url})` : ` (${s.config.command})`}
                                 </span>
                             </div>
                         </div>
@@ -968,7 +968,13 @@ export default function SettingsPage() {
                                             onClick={() => setTransportType("sse")}
                                             className={`flex-1 py-2 rounded-lg text-sm font-bold border ${transportType === "sse" ? "btn-primary border-[var(--color-accent-primary)]" : "bg-[var(--color-bg-primary)] border-[var(--color-border-secondary)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)]"}`}
                                         >
-                                            SSE (Remote)
+                                            SSE
+                                        </button>
+                                        <button
+                                            onClick={() => setTransportType("streamable-http")}
+                                            className={`flex-1 py-2 rounded-lg text-sm font-bold border ${transportType === "streamable-http" ? "btn-primary border-[var(--color-accent-primary)]" : "bg-[var(--color-bg-primary)] border-[var(--color-border-secondary)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)]"}`}
+                                        >
+                                            Streamable HTTP
                                         </button>
                                     </div>
                                 </div>
@@ -1016,12 +1022,12 @@ export default function SettingsPage() {
                                 ) : (
                                     <>
                                         <div>
-                                            <label className="block text-xs font-bold text-[var(--color-text-tertiary)] uppercase tracking-wider mb-1">SSE URL</label>
+                                            <label className="block text-xs font-bold text-[var(--color-text-tertiary)] uppercase tracking-wider mb-1">Server URL</label>
                                             <input
                                                 className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded-lg p-3 text-sm font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
                                                 value={url}
                                                 onChange={e => setUrl(e.target.value)}
-                                                placeholder="http://localhost:3000/sse"
+                                                placeholder="http://localhost:9191/mcp"
                                             />
                                         </div>
 

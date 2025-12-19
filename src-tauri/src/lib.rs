@@ -245,7 +245,17 @@ async fn get_chat_history(
         .map_err(|e| e.to_string())?;
 
     let mut messages = Vec::new();
-    for (id, role, content, tool_calls_json, tool_call_id, reasoning_content, _created_at, attachments_json) in raw {
+    for (
+        id,
+        role,
+        content,
+        tool_calls_json,
+        tool_call_id,
+        reasoning_content,
+        _created_at,
+        attachments_json,
+    ) in raw
+    {
         let tool_calls = if let Some(json_str) = tool_calls_json {
             if !json_str.is_empty() {
                 serde_json::from_str(&json_str).ok()
@@ -652,31 +662,86 @@ async fn send_message(
             reasoning_effort,
         });
 
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let app_handle_for_stream = app_handle.clone();
         let stream_conversation_id = conversation_id.clone();
         let stream_request_id = request_id.clone();
-        let assistant_message_id = uuid::Uuid::new_v4().to_string(); // Generate ID for the assistant's response
-        let on_token = Box::new(move |content: crate::llm::provider::StreamContent| {
-            use tauri::Emitter;
-            tracing::debug!("🔊 Emitting stream chunk: {:?}", content);
-            // Emit stream chunk event with routing metadata
-            let (chunk_content, chunk_type_str) = match content {
-                crate::llm::provider::StreamContent::Text(s) => (s, "text".to_string()),
-                crate::llm::provider::StreamContent::Reasoning(s) => (s, "reasoning".to_string()),
-            };
 
-            let _ = app_handle_for_stream.emit(
-                "stream-chunk",
-                StreamChunkEvent {
-                    request_id: stream_request_id.clone(),
-                    conversation_id: stream_conversation_id.clone(),
-                    chunk: chunk_content,
-                    chunk_type: chunk_type_str,
-                },
-            );
+        // Aggregator task: Buffers tokens and emits events every 20ms to avoid flooding the IPC/event loop
+        let aggregator_handle = tauri::async_runtime::spawn(async move {
+            use tauri::Emitter;
+            let mut text_buf = String::new();
+            let mut reason_buf = String::new();
+            let mut last_emit = std::time::Instant::now();
+            let throttle = std::time::Duration::from_millis(20);
+
+            while let Some(content) = rx.recv().await {
+                match content {
+                    crate::llm::provider::StreamContent::Text(s) => text_buf.push_str(&s),
+                    crate::llm::provider::StreamContent::Reasoning(s) => reason_buf.push_str(&s),
+                }
+
+                if last_emit.elapsed() >= throttle {
+                    if !text_buf.is_empty() {
+                        let _ = app_handle_for_stream.emit(
+                            "stream-chunk",
+                            StreamChunkEvent {
+                                request_id: stream_request_id.clone(),
+                                conversation_id: stream_conversation_id.clone(),
+                                chunk: text_buf.clone(),
+                                chunk_type: "text".to_string(),
+                            },
+                        );
+                        text_buf.clear();
+                    }
+                    if !reason_buf.is_empty() {
+                        let _ = app_handle_for_stream.emit(
+                            "stream-chunk",
+                            StreamChunkEvent {
+                                request_id: stream_request_id.clone(),
+                                conversation_id: stream_conversation_id.clone(),
+                                chunk: reason_buf.clone(),
+                                chunk_type: "reasoning".to_string(),
+                            },
+                        );
+                        reason_buf.clear();
+                    }
+                    last_emit = std::time::Instant::now();
+                }
+            }
+
+            // Final flush
+            if !text_buf.is_empty() {
+                let _ = app_handle_for_stream.emit(
+                    "stream-chunk",
+                    StreamChunkEvent {
+                        request_id: stream_request_id.clone(),
+                        conversation_id: stream_conversation_id.clone(),
+                        chunk: text_buf,
+                        chunk_type: "text".to_string(),
+                    },
+                );
+            }
+            if !reason_buf.is_empty() {
+                let _ = app_handle_for_stream.emit(
+                    "stream-chunk",
+                    StreamChunkEvent {
+                        request_id: stream_request_id.clone(),
+                        conversation_id: stream_conversation_id.clone(),
+                        chunk: reason_buf,
+                        chunk_type: "reasoning".to_string(),
+                    },
+                );
+            }
         });
 
-        // Provider Execution
+        let assistant_message_id = uuid::Uuid::new_v4().to_string(); // Generate ID for the assistant's response
+        let on_token = Box::new(move |content: crate::llm::provider::StreamContent| {
+            let _ = tx.send(content);
+        });
+
+        let mut on_token_opt = Some(on_token);
+
         let response_result = match provider_config.provider_type {
             ProviderType::OpenAI | ProviderType::OpenAICompatible => {
                 let api_key = provider_config.api_key.clone().unwrap_or_default();
@@ -688,7 +753,12 @@ async fn send_message(
 
                 if effective_stream {
                     provider
-                        .stream(pruned_messages, tools, options, on_token)
+                        .stream(
+                            pruned_messages,
+                            tools,
+                            options,
+                            on_token_opt.take().unwrap(),
+                        )
                         .await
                 } else {
                     provider.chat(pruned_messages, tools, options).await
@@ -700,7 +770,12 @@ async fn send_message(
 
                 if effective_stream {
                     provider
-                        .stream(pruned_messages, tools, options, on_token)
+                        .stream(
+                            pruned_messages,
+                            tools,
+                            options,
+                            on_token_opt.take().unwrap(),
+                        )
                         .await
                 } else {
                     provider.chat(pruned_messages, tools, options).await
@@ -715,13 +790,22 @@ async fn send_message(
 
                 if effective_stream {
                     provider
-                        .stream(pruned_messages, tools, options, on_token)
+                        .stream(
+                            pruned_messages,
+                            tools,
+                            options,
+                            on_token_opt.take().unwrap(),
+                        )
                         .await
                 } else {
                     provider.chat(pruned_messages, tools, options).await
                 }
             }
         };
+
+        // Ensure all tokens are emitted by the aggregator before continuing
+        drop(on_token_opt); // Explicitly drop sender if it wasn't used to close the channel
+        let _ = aggregator_handle.await;
 
         let mut response = response_result.map_err(|e| e.to_string())?;
         response.id = Some(assistant_message_id.clone()); // Assign the generated ID
@@ -1409,7 +1493,7 @@ async fn add_mcp_server(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     name: String,
-    transport_type: String, // "stdio" or "sse"
+    transport_type: String, // "stdio", "sse", or "streamable-http"
     command: Option<String>,
     args: Option<Vec<String>>,
     env: Option<HashMap<String, String>>,
@@ -1427,6 +1511,10 @@ async fn add_mcp_server(
         },
         "sse" => McpTransport::Sse {
             url: url.ok_or("URL required for SSE")?,
+            headers: headers.unwrap_or_default(),
+        },
+        "streamable-http" => McpTransport::StreamableHttp {
+            url: url.ok_or("URL required for StreamableHttp")?,
             headers: headers.unwrap_or_default(),
         },
         _ => return Err("Invalid transport type".to_string()),
@@ -1592,7 +1680,17 @@ async fn export_conversation(
         .map_err(|e| e.to_string())?;
 
     let mut messages = Vec::new();
-    for (id, role, content, tool_calls_txt, tool_call_id, reasoning_content, _created, attachments_json) in raw_msgs {
+    for (
+        id,
+        role,
+        content,
+        tool_calls_txt,
+        tool_call_id,
+        reasoning_content,
+        _created,
+        attachments_json,
+    ) in raw_msgs
+    {
         let tool_calls = if let Some(json) = tool_calls_txt {
             if !json.is_empty() {
                 serde_json::from_str(&json).ok()
@@ -2118,6 +2216,15 @@ async fn get_active_mcp_servers(state: State<'_, AppState>) -> Result<Vec<String
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Set environment variables for Linux compatibility
+    // Fixes IBus input issues and NVIDIA rendering problems
+    #[cfg(target_os = "linux")]
+    {
+        std::env::set_var("IBUS_ENABLE_SYNC_MODE", "1");
+        std::env::set_var("GTK_IM_MODULE", "xim");
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+
     let mcp_manager = Arc::new(McpManager::new());
 
     tauri::Builder::default()
