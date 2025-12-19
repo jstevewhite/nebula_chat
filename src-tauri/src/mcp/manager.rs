@@ -84,6 +84,7 @@ impl McpManager {
         // Perform Handshake
         let init_params = Self::init_params();
 
+        tracing::info!("Sending initialize request to {}", name);
         match client.request("initialize", Some(init_params)).await {
             Ok(resp) => {
                 println!("Server {} initialized: {:?}", name, resp);

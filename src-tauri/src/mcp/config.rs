@@ -15,6 +15,11 @@ pub enum McpTransport {
         #[serde(default)]
         headers: HashMap<String, String>,
     },
+    StreamableHttp {
+        url: String,
+        #[serde(default)]
+        headers: HashMap<String, String>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
