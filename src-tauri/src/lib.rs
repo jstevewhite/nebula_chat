@@ -2233,6 +2233,11 @@ pub fn run() {
         std::env::set_var("IBUS_ENABLE_SYNC_MODE", "1");
         std::env::set_var("GTK_IM_MODULE", "xim");
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+
+        // Disable touch emulation to allow proper mouse/pointer events
+        // This fixes right-click and text selection on Linux
+        std::env::set_var("GDK_CORE_DEVICE_EVENTS", "1");
+        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
     }
 
     let mcp_manager = Arc::new(McpManager::new());

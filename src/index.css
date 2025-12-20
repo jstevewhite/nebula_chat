@@ -79,3 +79,33 @@ option {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* Enable immediate text selection without delay */
+* {
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-user-drag: none;
+  -webkit-touch-callout: default;
+  touch-action: auto;
+}
+
+/* Disable text selection for UI elements */
+button,
+input[type="button"],
+input[type="submit"],
+input[type="checkbox"],
+input[type="radio"],
+.select-none {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Ensure body and html allow text selection */
+html,
+body,
+#root {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  -webkit-user-drag: none !important;
+  touch-action: auto !important;
+}
