@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, memo, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check, Pin, FileText, Book, Paperclip, X, Brain, Square, Sliders, Download, Eye, EyeOff, ChevronRight, ChevronDown } from "lucide-react";
@@ -589,10 +589,15 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         }
     };
 
-
     const removeAttachment = (index: number) => {
         setAttachments(prev => prev.filter((_, i) => i !== index));
     };
+
+    const runToolsRef = useRef<any>(null);
+    const sendMessageRef = useRef<any>(null);
+
+    const stableRunTools = useCallback((...args: any[]) => runToolsRef.current?.(...args), []);
+    const stableSendMessage = useCallback((...args: any[]) => sendMessageRef.current?.(...args), []);
 
     const runTools = async (tools: { name: string, args: any, callId: string }[], baseHistory: Message[]) => {
         setLoading(true);
@@ -600,39 +605,35 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
         for (const tool of tools) {
             try {
-                const result = await invoke("execute_tool", {
+                const result = await invoke<any>("execute_tool", {
                     name: tool.name,
                     args: tool.args,
-                    conversationId: conversationId,
-                    toolCallId: tool.callId
+                    conversationId,
+                    toolCallId: tool.callId,
                 });
 
-                const toolMsg: Message = {
+                currentHistory = [...currentHistory, {
                     role: "tool",
-                    content: JSON.stringify(result),
+                    content: typeof result === 'string' ? result : JSON.stringify(result),
                     tool_call_id: tool.callId
-                };
-                currentHistory.push(toolMsg);
-                setMessages([...currentHistory]); // Update UI sequentially
-            } catch (e: any) {
-                console.error(e);
-                const errStr = String(e);
-                setErrorMsg("Tool Execution Failed: " + errStr);
-
-                // Add error message to history
-                const errorMsg: Message = {
+                }];
+                setMessages([...currentHistory]);
+            } catch (e) {
+                console.error("Tool execution failed", e);
+                currentHistory = [...currentHistory, {
                     role: "tool",
-                    content: JSON.stringify({ error: errStr }),
+                    content: `Error: ${e}`,
                     tool_call_id: tool.callId
-                };
-                currentHistory.push(errorMsg);
+                }];
                 setMessages([...currentHistory]);
             }
         }
 
         // Continue conversation after ALL tools have run
-        await sendMessage(currentHistory);
+        await stableSendMessage(currentHistory);
     };
+
+    runToolsRef.current = runTools;
 
     const sendMessage = async (currentHistory: Message[]) => {
         setLoading(true);
@@ -810,7 +811,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                             // Execute immediately
                             // We need to pass the FULL history including the assistant's tool call message
                             // The assistant message is 'response'.
-                            runTools(toolsToRun, [...currentHistory, response]);
+                            stableRunTools(toolsToRun, [...currentHistory, response]);
                         } else {
                             setPendingTools(toolsToRun);
                             setLoading(false); // Paused for user interaction
@@ -857,7 +858,9 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         }
     };
 
-    const handleStop = async () => {
+    sendMessageRef.current = sendMessage;
+
+    const handleStop = useCallback(async () => {
         try {
             await invoke("stop_generation");
             activeStreamRef.current = null;
@@ -865,9 +868,9 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         } catch (e) {
             console.error("Failed to stop generation", e);
         }
-    };
+    }, []);
 
-    const handleSend = async () => {
+    const handleSend = useCallback(async () => {
         console.log("Triggering handleSend...");
         if (!input.trim() && attachments.length === 0) {
             console.log("Empty input and no attachments, blocking send.");
@@ -891,16 +894,14 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         setMessages(newHistory);
         setInput("");
         setAttachments([]); // Clear attachments after sending
-        await sendMessage(newHistory);
-    };
-
-
+        await stableSendMessage(newHistory);
+    }, [input, attachments, messages, stableSendMessage]);
 
     const handleApproveAllTools = async () => {
         if (pendingTools.length === 0) return;
         const tools = [...pendingTools];
         setPendingTools([]);
-        await runTools(tools, messages);
+        await stableRunTools(tools, messages);
     };
 
     const handleDenyAllTools = () => {
@@ -908,11 +909,11 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         setLoading(false);
     };
 
-    const handleCopy = (text: string) => {
+    const handleCopy = useCallback((text: string) => {
         navigator.clipboard.writeText(text);
-    };
+    }, []);
 
-    const handleDelete = async (index: number, id?: string) => {
+    const handleDelete = useCallback(async (index: number, id?: string) => {
         if (id) {
             try {
                 await invoke("delete_message", { messageId: id });
@@ -920,28 +921,32 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 console.error("Failed to delete message", e);
             }
         }
-        const newMsgs = [...messages];
-        newMsgs.splice(index, 1);
-        setMessages(newMsgs);
-    };
+        setMessages(prev => {
+            const newMsgs = [...prev];
+            newMsgs.splice(index, 1);
+            return newMsgs;
+        });
+    }, []);
 
-    const handleRegenerate = async (index: number, id?: string) => {
+    const handleRegenerate = useCallback(async (index: number, id?: string) => {
         // 1. Delete the assistant message
         await handleDelete(index, id);
 
         // 2. Capture history up to the point before this message
         // The last message in this slice should be the User message we want to re-run
         // NOTE: We assume the existing history is correct.
-        const historyToReplay = messages.slice(0, index);
+        setMessages(prev => {
+            const historyToReplay = prev.slice(0, index);
+            // 3. Trigger send
+            stableSendMessage(historyToReplay);
+            return prev;
+        });
+    }, [handleDelete, stableSendMessage]);
 
-        // 3. Trigger send
-        await sendMessage(historyToReplay);
-    };
-
-    const handleEdit = (content: string) => {
+    const handleEdit = useCallback((content: string) => {
         setInput(content);
         // Optionally focus input?
-    };
+    }, []);
 
     const handleExport = async (format: "json" | "md") => {
         console.log("Handle export clicked", format, conversationId);
@@ -1452,7 +1457,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
 
 
-function ThinkingBlock({ content }: { content: string }) {
+const ThinkingBlock = memo(({ content }: { content: string }) => {
     const [collapsed, setCollapsed] = useState(true);
 
     return (
@@ -1471,9 +1476,9 @@ function ThinkingBlock({ content }: { content: string }) {
             )}
         </div>
     );
-}
+});
 
-function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegenerate }: any) {
+const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRegenerate }: any) => {
     const [isExpanded, setIsExpanded] = useState(m.role !== "tool");
     const [showRaw, setShowRaw] = useState(false);
     const [showToolArgs, setShowToolArgs] = useState(false);
@@ -1734,4 +1739,4 @@ function ChatMessage({ message: m, index: i, onCopy, onEdit, onDelete, onRegener
             </div>
         </div>
     );
-}
+});
