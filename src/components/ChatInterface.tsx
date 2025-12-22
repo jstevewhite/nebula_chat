@@ -1708,7 +1708,7 @@ const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRe
                     )}
 
                     {/* Action Bar (Below message) */}
-                    <div className="flex gap-2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 select-none">
+                    <div className="flex gap-2 mt-1 select-none">
                         <button
                             onClick={() => setShowRaw(!showRaw)}
                             className={`p-1 text-[var(--color-text-tertiary)] hover:text-blue-400 transition-colors ${showRaw ? "text-blue-400" : ""}`}
