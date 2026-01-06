@@ -285,7 +285,13 @@ impl Transport for SseTransport {
                 }
             }
         } else {
-            tracing::warn!("No mcp-session-id header in POST response from {}", self.url);
+            // Only warn for traditional SSE transports that require session IDs
+            // StreamableHTTP transports can work without session IDs
+            if !self.is_streamable_http {
+                tracing::warn!("No mcp-session-id header in POST response from {}", self.url);
+            } else {
+                tracing::debug!("StreamableHTTP transport - no session ID required");
+            }
         }
 
         if response.status().is_success() {
@@ -353,8 +359,14 @@ impl Transport for SseTransport {
     }
 
     fn is_connected(&self) -> bool {
-        let guard = self.sse_handle.lock().unwrap();
-        guard.is_some() && !self.disconnected_flag.load(Ordering::Relaxed)
+        // StreamableHTTP can work via POST request/response without SSE loop
+        // Traditional SSE requires an active SSE connection
+        if self.is_streamable_http {
+            !self.disconnected_flag.load(Ordering::Relaxed)
+        } else {
+            let guard = self.sse_handle.lock().unwrap();
+            guard.is_some() && !self.disconnected_flag.load(Ordering::Relaxed)
+        }
     }
 
     fn stop(&self) {
@@ -393,6 +405,7 @@ impl McpClient {
 
         let transport: Arc<dyn Transport> = match config {
             McpTransport::Stdio { command, args, env } => {
+                tracing::info!("Starting stdio transport: command={}, args={:?}", command, args);
                 let mut cmd = Command::new(command);
                 cmd.args(args);
                 cmd.envs(env);
@@ -402,7 +415,9 @@ impl McpClient {
 
                 let mut child = cmd
                     .spawn()
-                    .context(format!("Failed to spawn command: {}", command))?;
+                    .context(format!("Failed to spawn command: {} with args {:?}", command, args))?;
+                
+                tracing::info!("Process spawned successfully for command: {}", command);
 
                 let mut stdin = child.stdin.take().context("Failed to open stdin")?;
                 let stdout = child.stdout.take().context("Failed to open stdout")?;
@@ -416,14 +431,23 @@ impl McpClient {
                 tokio::spawn(async move {
                     while let Some(req) = rx.recv().await {
                         if let Ok(json) = serde_json::to_string(&req) {
+                            tracing::debug!("Sending to stdio: {}", json);
                             if stdin.write_all(json.as_bytes()).await.is_err() {
+                                tracing::error!("Failed to write request to stdin");
                                 break;
                             }
                             if stdin.write_all(b"\n").await.is_err() {
+                                tracing::error!("Failed to write newline to stdin");
+                                break;
+                            }
+                            // CRITICAL: Flush the stdin buffer to ensure the command receives the data
+                            if stdin.flush().await.is_err() {
+                                tracing::error!("Failed to flush stdin");
                                 break;
                             }
                         }
                     }
+                    tracing::info!("Writer loop terminated");
                 });
 
                 // Reader Loop
@@ -432,10 +456,14 @@ impl McpClient {
                     let reader = BufReader::new(stdout);
                     let mut lines = reader.lines();
                     while let Ok(Some(line)) = lines.next_line().await {
+                        tracing::debug!("Received from stdio: {}", line);
                         if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&line) {
                             Self::handle_response(resp, &pending_monitor).await;
+                        } else {
+                            tracing::warn!("Failed to parse JSON-RPC response from stdio: {}", line);
                         }
                     }
+                    tracing::info!("Reader loop terminated");
                 });
 
                 // Stderr Loop
@@ -444,20 +472,33 @@ impl McpClient {
                     let reader = BufReader::new(stderr);
                     let mut lines = reader.lines();
                     while let Ok(Some(line)) = lines.next_line().await {
+                        // Log stderr to help debug server issues
+                        tracing::debug!("MCP server stderr: {}", line);
                         let mut log = stderr_log_clone.lock().await;
                         if log.len() >= 100 {
                             log.remove(0);
                         } // Keep last 100 lines
                         log.push(line);
                     }
+                    tracing::info!("Stderr loop terminated");
                 });
 
                 // Exit Monitor
                 let status_clone = status.clone();
+                let command_name = command.clone();
                 tokio::spawn(async move {
-                    let _ = child.wait().await;
-                    let mut s = status_clone.lock().await;
-                    *s = TransportStatus::Disconnected("Process exited".to_string());
+                    match child.wait().await {
+                        Ok(status) => {
+                            tracing::warn!("MCP server process exited: command={}, status={:?}", command_name, status);
+                            let mut s = status_clone.lock().await;
+                            *s = TransportStatus::Disconnected(format!("Process exited with status: {:?}", status));
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to wait for MCP server process: {}", e);
+                            let mut s = status_clone.lock().await;
+                            *s = TransportStatus::Disconnected(format!("Wait error: {}", e));
+                        }
+                    }
                 });
 
                 Arc::new(StdioTransport {
