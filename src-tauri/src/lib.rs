@@ -385,29 +385,32 @@ async fn send_message(
                         }
                     }
 
-                    // Save full message
-                    if last.role == "user" {
-                        if let Err(e) = lib.save_full_message_returning_id(
-                            conv_id,
-                            &last.role,
-                            last.content.as_deref(),
-                            tool_calls_json.as_deref(),
-                            last.tool_call_id.as_deref(),
-                            None, // reasoning_content (users don't have reasoning)
-                            last.attachments.as_deref(),
-                        ) {
-                            tracing::error!("Failed to save user message for facts: {}", e);
+                    // Save full message (only if not already saved - check for existing ID)
+                    // When regenerating, messages already have IDs and shouldn't be saved again
+                    if last.id.is_none() {
+                        if last.role == "user" {
+                            if let Err(e) = lib.save_full_message_returning_id(
+                                conv_id,
+                                &last.role,
+                                last.content.as_deref(),
+                                tool_calls_json.as_deref(),
+                                last.tool_call_id.as_deref(),
+                                None, // reasoning_content (users don't have reasoning)
+                                last.attachments.as_deref(),
+                            ) {
+                                tracing::error!("Failed to save user message for facts: {}", e);
+                            }
+                        } else {
+                            let _ = lib.save_full_message(
+                                conv_id,
+                                &last.role,
+                                last.content.as_deref(),
+                                tool_calls_json.as_deref(),
+                                last.tool_call_id.as_deref(),
+                                None, // reasoning_content (tool messages don't have reasoning)
+                                last.attachments.as_deref(),
+                            );
                         }
-                    } else {
-                        let _ = lib.save_full_message(
-                            conv_id,
-                            &last.role,
-                            last.content.as_deref(),
-                            tool_calls_json.as_deref(),
-                            last.tool_call_id.as_deref(),
-                            None, // reasoning_content (tool messages don't have reasoning)
-                            last.attachments.as_deref(),
-                        );
                     }
                 }
             }
