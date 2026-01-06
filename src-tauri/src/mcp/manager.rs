@@ -79,7 +79,9 @@ impl McpManager {
 
     async fn start_client(&self, name: &str, config: &McpServerConfig) -> Result<McpClient> {
         // Create Client
+        tracing::info!("Creating MCP client for {}: {:?}", name, config.transport);
         let client = McpClient::new(&config.transport).await?;
+        tracing::info!("MCP client created successfully for {}", name);
 
         // Perform Handshake
         let init_params = Self::init_params();
@@ -87,12 +89,15 @@ impl McpManager {
         tracing::info!("Sending initialize request to {}", name);
         match client.request("initialize", Some(init_params)).await {
             Ok(resp) => {
+                tracing::info!("Server {} initialized: {:?}", name, resp);
                 println!("Server {} initialized: {:?}", name, resp);
                 if let Err(e) = client.notify("notifications/initialized", None).await {
+                    tracing::error!("Failed to send initialized notification to {}: {}", name, e);
                     eprintln!("Failed to send initialized notification to {}: {}", name, e);
                 }
             }
             Err(e) => {
+                tracing::error!("Failed to initialize handshake for {}: {}", name, e);
                 return Err(anyhow::anyhow!("Failed to initialize handshake: {}", e));
             }
         }
