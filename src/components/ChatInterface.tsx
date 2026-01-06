@@ -964,11 +964,15 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             }
         }
         
-        // Truncate the history first
+        // Truncate the history
         const historyToReplay = messages.slice(0, userMessageIndex + 1);
         
-        // Update UI state
+        // First update state to truncated history
         setMessages(historyToReplay);
+        
+        // Wait a tick for React to process the state update
+        // This ensures sendMessage's setMessages(prev => ...) works with correct prev
+        await new Promise(resolve => setTimeout(resolve, 0));
         
         // Then trigger send with the truncated history
         await stableSendMessage(historyToReplay);
