@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Plus, MessageSquare, Trash2, Search, Upload } from "lucide-react";
+import { Plus, MessageSquare, Trash2, Search, Upload, Minimize2 } from "lucide-react";
 
 interface Conversation {
     id: string;
@@ -39,6 +39,17 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
     const [hoveredId, setHoveredId] = useState<string | null>(null);
     const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null);
     const [error, setError] = useState<string | null>(null);
+
+    // Width & Compact Mode State
+    const [width, setWidth] = useState(() => {
+        const saved = localStorage.getItem("conversationListWidth");
+        return saved ? parseInt(saved) : 256;
+    });
+    const [isResizing, setIsResizing] = useState(false);
+    const [compactMode, setCompactMode] = useState(() => {
+        const saved = localStorage.getItem("conversationListCompact");
+        return saved === "true";
+    });
 
     const loadConversations = async () => {
         setLoading(true);
@@ -165,10 +176,43 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
         return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
     }
 
+    // Handle resize drag
+    useEffect(() => {
+        const handleMouseMove = (e: MouseEvent) => {
+            if (!isResizing) return;
+            const newWidth = Math.max(200, Math.min(500, e.clientX - 64)); // 64px for activity bar
+            setWidth(newWidth);
+            localStorage.setItem("conversationListWidth", newWidth.toString());
+        };
+
+        const handleMouseUp = () => {
+            setIsResizing(false);
+        };
+
+        if (isResizing) {
+            document.addEventListener("mousemove", handleMouseMove);
+            document.addEventListener("mouseup", handleMouseUp);
+        }
+
+        return () => {
+            document.removeEventListener("mousemove", handleMouseMove);
+            document.removeEventListener("mouseup", handleMouseUp);
+        };
+    }, [isResizing]);
+
+    const toggleCompactMode = () => {
+        const newCompact = !compactMode;
+        setCompactMode(newCompact);
+        localStorage.setItem("conversationListCompact", newCompact.toString());
+    };
+
     return (
-        <div className="w-64 bg-[var(--color-bg-secondary)] border-r border-[var(--color-border-primary)] flex flex-col h-full select-none">
+        <div 
+            className="bg-[var(--color-bg-secondary)] border-r border-[var(--color-border-primary)] flex flex-col h-full select-none relative"
+            style={{ width: `${width}px` }}
+        >
             <input type="file" ref={importRef} onChange={handleImport} className="hidden" accept=".json" />
-            <div className="p-4 border-b border-[var(--color-border-primary)] space-y-3">
+            <div className="p-4 border-b border-[var(--color-border-primary)] space-y-3 relative">
                 {error && (
                     <div className="text-xs bg-red-900/20 border border-red-700/40 text-red-200 rounded-lg px-3 py-2">
                         {error}
@@ -190,15 +234,28 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
                     </button>
                 </div>
 
-                <div className="relative">
-                    <Search className="absolute left-2.5 top-2.5 text-[var(--color-text-tertiary)] w-4 h-4" />
-                    <input
-                        type="text"
-                        placeholder="Search chats..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-primary)] rounded-lg py-2 pl-9 pr-3 text-sm text-gray-200 focus:outline-none focus:border-blue-500/50 transition-colors placeholder-gray-600"
-                    />
+                <div className="flex items-center gap-2">
+                    <div className="relative flex-1">
+                        <Search className="absolute left-2.5 top-2.5 text-[var(--color-text-tertiary)] w-4 h-4" />
+                        <input
+                            type="text"
+                            placeholder="Search chats..."
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-primary)] rounded-lg py-2 pl-9 pr-3 text-sm text-gray-200 focus:outline-none focus:border-blue-500/50 transition-colors placeholder-gray-600"
+                        />
+                    </div>
+                    <button
+                        onClick={toggleCompactMode}
+                        className={`p-2 rounded-lg transition-colors shrink-0 ${
+                            compactMode 
+                                ? 'bg-blue-500/20 text-blue-400 hover:bg-blue-500/30' 
+                                : 'bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)] hover:bg-gray-700 hover:text-[var(--color-text-primary)]'
+                        }`}
+                        title={compactMode ? "Compact Mode: On" : "Compact Mode: Off"}
+                    >
+                        <Minimize2 size={16} />
+                    </button>
                 </div>
             </div>
 
@@ -236,7 +293,9 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
                         onMouseEnter={() => setHoveredId(conv.id)}
                         onMouseLeave={() => setHoveredId(null)}
                         onClick={() => onSelect(conv.id)}
-                        className={`group relative w-full h-14 p-2.5 rounded-lg flex items-center gap-3 cursor-pointer transition-colors border border-transparent ${activeId === conv.id
+                        className={`group relative w-full p-2.5 rounded-lg flex items-center gap-3 cursor-pointer transition-colors border border-transparent ${
+                            compactMode ? 'h-auto' : 'h-14'
+                        } ${activeId === conv.id
                             ? "bg-[var(--color-bg-tertiary)] border-[var(--color-border-secondary)]/50 shadow-sm"
                             : "hover:bg-[var(--color-bg-tertiary)]/50"
                             }`}
@@ -259,7 +318,9 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
                                     <div className={`font-medium text-sm truncate ${activeId === conv.id ? "text-gray-100" : "text-[var(--color-text-secondary)] group-hover:text-gray-200"}`}>
                                         {conv.title}
                                     </div>
-                                    <div className="text-[10px] text-gray-600 truncate mt-0.5">{formatDate(conv.created_at)}</div>
+                                    {!compactMode && (
+                                        <div className="text-[10px] text-gray-600 truncate mt-0.5">{formatDate(conv.created_at)}</div>
+                                    )}
                                 </>
                             )}
                         </div>
@@ -327,6 +388,17 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
                     </div>
                 </div>
             )}
+
+            {/* Resize Handle */}
+            <div
+                className={`absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-blue-500/50 transition-colors ${
+                    isResizing ? 'bg-blue-500' : ''
+                }`}
+                onMouseDown={(e) => {
+                    e.preventDefault();
+                    setIsResizing(true);
+                }}
+            />
         </div>
     );
 }
