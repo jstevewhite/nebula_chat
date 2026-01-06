@@ -116,6 +116,13 @@ async fn delete_message(state: State<'_, AppState>, message_id: String) -> Resul
 }
 
 #[tauri::command]
+async fn delete_messages(state: State<'_, AppState>, message_ids: Vec<String>) -> Result<(), String> {
+    let lib = state.librarian.lock().await;
+    lib.delete_messages(&message_ids)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn rename_conversation(
     state: State<'_, AppState>,
     conversation_id: String,
@@ -2300,6 +2307,7 @@ pub fn run() {
             delete_conversation,
             rename_conversation,
             delete_message,
+            delete_messages,
             generate_title,
             get_chat_history,
             send_message,

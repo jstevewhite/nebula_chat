@@ -928,20 +928,51 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         });
     }, []);
 
-    const handleRegenerate = useCallback(async (index: number, id?: string) => {
-        // 1. Delete the assistant message
-        await handleDelete(index, id);
-
-        // 2. Capture history up to the point before this message
-        // The last message in this slice should be the User message we want to re-run
-        // NOTE: We assume the existing history is correct.
-        setMessages(prev => {
-            const historyToReplay = prev.slice(0, index);
-            // 3. Trigger send
-            stableSendMessage(historyToReplay);
-            return prev;
-        });
-    }, [handleDelete, stableSendMessage]);
+    const handleRegenerate = useCallback(async (index: number, role: "user" | "assistant") => {
+        // For both user and assistant messages, we want to:
+        // 1. Find the user message to resubmit from
+        // 2. Delete all messages after that user message
+        // 3. Resubmit from that user message
+        
+        let userMessageIndex = index;
+        
+        // If this is an assistant message, find the user message before it
+        if (role === "assistant") {
+            userMessageIndex = index - 1;
+            // Find the last user message before this assistant message
+            while (userMessageIndex >= 0 && messages[userMessageIndex].role !== "user") {
+                userMessageIndex--;
+            }
+        }
+        
+        if (userMessageIndex < 0) {
+            console.error("No user message found to regenerate from");
+            return;
+        }
+        
+        // Get all message IDs after the user message to delete
+        const messagesToDelete = messages.slice(userMessageIndex + 1)
+            .filter(m => m.id)
+            .map(m => m.id!);
+        
+        // Delete messages from backend if they have IDs
+        if (messagesToDelete.length > 0) {
+            try {
+                await invoke("delete_messages", { messageIds: messagesToDelete });
+            } catch (e) {
+                console.error("Failed to delete messages", e);
+            }
+        }
+        
+        // Truncate the history first
+        const historyToReplay = messages.slice(0, userMessageIndex + 1);
+        
+        // Update UI state
+        setMessages(historyToReplay);
+        
+        // Then trigger send with the truncated history
+        await stableSendMessage(historyToReplay);
+    }, [messages, stableSendMessage]);
 
     const handleEdit = useCallback((content: string) => {
         setInput(content);
@@ -1729,8 +1760,8 @@ const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRe
                                 <Trash2 size={14} />
                             </button>
                         )}
-                        {m.role === "assistant" && (
-                            <button onClick={() => onRegenerate(i, m.id)} className="p-1 text-[var(--color-text-tertiary)] hover:text-green-400 transition-colors" title="Regenerate">
+                        {(m.role === "assistant" || m.role === "user") && (
+                            <button onClick={() => onRegenerate(i, m.role)} className="p-1 text-[var(--color-text-tertiary)] hover:text-green-400 transition-colors" title="Regenerate">
                                 <RefreshCw size={14} />
                             </button>
                         )}
