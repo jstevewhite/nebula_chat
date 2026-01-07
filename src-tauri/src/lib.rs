@@ -75,6 +75,7 @@ struct StreamChunkEvent {
 struct Conversation {
     id: String,
     title: String,
+    icon: Option<String>,
     created_at: String,
 }
 
@@ -84,9 +85,10 @@ async fn list_conversations(state: State<'_, AppState>) -> Result<Vec<Conversati
     let list = lib.list_conversations().map_err(|e| e.to_string())?;
     Ok(list
         .into_iter()
-        .map(|(id, title, created_at)| Conversation {
+        .map(|(id, title, icon, created_at)| Conversation {
             id,
             title,
+            icon,
             created_at,
         })
         .collect())
@@ -136,6 +138,35 @@ async fn rename_conversation(
 }
 
 #[tauri::command]
+async fn update_conversation_icon(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    conversation_id: String,
+    icon: Option<String>,
+) -> Result<(), String> {
+    let lib = state.librarian.lock().await;
+    lib.update_conversation_icon(&conversation_id, icon.as_deref())
+        .map_err(|e| e.to_string())?;
+    
+    use tauri::Emitter;
+    let _ = app.emit("conversations-updated", ());
+    
+    Ok(())
+}
+
+#[tauri::command]
+async fn regenerate_title_and_icon(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    conversation_id: String,
+    provider_id: String,
+    model: String,
+) -> Result<String, String> {
+    // This is essentially the same as generate_title, but we can make it explicit
+    generate_title(app, state, conversation_id, provider_id, model).await
+}
+
+#[tauri::command]
 async fn generate_title(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -164,7 +195,7 @@ async fn generate_title(
         }
     }
 
-    prompt.push_str("\n\nInstructions: Generate a very brief (max 5 words) title for this conversation. Do not use quotes.");
+    prompt.push_str("\n\nInstructions: Generate a very brief (max 5 words) title and a single appropriate emoji for this conversation based on its content and main topic.\n\nFormat your response as:\nTitle: [title here]\nEmoji: [single emoji here]\n\nChoose an emoji that best represents the conversation's theme, topic, or purpose. Use only one emoji character.");
 
     // Select Provider
     let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
@@ -226,16 +257,43 @@ async fn generate_title(
         }
     }?;
 
-    let new_title = response
+    let response_text = response
         .content
-        .unwrap_or("New Chat".to_string())
-        .trim()
-        .trim_matches('"')
-        .to_string();
+        .unwrap_or("Title: New Chat\nEmoji: 💬".to_string());
+
+    // Parse title and emoji from response
+    let mut new_title = "New Chat".to_string();
+    let mut new_icon: Option<String> = None;
+
+    for line in response_text.lines() {
+        let line = line.trim();
+        if line.starts_with("Title:") {
+            new_title = line
+                .strip_prefix("Title:")
+                .unwrap_or("New Chat")
+                .trim()
+                .trim_matches('"')
+                .to_string();
+        } else if line.starts_with("Emoji:") {
+            let emoji = line
+                .strip_prefix("Emoji:")
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if !emoji.is_empty() {
+                new_icon = Some(emoji);
+            }
+        }
+    }
+
+    // Fallback: if parsing failed and response doesn't contain expected format, use the whole response as title
+    if new_title == "New Chat" && !response_text.contains("Title:") {
+        new_title = response_text.trim().trim_matches('"').to_string();
+    }
 
     // Re-acquire lock to save
     let lib = state.librarian.lock().await;
-    lib.rename_conversation(&conversation_id, &new_title)
+    lib.update_conversation_title_and_icon(&conversation_id, &new_title, new_icon.as_deref())
         .map_err(|e| e.to_string())?;
 
     use tauri::Emitter;
@@ -1686,7 +1744,7 @@ async fn rebuild_memory_index(state: State<'_, AppState>) -> Result<(), String> 
     // We need a method to iterate all messages, or just list convs and get messages for each
     let conversations = lib.list_conversations().map_err(|e| e.to_string())?;
 
-    for (conv_id, _, _) in conversations {
+    for (conv_id, _, _, _) in conversations {
         let messages = lib
             .get_complete_history(&conv_id)
             .map_err(|e| e.to_string())?;
@@ -1734,9 +1792,9 @@ async fn export_conversation(
 
     // Get metadata
     let convs = lib.list_conversations().map_err(|e| e.to_string())?;
-    let (_, title, created_at) = convs
+    let (_, title, _, created_at) = convs
         .into_iter()
-        .find(|(id, _, _)| id == &conversation_id)
+        .find(|(id, _, _, _)| id == &conversation_id)
         .ok_or("Conversation not found")?;
 
     // Get messages
@@ -2379,6 +2437,8 @@ pub fn run() {
             create_conversation,
             delete_conversation,
             rename_conversation,
+            update_conversation_icon,
+            regenerate_title_and_icon,
             delete_message,
             delete_messages,
             generate_title,

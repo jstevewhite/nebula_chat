@@ -9,6 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
 interface Conversation {
   id: string;
   title: string;
+  icon?: string;
   created_at: string;
 }
 

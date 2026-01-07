@@ -7,6 +7,7 @@ import { Plus, MessageSquare, Trash2, Search, Upload, Minimize2 } from "lucide-r
 interface Conversation {
     id: string;
     title: string;
+    icon?: string;
     created_at: string;
 }
 
@@ -39,6 +40,10 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
     const [hoveredId, setHoveredId] = useState<string | null>(null);
     const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null);
     const [error, setError] = useState<string | null>(null);
+    
+    // Icon editing state
+    const [editingIconId, setEditingIconId] = useState<string | null>(null);
+    const [editIcon, setEditIcon] = useState("");
 
     // Width & Compact Mode State
     const [width, setWidth] = useState(() => {
@@ -171,6 +176,25 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
         }
     };
 
+    const startEditIcon = (e: React.MouseEvent, conv: Conversation) => {
+        e.stopPropagation();
+        setEditingIconId(conv.id);
+        setEditIcon(conv.icon || "");
+    };
+
+    const saveIcon = async () => {
+        if (!editingIconId) return;
+        try {
+            const iconToSave = editIcon.trim() === "" ? null : editIcon.trim();
+            await invoke("update_conversation_icon", { conversationId: editingIconId, icon: iconToSave });
+            loadConversations();
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setEditingIconId(null);
+        }
+    };
+
     const formatDate = (dateStr: string) => {
         const date = new Date(dateStr);
         return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
@@ -300,7 +324,13 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
                             : "hover:bg-[var(--color-bg-tertiary)]/50"
                             }`}
                     >
-                        <MessageSquare size={16} className={`shrink-0 ${activeId === conv.id ? "text-blue-400" : "text-[var(--color-text-tertiary)] group-hover:text-[var(--color-text-secondary)]"}`} />
+                        {conv.icon ? (
+                            <span className="shrink-0 text-base leading-none" style={{ width: '16px', height: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                {conv.icon}
+                            </span>
+                        ) : (
+                            <MessageSquare size={16} className={`shrink-0 ${activeId === conv.id ? "text-blue-400" : "text-[var(--color-text-tertiary)] group-hover:text-[var(--color-text-secondary)]"}`} />
+                        )}
 
                         <div className="flex-1 overflow-hidden min-w-0">
                             {editingId === conv.id ? (
@@ -325,9 +355,16 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
                             )}
                         </div>
 
-                        {/* Actions (Rename/Delete) */}
+                        {/* Actions (Icon/Rename/Delete) */}
                         {(hoveredId === conv.id || activeId === conv.id) && !editingId && (
                             <div className="absolute right-2 flex items-center gap-1 bg-[var(--color-bg-tertiary)] shadow-sm rounded-md p-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button
+                                    onClick={(e) => startEditIcon(e, conv)}
+                                    className="p-1 hover:bg-gray-700 rounded text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                                    title="Edit emoji"
+                                >
+                                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" strokeWidth="2"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/></svg>
+                                </button>
                                 <button
                                     onClick={(e) => startRename(e, conv)}
                                     className="p-1 hover:bg-gray-700 rounded text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
@@ -383,6 +420,56 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
                                 onClick={confirmDelete}
                             >
                                 Delete
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Icon Edit Modal */}
+            {editingIconId && (
+                <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+                    <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border-primary)] rounded-xl w-full max-w-md overflow-hidden shadow-2xl">
+                        <div className="p-4 border-b border-[var(--color-border-primary)] flex items-center justify-between">
+                            <h4 className="font-bold text-[var(--color-text-primary)]">Edit Chat Emoji</h4>
+                            <button
+                                className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                                onClick={() => setEditingIconId(null)}
+                                title="Close"
+                            >
+                                ×
+                            </button>
+                        </div>
+                        <div className="p-4">
+                            <label className="block text-sm font-medium text-[var(--color-text-secondary)] mb-2">
+                                Enter an emoji (or leave empty for default icon)
+                            </label>
+                            <input
+                                autoFocus
+                                type="text"
+                                value={editIcon}
+                                onChange={(e) => setEditIcon(e.target.value)}
+                                onKeyDown={(e) => e.key === 'Enter' && saveIcon()}
+                                placeholder="🌟"
+                                className="w-full bg-[var(--color-bg-primary)] text-[var(--color-text-primary)] text-2xl px-3 py-2 rounded-lg border border-[var(--color-border-secondary)] focus:outline-none focus:border-blue-500 text-center"
+                                maxLength={2}
+                            />
+                            <p className="text-xs text-[var(--color-text-tertiary)] mt-2 text-center">
+                                Paste or type any emoji character
+                            </p>
+                        </div>
+                        <div className="p-4 border-t border-[var(--color-border-primary)] flex justify-end gap-2">
+                            <button
+                                className="px-4 py-2 rounded-lg hover:bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)] font-semibold"
+                                onClick={() => setEditingIconId(null)}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold"
+                                onClick={saveIcon}
+                            >
+                                Save
                             </button>
                         </div>
                     </div>
