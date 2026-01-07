@@ -136,15 +136,21 @@ impl LlmProvider for OpenAiProvider {
                 });
 
                 if let Some(content) = msg.content {
-                    obj.as_object_mut().unwrap().insert("content".to_string(), json!(content));
+                    obj.as_object_mut()
+                        .unwrap()
+                        .insert("content".to_string(), json!(content));
                 }
 
                 if let Some(tool_call_id) = msg.tool_call_id {
-                    obj.as_object_mut().unwrap().insert("tool_call_id".to_string(), json!(tool_call_id));
+                    obj.as_object_mut()
+                        .unwrap()
+                        .insert("tool_call_id".to_string(), json!(tool_call_id));
                 }
 
                 if let Some(tool_calls) = msg.tool_calls {
-                    obj.as_object_mut().unwrap().insert("tool_calls".to_string(), json!(tool_calls));
+                    obj.as_object_mut()
+                        .unwrap()
+                        .insert("tool_calls".to_string(), json!(tool_calls));
                 }
 
                 obj
@@ -257,6 +263,7 @@ impl LlmProvider for OpenAiProvider {
             tool_calls,
             tool_call_id: None,
             attachments: None,
+            created_at: None,
         })
     }
 
@@ -319,15 +326,21 @@ impl LlmProvider for OpenAiProvider {
                 });
 
                 if let Some(content) = msg.content {
-                    obj.as_object_mut().unwrap().insert("content".to_string(), json!(content));
+                    obj.as_object_mut()
+                        .unwrap()
+                        .insert("content".to_string(), json!(content));
                 }
 
                 if let Some(tool_call_id) = msg.tool_call_id {
-                    obj.as_object_mut().unwrap().insert("tool_call_id".to_string(), json!(tool_call_id));
+                    obj.as_object_mut()
+                        .unwrap()
+                        .insert("tool_call_id".to_string(), json!(tool_call_id));
                 }
 
                 if let Some(tool_calls) = msg.tool_calls {
-                    obj.as_object_mut().unwrap().insert("tool_calls".to_string(), json!(tool_calls));
+                    obj.as_object_mut()
+                        .unwrap()
+                        .insert("tool_calls".to_string(), json!(tool_calls));
                 }
 
                 obj
@@ -582,6 +595,7 @@ impl LlmProvider for OpenAiProvider {
             },
             tool_call_id: None,
             attachments: None,
+            created_at: None,
         })
     }
 }

@@ -143,6 +143,7 @@ RETRIEVED MEMORIES (Fragments):
                 tool_calls: None,
                 tool_call_id: None,
                 attachments: None,
+                created_at: None,
             });
         }
 
@@ -154,6 +155,7 @@ RETRIEVED MEMORIES (Fragments):
             tool_calls: None,
             attachments: None,
             tool_call_id: None,
+            created_at: None,
         });
 
         // 4. Call Model

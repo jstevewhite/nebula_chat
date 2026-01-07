@@ -36,6 +36,7 @@ interface Message {
         data: string;
         is_binary: boolean;
     }[];
+    created_at?: number;
 }
 
 interface StreamChunkEvent {

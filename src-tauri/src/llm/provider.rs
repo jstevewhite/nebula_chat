@@ -19,6 +19,8 @@ pub struct Message {
     pub tool_call_id: Option<String>, // For tool role messages
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Vec<Attachment>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

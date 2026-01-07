@@ -279,6 +279,7 @@ impl LlmProvider for AnthropicProvider {
             tool_calls,
             tool_call_id: None,
             attachments: None,
+            created_at: None,
         })
     }
 
@@ -418,6 +419,7 @@ impl LlmProvider for AnthropicProvider {
             tool_call_id: None,
             attachments: None,
             reasoning_content: None,
+            created_at: None,
         })
     }
 }

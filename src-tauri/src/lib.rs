@@ -116,10 +116,12 @@ async fn delete_message(state: State<'_, AppState>, message_id: String) -> Resul
 }
 
 #[tauri::command]
-async fn delete_messages(state: State<'_, AppState>, message_ids: Vec<String>) -> Result<(), String> {
+async fn delete_messages(
+    state: State<'_, AppState>,
+    message_ids: Vec<String>,
+) -> Result<(), String> {
     let lib = state.librarian.lock().await;
-    lib.delete_messages(&message_ids)
-        .map_err(|e| e.to_string())
+    lib.delete_messages(&message_ids).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -187,6 +189,7 @@ async fn generate_title(
         tool_calls: None,
         tool_call_id: None,
         attachments: None,
+        created_at: None,
     }];
 
     let response = match provider_config.provider_type {
@@ -259,7 +262,7 @@ async fn get_chat_history(
         tool_calls_json,
         tool_call_id,
         reasoning_content,
-        _created_at,
+        created_at,
         attachments_json,
     ) in raw
     {
@@ -279,6 +282,23 @@ async fn get_chat_history(
             None
         };
 
+        // Parse created_at (assuming it's compatible with chrono, otherwise None)
+        let created_at_ts = if let Ok(dt) =
+            chrono::NaiveDateTime::parse_from_str(&created_at, "%Y-%m-%d %H:%M:%S")
+        {
+            Some(dt.and_utc().timestamp())
+        } else if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&created_at) {
+            Some(dt.timestamp())
+        } else {
+            // Try parsing as raw timestamp (i64) if it's just digits
+            if let Ok(ts) = created_at.parse::<i64>() {
+                Some(ts)
+            } else {
+                tracing::error!("Failed to parse timestamp: '{}'", created_at);
+                None
+            }
+        };
+
         messages.push(Message {
             id: Some(id),
             role,
@@ -287,6 +307,7 @@ async fn get_chat_history(
             tool_calls,
             tool_call_id,
             attachments,
+            created_at: created_at_ts,
         });
     }
     Ok(messages)
@@ -478,6 +499,35 @@ async fn send_message(
 
         // Inject Context
         let mut final_messages = messages.clone();
+
+        // iterate over messages to inject timestamp, UNLESS it's the last message (current user query)
+        // or specifically, we want the LLM to know when previous messages were sent.
+        // The last message might not have a created_at yet if it's new (or it might be passed from frontend?)
+        // Actually, send_message receives `messages` which includes history.
+        let len = final_messages.len();
+        for (i, msg) in final_messages.iter_mut().enumerate() {
+            let ts = if let Some(t) = msg.created_at {
+                t
+            } else if i == len - 1 {
+                // Current message likely has no timestamp yet, use (now)
+                chrono::Utc::now().timestamp()
+            } else {
+                // Old message with missing timestamp - skip
+                0
+            };
+
+            if ts > 0 {
+                if let Some(utc_dt) = chrono::DateTime::from_timestamp(ts, 0) {
+                    let local_dt: chrono::DateTime<chrono::Local> = chrono::DateTime::from(utc_dt);
+                    let formatted = local_dt.format("%Y:%m:%d:%H:%M:%S").to_string();
+                    // Prefix content with timestamp
+                    if let Some(content) = &mut msg.content {
+                        *content = format!("<timestamp: {}>\n{}", formatted, content);
+                    }
+                }
+            }
+        }
+
         if !context_text.is_empty() {
             let context_msg = Message {
                 id: None,
@@ -490,6 +540,7 @@ async fn send_message(
                 tool_calls: None,
                 tool_call_id: None,
                 attachments: None,
+                created_at: None,
             };
             final_messages.insert(0, context_msg);
         }
@@ -510,6 +561,7 @@ async fn send_message(
                         tool_call_id: None,
                         tool_calls: None,
                         attachments: None,
+                        created_at: None,
                     },
                 );
             }
@@ -528,6 +580,7 @@ async fn send_message(
             tool_calls: None,
             tool_call_id: None,
             attachments: None,
+            created_at: None,
         };
 
         let has_system_prompt = settings
@@ -1089,6 +1142,7 @@ If there are **no** facts that meet the criteria above, return:
         tool_calls: None,
         tool_call_id: None,
         attachments: None,
+        created_at: None,
     };
     let content_msg = Message {
         id: None,
@@ -1098,6 +1152,7 @@ If there are **no** facts that meet the criteria above, return:
         tool_calls: None,
         tool_call_id: None,
         attachments: None,
+        created_at: None,
     };
 
     let messages = vec![prompt_msg, content_msg];
@@ -1697,7 +1752,7 @@ async fn export_conversation(
         tool_calls_txt,
         tool_call_id,
         reasoning_content,
-        _created,
+        created_at_str,
         attachments_json,
     ) in raw_msgs
     {
@@ -1717,6 +1772,17 @@ async fn export_conversation(
             None
         };
 
+        // Parse created_at (assuming it's compatible with chrono, otherwise None)
+        let created_at = if let Ok(dt) =
+            chrono::NaiveDateTime::parse_from_str(&created_at_str, "%Y-%m-%d %H:%M:%S")
+        {
+            Some(dt.and_utc().timestamp())
+        } else if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&created_at_str) {
+            Some(dt.timestamp())
+        } else {
+            None
+        };
+
         messages.push(Message {
             id: Some(id),
             role,
@@ -1725,6 +1791,7 @@ async fn export_conversation(
             tool_calls,
             tool_call_id,
             attachments,
+            created_at,
         });
     }
 
@@ -1877,6 +1944,7 @@ async fn attempt_pruning(
                     tool_call_id: None,
                     attachments: None,
                     reasoning_content: None,
+                    created_at: None,
                 }], vec![], None).await
             }
             ProviderType::Anthropic => {
@@ -1890,6 +1958,7 @@ async fn attempt_pruning(
                     tool_call_id: None,
                     attachments: None,
                     reasoning_content: None,
+                    created_at: None,
                 }], vec![], None).await
             }
             ProviderType::Ollama => {
@@ -1906,6 +1975,7 @@ async fn attempt_pruning(
                     tool_call_id: None,
                     attachments: None,
                     reasoning_content: None,
+                    created_at: None,
                 }], vec![], None).await
             }
         };
