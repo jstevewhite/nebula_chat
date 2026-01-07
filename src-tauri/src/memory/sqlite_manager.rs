@@ -93,6 +93,13 @@ impl SqliteManager {
         Ok(())
     }
 
+    pub fn migrate_v4(&self) -> Result<()> {
+        let _ = self
+            .conn
+            .execute("ALTER TABLE conversations ADD COLUMN icon TEXT", []);
+        Ok(())
+    }
+
     /// Initial migration for the structured facts table backing the knowledge graph.
     /// Uses IF NOT EXISTS to remain idempotent across app startups.
     pub fn migrate_facts_v1(&self) -> Result<()> {
@@ -147,11 +154,11 @@ impl SqliteManager {
         Ok(())
     }
 
-    pub fn list_conversations(&self) -> Result<Vec<(String, String, String)>> {
+    pub fn list_conversations(&self) -> Result<Vec<(String, String, Option<String>, String)>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, title, created_at FROM conversations ORDER BY created_at DESC")?;
-        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+            .prepare("SELECT id, title, icon, created_at FROM conversations ORDER BY created_at DESC")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))?;
 
         let mut convs = Vec::new();
         for row in rows {
@@ -714,6 +721,22 @@ impl SqliteManager {
         self.conn.execute(
             "UPDATE conversations SET title = ?1 WHERE id = ?2",
             params![new_title, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_conversation_icon(&self, id: &str, icon: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE conversations SET icon = ?1 WHERE id = ?2",
+            params![icon, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_conversation_title_and_icon(&self, id: &str, title: &str, icon: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE conversations SET title = ?1, icon = ?2 WHERE id = ?3",
+            params![title, icon, id],
         )?;
         Ok(())
     }

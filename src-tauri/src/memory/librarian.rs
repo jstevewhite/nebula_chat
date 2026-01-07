@@ -47,6 +47,7 @@ impl Librarian {
         // Attempt migration (ignore error if cols exist)
         let _ = sqlite.migrate_v2();
         let _ = sqlite.migrate_v3();
+        let _ = sqlite.migrate_v4();
         // Initialize facts schema; uses IF NOT EXISTS so this is safe to run repeatedly.
         sqlite.migrate_facts_v1()?;
 
@@ -124,8 +125,16 @@ impl Librarian {
         self.sqlite.rename_conversation(id, new_title)
     }
 
-    pub fn list_conversations(&self) -> Result<Vec<(String, String, String)>> {
+    pub fn list_conversations(&self) -> Result<Vec<(String, String, Option<String>, String)>> {
         self.sqlite.list_conversations()
+    }
+
+    pub fn update_conversation_icon(&self, id: &str, icon: Option<&str>) -> Result<()> {
+        self.sqlite.update_conversation_icon(id, icon)
+    }
+
+    pub fn update_conversation_title_and_icon(&self, id: &str, title: &str, icon: Option<&str>) -> Result<()> {
+        self.sqlite.update_conversation_title_and_icon(id, title, icon)
     }
 
     pub fn get_complete_history(
