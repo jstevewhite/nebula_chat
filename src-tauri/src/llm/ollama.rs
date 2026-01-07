@@ -183,6 +183,7 @@ impl LlmProvider for OllamaProvider {
             tool_call_id: None,
             attachments: None,
             reasoning_content: None,
+            created_at: None,
         })
     }
 
@@ -403,6 +404,7 @@ impl LlmProvider for OllamaProvider {
             tool_call_id: None,
             attachments: None,
             reasoning_content: None, // Ollama might support this in future but generic for now
+            created_at: None,
         })
     }
 }

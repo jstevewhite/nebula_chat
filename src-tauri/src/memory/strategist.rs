@@ -350,6 +350,7 @@ OUTPUT (JSON only, no prose):"#,
             attachments: None,
             tool_call_id: None,
             reasoning_content: None,
+            created_at: None,
         }];
 
         match provider.chat(messages, vec![], None).await {
@@ -494,6 +495,7 @@ OUTPUT:"#,
             attachments: None,
             tool_call_id: None,
             reasoning_content: None,
+            created_at: None,
         }];
 
         match provider.chat(messages, vec![], None).await {
