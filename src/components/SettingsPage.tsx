@@ -195,6 +195,8 @@ export default function SettingsPage() {
                 memory_enabled: fullSettings.memory_enabled ?? latest.memory_enabled,
                 context_model: fullSettings.context_model ?? latest.context_model,
                 context_turns: fullSettings.context_turns ?? latest.context_turns,
+
+                context_uncompressed_msg_count: fullSettings.context_uncompressed_msg_count ?? latest.context_uncompressed_msg_count,
                 // Other settings this page may toggle in the future can be added here explicitly.
             };
 
@@ -527,69 +529,103 @@ export default function SettingsPage() {
                 </h3>
 
                 <div className="mb-4">
-                    <div className="flex items-center justify-between gap-4 mb-3">
-                        <div>
-                            <label className="block text-sm font-bold text-[var(--color-text-secondary)]">
-                                Long-term Memory
-                            </label>
-                            <p className="text-xs text-[var(--color-text-tertiary)]">
-                                Enable retrieval/injection of relevant memories into chats.
-                            </p>
-                        </div>
-                        <label className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)] select-none">
-                            <input
-                                type="checkbox"
-                                checked={fullSettings.memory_enabled ?? true}
-                                onChange={(e) => setFullSettings({ ...fullSettings, memory_enabled: e.target.checked })}
-                                className="h-4 w-4 rounded border-[var(--color-border-secondary)] bg-[var(--color-bg-primary)]"
-                            />
-                            Enabled
-                        </label>
-                    </div>
-
-                    <label className="block text-sm font-bold text-[var(--color-text-secondary)] mb-2">
-                        Memory Strategy Model
-                    </label>
-                    <p className="text-xs text-[var(--color-text-tertiary)] mb-2">
-                        Select a model to use for analyzing and summarizing retrieved memories.
-                        A smaller model (e.g., Llama 3 8B) is recommended for speed.
-                    </p>
-                    <CustomSelect
-                        disabled={!(fullSettings.memory_enabled ?? true)}
-                        value={fullSettings.context_model || ""}
-                        onChange={(val) => setFullSettings({ ...fullSettings, context_model: val })}
-                        options={[
-                            { id: "none", label: "None (Raw Injection)", value: "" },
-                            ...Object.entries(providers).flatMap(([pkey, pval]) =>
-                                pval.models.filter(m => m.visible).map(m => ({
-                                    id: `${pkey}::${m.id}`,
-                                    label: `${pkey} - ${m.name}`,
-                                    value: `${pkey}::${m.id}`
-                                }))
-                            )
-                        ]}
-                        className={!(fullSettings.memory_enabled ?? true) ? "opacity-50" : ""}
-                    />
-
-                    <div className="mt-4">
+                    {/* 1. Intelligence Model Selection */}
+                    <div className="mb-6">
                         <label className="block text-sm font-bold text-[var(--color-text-secondary)] mb-2">
-                            Conversation Turns Included
+                            Intelligence Support Model
                         </label>
                         <p className="text-xs text-[var(--color-text-tertiary)] mb-2">
-                            How many recent turns (user/assistant pairs) to include when deciding which memories are relevant.
-                            Set to 0 to disable.
+                            Model used for background tasks like summarizing context, analyzing memories, and compacting history.
+                            A smaller, efficient model (e.g., Llama 3 8B, Haiku) is recommended.
                         </p>
                         <CustomSelect
-                            disabled={!(fullSettings.memory_enabled ?? true)}
-                            value={String(fullSettings.context_turns ?? 0)}
-                            onChange={(val) => setFullSettings({ ...fullSettings, context_turns: Number(val) })}
-                            options={[0, 1, 2, 3, 4, 6, 8, 10].map(n => ({
-                                id: String(n),
-                                label: String(n),
-                                value: String(n)
-                            }))}
-                            className={!(fullSettings.memory_enabled ?? true) ? "opacity-50" : ""}
+                            value={fullSettings.context_model || ""}
+                            onChange={(val) => setFullSettings({ ...fullSettings, context_model: val })}
+                            options={[
+                                { id: "none", label: "None (Use Default Model)", value: "" },
+                                ...Object.entries(providers).flatMap(([pkey, pval]) =>
+                                    pval.models.filter(m => m.visible).map(m => ({
+                                        id: `${pkey}::${m.id}`,
+                                        label: `${pkey} - ${m.name}`,
+                                        value: `${pkey}::${m.id}`
+                                    }))
+                                )
+                            ]}
+                            filterable
+                            filterPlaceholder="Search models..."
                         />
+                    </div>
+
+                    <div className="border-t border-[var(--color-border-primary)] pt-4 mb-4">
+                        <h4 className="text-sm font-bold text-[var(--color-text-primary)] mb-4">Features</h4>
+
+                        {/* 2. Long-term Memory */}
+                        <div className="mb-6">
+                            <div className="flex items-center justify-between gap-4 mb-3">
+                                <div>
+                                    <label className="block text-sm font-bold text-[var(--color-text-secondary)]">
+                                        Long-term Memory
+                                    </label>
+                                    <p className="text-xs text-[var(--color-text-tertiary)]">
+                                        Enable retrieval/injection of relevant memories into chats.
+                                    </p>
+                                </div>
+                                <label className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)] select-none">
+                                    <input
+                                        type="checkbox"
+                                        checked={fullSettings.memory_enabled ?? true}
+                                        onChange={(e) => setFullSettings({ ...fullSettings, memory_enabled: e.target.checked })}
+                                        className="h-4 w-4 rounded border-[var(--color-border-secondary)] bg-[var(--color-bg-primary)]"
+                                    />
+                                    Enabled
+                                </label>
+                            </div>
+
+                            <div className={`ml-1 pl-4 border-l-2 border-[var(--color-border-secondary)]/30 transition-opacity duration-200 ${!(fullSettings.memory_enabled ?? true) ? "opacity-50 pointer-events-none" : ""}`}>
+                                <label className="block text-sm font-bold text-[var(--color-text-secondary)] mb-2">
+                                    Conversation Turns to Analyze
+                                </label>
+                                <p className="text-xs text-[var(--color-text-tertiary)] mb-2">
+                                    How many recent conversation turns to use when searching for relevant memories.
+                                </p>
+                                <CustomSelect
+                                    value={String(fullSettings.context_turns ?? 0)}
+                                    onChange={(val) => setFullSettings({ ...fullSettings, context_turns: Number(val) })}
+                                    options={[0, 1, 2, 3, 4, 6, 8, 10].map(n => ({
+                                        id: String(n),
+                                        label: String(n),
+                                        value: String(n)
+                                    }))}
+                                />
+                            </div>
+                        </div>
+
+                        {/* 3. Context Management */}
+                        <div className="mb-2">
+                            <label className="block text-sm font-bold text-[var(--color-text-secondary)] mb-2">
+                                Context Compaction
+                            </label>
+                            <p className="text-xs text-[var(--color-text-tertiary)] mb-2">
+                                Automatically summarize older messages to save context space.
+                            </p>
+                            <div className="ml-1 pl-4 border-l-2 border-[var(--color-border-secondary)]/30">
+                                <label className="block text-xs font-bold text-[var(--color-text-secondary)] mb-1">
+                                    Uncompressed Message Count
+                                </label>
+                                <p className="text-xs text-[var(--color-text-tertiary)] mb-2">
+                                    Keep this many recent messages raw. Older ones are summarized. 0 = Disabled.
+                                </p>
+                                <CustomSelect
+                                    value={String(fullSettings.context_uncompressed_msg_count ?? 20)}
+                                    onChange={(val) => setFullSettings({ ...fullSettings, context_uncompressed_msg_count: Number(val) })}
+                                    options={[0, 10, 20, 30, 40, 50, 100].map(n => ({
+                                        id: String(n),
+                                        label: n === 0 ? "Disabled" : String(n),
+                                        value: String(n)
+                                    }))}
+                                />
+                            </div>
+                        </div>
 
                     </div>
 

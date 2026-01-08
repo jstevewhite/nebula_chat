@@ -154,11 +154,29 @@ impl SqliteManager {
         Ok(())
     }
 
+    /// Migration for conversation summaries table.
+    /// Used for rolling context compaction.
+    pub fn migrate_summaries_v1(&self) -> Result<()> {
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS conversation_summaries (
+                conversation_id TEXT PRIMARY KEY,
+                last_message_id TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(conversation_id) REFERENCES conversations(id)
+            )",
+            [],
+        )?;
+        Ok(())
+    }
+
     pub fn list_conversations(&self) -> Result<Vec<(String, String, Option<String>, String)>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, title, icon, created_at FROM conversations ORDER BY created_at DESC")?;
-        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))?;
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, icon, created_at FROM conversations ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?;
 
         let mut convs = Vec::new();
         for row in rows {
@@ -437,7 +455,7 @@ impl SqliteManager {
             Option<String>,
             Option<String>,
             Option<String>, // reasoning_content
-            String, // created_at
+            String,         // created_at
             String,
         )>,
     > {
@@ -561,10 +579,12 @@ impl SqliteManager {
                 )
             )
         ";
-        
-        match self.conn.query_row(query, params![conversation_id, tool_call_id], |row| {
-            row.get::<_, bool>(0)
-        }) {
+
+        match self
+            .conn
+            .query_row(query, params![conversation_id, tool_call_id], |row| {
+                row.get::<_, bool>(0)
+            }) {
             Ok(exists) => Ok(exists),
             Err(_) => {
                 // Fallback to conservative check if JSON1 is not available
@@ -578,7 +598,11 @@ impl SqliteManager {
                         AND m.tool_calls LIKE ?2
                     )
                 ";
-                Ok(self.conn.query_row(fallback_query, params![conversation_id, format!("%{}", tool_call_id)], |row| row.get::<_, bool>(0))?)
+                Ok(self.conn.query_row(
+                    fallback_query,
+                    params![conversation_id, format!("%{}", tool_call_id)],
+                    |row| row.get::<_, bool>(0),
+                )?)
             }
         }
     }
@@ -733,10 +757,51 @@ impl SqliteManager {
         Ok(())
     }
 
-    pub fn update_conversation_title_and_icon(&self, id: &str, title: &str, icon: Option<&str>) -> Result<()> {
+    pub fn update_conversation_title_and_icon(
+        &self,
+        id: &str,
+        title: &str,
+        icon: Option<&str>,
+    ) -> Result<()> {
         self.conn.execute(
             "UPDATE conversations SET title = ?1, icon = ?2 WHERE id = ?3",
             params![title, icon, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_conversation_summary(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT last_message_id, summary FROM conversation_summaries WHERE conversation_id = ?1",
+        )?;
+
+        let result = stmt
+            .query_row(params![conversation_id], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .optional()?;
+
+        Ok(result)
+    }
+
+    pub fn save_conversation_summary(
+        &self,
+        conversation_id: &str,
+        last_message_id: &str,
+        summary: &str,
+    ) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO conversation_summaries (conversation_id, last_message_id, summary, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(conversation_id) DO UPDATE SET
+                last_message_id = excluded.last_message_id,
+                summary = excluded.summary,
+                updated_at = excluded.updated_at",
+            params![conversation_id, last_message_id, summary, now],
         )?;
         Ok(())
     }
@@ -777,7 +842,13 @@ mod tests {
         assert_eq!(id1, id2);
 
         let results = mgr
-            .query_facts(Some("user"), Some("role"), Some("systems_engineer"), None, 10)
+            .query_facts(
+                Some("user"),
+                Some("role"),
+                Some("systems_engineer"),
+                None,
+                10,
+            )
             .expect("query facts");
 
         assert_eq!(results.len(), 1);
