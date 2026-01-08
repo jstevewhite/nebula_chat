@@ -1,13 +1,14 @@
 
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Eye, EyeOff, RefreshCw, Trash2, CheckCircle, AlertCircle, Search, X } from "lucide-react";
+import { Eye, EyeOff, RefreshCw, Trash2, CheckCircle, AlertCircle, Search, X, Settings, Save } from "lucide-react";
 import { getProviderIcon } from "../utils/providerIcons";
 
 export interface ModelConfig {
     id: string;
     name: string;
     visible?: boolean;
+    context_window?: number;
 }
 
 export type ProviderType = "OpenAI" | "Anthropic" | "Ollama" | "OpenAICompatible";
@@ -31,6 +32,34 @@ interface ProviderCardProps {
 
 function ProviderCard({ providerKey, config, onUpdate, onDelete, onFetch, loading }: ProviderCardProps) {
     const [searchQuery, setSearchQuery] = useState("");
+    const [editingModelId, setEditingModelId] = useState<string | null>(null);
+    const [editContext, setEditContext] = useState<string>("");
+
+    const startEditing = (m: ModelConfig) => {
+        setEditingModelId(m.id);
+        setEditContext(m.context_window?.toString() || "");
+    };
+
+    const saveEdit = () => {
+        if (!editingModelId) return;
+        // Parse int, allow empty to unset
+        let val: number | undefined = undefined;
+        if (editContext.trim()) {
+            const parsed = parseInt(editContext.replace(/[^0-9]/g, ""));
+            if (!isNaN(parsed)) val = parsed;
+        }
+
+        const newModels = config.models.map(m =>
+            m.id === editingModelId ? { ...m, context_window: val } : m
+        );
+        onUpdate({ models: newModels });
+        setEditingModelId(null);
+    };
+
+    const cancelEdit = () => {
+        setEditingModelId(null);
+        setEditContext("");
+    };
 
     const toggleModelVisibility = (modelId: string) => {
         const newModels = config.models.map(m =>
@@ -181,13 +210,51 @@ function ProviderCard({ providerKey, config, onUpdate, onDelete, onFetch, loadin
                                         key={m.id}
                                         className={`flex items-center justify-between bg-[var(--color-bg-primary)] border rounded px-3 py-2 text-xs transition-colors ${m.visible !== false ? "border-[var(--color-border-primary)] text-[var(--color-text-primary)]" : "border-[var(--color-border-primary)]/50 text-[var(--color-text-tertiary)]"}`}
                                     >
-                                        <span className="truncate mr-2" title={m.name}>{m.name}</span>
-                                        <button
-                                            onClick={() => toggleModelVisibility(m.id)}
-                                            className={`p-1 rounded hover:bg-[var(--color-bg-tertiary)] ${m.visible !== false ? "text-[var(--color-accent-primary)]" : "text-[var(--color-text-tertiary)]"}`}
-                                        >
-                                            {m.visible !== false ? <Eye size={14} /> : <EyeOff size={14} />}
-                                        </button>
+                                        {editingModelId === m.id ? (
+                                            <div className="flex items-center gap-2 w-full">
+                                                <span className="truncate flex-1 font-mono text-[var(--color-text-secondary)]" title={m.name}>{m.name}</span>
+                                                <input
+                                                    className="w-20 bg-[var(--color-bg-tertiary)] border border-[var(--color-border-secondary)] rounded px-1 py-0.5 text-right focus:border-blue-500 outline-none"
+                                                    placeholder="Context"
+                                                    value={editContext}
+                                                    onChange={e => setEditContext(e.target.value)}
+                                                    autoFocus
+                                                    onKeyDown={e => {
+                                                        if (e.key === 'Enter') saveEdit();
+                                                        if (e.key === 'Escape') cancelEdit();
+                                                    }}
+                                                />
+                                                <button onClick={saveEdit} className="p-1 hover:text-green-500 text-[var(--color-text-secondary)]"><Save size={14} /></button>
+                                                <button onClick={cancelEdit} className="p-1 hover:text-red-500 text-[var(--color-text-secondary)]"><X size={14} /></button>
+                                            </div>
+                                        ) : (
+                                            <>
+                                                <div className="flex items-center gap-2 overflow-hidden flex-1">
+                                                    <span className="truncate" title={m.name}>{m.name}</span>
+                                                    {m.context_window && (
+                                                        <span className="px-1.5 py-0.5 rounded-full bg-[var(--color-bg-tertiary)] text-[var(--color-text-tertiary)] text-[10px]">
+                                                            {Math.round(m.context_window / 1000)}k
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <div className="flex items-center gap-1">
+                                                    <button
+                                                        onClick={() => startEditing(m)}
+                                                        className="p-1 rounded hover:bg-[var(--color-bg-tertiary)] text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)]"
+                                                        title="Edit Context Window"
+                                                    >
+                                                        <Settings size={14} />
+                                                    </button>
+                                                    <button
+                                                        onClick={() => toggleModelVisibility(m.id)}
+                                                        className={`p-1 rounded hover:bg-[var(--color-bg-tertiary)] ${m.visible !== false ? "text-[var(--color-accent-primary)]" : "text-[var(--color-text-tertiary)]"}`}
+                                                        title={m.visible !== false ? "Hide Model" : "Show Model"}
+                                                    >
+                                                        {m.visible !== false ? <Eye size={14} /> : <EyeOff size={14} />}
+                                                    </button>
+                                                </div>
+                                            </>
+                                        )}
                                     </div>
                                 ))
                             ) : (

@@ -55,6 +55,7 @@ interface ModelOption {
     name: string;
     providerId: string;
     providerType: string;
+    context_window?: number;
 }
 
 interface SystemPrompt {
@@ -303,6 +304,72 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         return () => clearTimeout(timer);
     }, [messages]);
 
+    // Token Counting
+    const [tokenCount, setTokenCount] = useState<number>(0);
+    const [contextLimit, setContextLimit] = useState<number | null>(null);
+
+    const getModelContextLimit = (modelId: string): number | null => {
+        const m = modelId.toLowerCase();
+        if (m.includes("gpt-4o") || m.includes("gpt-4-turbo") || m.includes("gpt-4-0125") || m.includes("gpt-4-1106")) return 128000;
+        if (m.includes("gpt-4")) return 8192;
+        if (m.includes("gpt-3.5")) return 16385;
+        if (m.includes("o1-preview") || m.includes("o1-mini")) return 128000;
+        if (m.includes("o1")) return 200000;
+
+        if (m.includes("claude-4.5")) return 200000;
+        if (m.includes("claude-3-5") || m.includes("claude-3.5")) return 200000;
+        if (m.includes("claude-3")) return 200000;
+
+        if (m.includes("gemini-1.5-pro") || m.includes("gemini-pro-1.5") || m.includes("gemini-2")) return 2000000;
+        if (m.includes("gemini-1.5-flash")) return 1000000;
+
+        if (m.includes("deepseek-v3") || m.includes("deepseek-3")) return 128000;
+        if (m.includes("deepseek")) return 32000;
+
+        if (m.includes("llama-3.1") || m.includes("llama3.1")) return 128000;
+        if (m.includes("llama-3") || m.includes("llama3")) return 8192;
+        if (m.includes("mistral-large")) return 32000;
+
+        return null;
+    };
+
+    useEffect(() => {
+        // Debounce token counting
+        const timer = setTimeout(async () => {
+            if (messages.length === 0) {
+                setTokenCount(0);
+                return;
+            }
+            try {
+                // We send the current history + current input (optional, but usually context is history)
+                // For now just history
+                const count = await invoke<number>("count_conversation_tokens", { messages });
+                setTokenCount(count);
+            } catch (e) {
+                console.error("Failed to count tokens", e);
+            }
+        }, 500);
+        return () => clearTimeout(timer);
+    }, [messages]);
+
+    useEffect(() => {
+        if (selectedModel && availableModels.length > 0) {
+            const [pid, mid] = selectedModel.split("::");
+            const model = availableModels.find(m => m.providerId === pid && m.id === mid);
+            if (model) {
+                if (model.context_window) {
+                    setContextLimit(model.context_window);
+                } else {
+                    // Fallback to local heuristic
+                    const fallback = getModelContextLimit(model.id);
+                    setContextLimit(fallback);
+                }
+            } else {
+                setContextLimit(null);
+            }
+        }
+    }, [selectedModel, availableModels]);
+
     // Tauri File Drop Listeners
     useEffect(() => {
         let unlistenHover: (() => void) | Promise<(() => void)>;
@@ -425,7 +492,8 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                                     id: m.id,
                                     name: m.name || m.id,
                                     providerId: providerKey,
-                                    providerType: config.provider_type // Extract provider type
+                                    providerType: config.provider_type, // Extract provider type
+                                    context_window: m.context_window
                                 });
                             }
                         });
@@ -934,9 +1002,9 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         // 1. Find the user message to resubmit from
         // 2. Delete all messages after that user message
         // 3. Resubmit from that user message
-        
+
         let userMessageIndex = index;
-        
+
         // If this is an assistant message, find the user message before it
         if (role === "assistant") {
             userMessageIndex = index - 1;
@@ -945,17 +1013,17 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 userMessageIndex--;
             }
         }
-        
+
         if (userMessageIndex < 0) {
             console.error("No user message found to regenerate from");
             return;
         }
-        
+
         // Get all message IDs after the user message to delete
         const messagesToDelete = messages.slice(userMessageIndex + 1)
             .filter(m => m.id)
             .map(m => m.id!);
-        
+
         // Delete messages from backend if they have IDs
         if (messagesToDelete.length > 0) {
             try {
@@ -964,13 +1032,13 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 console.error("Failed to delete messages", e);
             }
         }
-        
+
         // Truncate the history
         const historyToReplay = messages.slice(0, userMessageIndex + 1);
-        
+
         // Update UI state to show truncated history
         setMessages(historyToReplay);
-        
+
         // Trigger regeneration with the truncated history
         // The backend will detect existing message IDs and not duplicate them
         await stableSendMessage(historyToReplay);
@@ -1099,6 +1167,23 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         {showSettings && (
                             <div className="absolute top-full right-0 mt-2 w-72 bg-[var(--color-bg-secondary)] border border-[var(--color-border-secondary)] rounded-xl shadow-2xl p-4 z-50 animate-in fade-in zoom-in-95 duration-100">
                                 <h4 className="text-sm font-bold text-[var(--color-text-secondary)] mb-4 uppercase tracking-wider border-b border-[var(--color-border-primary)] pb-2">Generation Options</h4>
+
+                                {contextLimit && (
+                                    <div className="mb-4 p-2 bg-[var(--color-bg-tertiary)] rounded-lg border border-[var(--color-border-primary)]">
+                                        <div className="flex justify-between items-center mb-1">
+                                            <span className="text-xs font-bold text-[var(--color-text-secondary)]">Context Usage</span>
+                                            <span className="text-xs text-[var(--color-text-primary)]">{tokenCount.toLocaleString()} / {contextLimit.toLocaleString()}</span>
+                                        </div>
+                                        <div className="w-full bg-[var(--color-bg-secondary)] rounded-full h-1.5 overflow-hidden">
+                                            <div
+                                                className={`h-full rounded-full transition-all duration-500 ${(tokenCount / contextLimit) > 0.9 ? 'bg-red-500' :
+                                                    (tokenCount / contextLimit) > 0.7 ? 'bg-yellow-500' : 'bg-green-500'
+                                                    }`}
+                                                style={{ width: `${Math.min((tokenCount / contextLimit) * 100, 100)}%` }}
+                                            />
+                                        </div>
+                                    </div>
+                                )}
 
                                 <div className="space-y-4">
                                     {/* Streaming Toggle */}
@@ -1762,7 +1847,7 @@ const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRe
                                 <Trash2 size={14} />
                             </button>
                         )}
-                        {(m.role === "assistant" || m.role === "user") && (
+                        {(m.role === "assistant" || m.role === "user" || m.role === "tool") && (
                             <button onClick={() => onRegenerate(i, m.role)} className="p-1 text-[var(--color-text-tertiary)] hover:text-green-400 transition-colors" title="Regenerate">
                                 <RefreshCw size={14} />
                             </button>

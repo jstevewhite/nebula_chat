@@ -31,7 +31,7 @@ impl SearchOptions {
 }
 
 pub struct Librarian {
-    sqlite: SqliteManager,
+    pub sqlite: SqliteManager,
     tantivy: Arc<TantivyIndex>,
     pub audit: Arc<AuditLogger>,
 }
@@ -50,6 +50,9 @@ impl Librarian {
         let _ = sqlite.migrate_v4();
         // Initialize facts schema; uses IF NOT EXISTS so this is safe to run repeatedly.
         sqlite.migrate_facts_v1()?;
+
+        // Initialize summaries schema
+        sqlite.migrate_summaries_v1()?;
 
         let tantivy = TantivyIndex::new(idx_path.to_str().unwrap())?;
         let audit = AuditLogger::new(&db_path)?;
@@ -133,8 +136,14 @@ impl Librarian {
         self.sqlite.update_conversation_icon(id, icon)
     }
 
-    pub fn update_conversation_title_and_icon(&self, id: &str, title: &str, icon: Option<&str>) -> Result<()> {
-        self.sqlite.update_conversation_title_and_icon(id, title, icon)
+    pub fn update_conversation_title_and_icon(
+        &self,
+        id: &str,
+        title: &str,
+        icon: Option<&str>,
+    ) -> Result<()> {
+        self.sqlite
+            .update_conversation_title_and_icon(id, title, icon)
     }
 
     pub fn get_complete_history(
@@ -148,8 +157,8 @@ impl Librarian {
             Option<String>,
             Option<String>,
             Option<String>, // reasoning_content
-            String, // created_at added
-            String, // attachments
+            String,         // created_at added
+            String,         // attachments
         )>,
     > {
         self.sqlite.get_conversation_messages(conversation_id)
@@ -261,7 +270,8 @@ impl Librarian {
 
     /// Check if a tool_call_id exists in assistant messages for a given conversation
     pub fn tool_call_id_exists(&self, conversation_id: &str, tool_call_id: &str) -> Result<bool> {
-        self.sqlite.tool_call_id_exists(conversation_id, tool_call_id)
+        self.sqlite
+            .tool_call_id_exists(conversation_id, tool_call_id)
     }
 
     /// Retrieve a bounded set of user-profile facts for personalization.
@@ -317,8 +327,16 @@ impl Librarian {
     }
 
     /// Search with custom options for filtering and scoping results
-    pub fn search_with_options(&self, query: &str, options: SearchOptions) -> Result<Vec<SearchResult>> {
-        let limit = if options.limit == 0 { 10 } else { options.limit };
+    pub fn search_with_options(
+        &self,
+        query: &str,
+        options: SearchOptions,
+    ) -> Result<Vec<SearchResult>> {
+        let limit = if options.limit == 0 {
+            10
+        } else {
+            options.limit
+        };
 
         self.tantivy.search_with_options(
             query,

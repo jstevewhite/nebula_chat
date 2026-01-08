@@ -147,10 +147,10 @@ async fn update_conversation_icon(
     let lib = state.librarian.lock().await;
     lib.update_conversation_icon(&conversation_id, icon.as_deref())
         .map_err(|e| e.to_string())?;
-    
+
     use tauri::Emitter;
     let _ = app.emit("conversations-updated", ());
-    
+
     Ok(())
 }
 
@@ -275,11 +275,7 @@ async fn generate_title(
                 .trim_matches('"')
                 .to_string();
         } else if line.starts_with("Emoji:") {
-            let emoji = line
-                .strip_prefix("Emoji:")
-                .unwrap_or("")
-                .trim()
-                .to_string();
+            let emoji = line.strip_prefix("Emoji:").unwrap_or("").trim().to_string();
             if !emoji.is_empty() {
                 new_icon = Some(emoji);
             }
@@ -505,13 +501,44 @@ async fn send_message(
         let extraction_model = settings.context_model.clone();
         let memory_enabled = settings.memory_enabled;
 
+        // --- CONTEXT COMPACTION ---
+        // Compact messages before generating context.
+        // We do this if compaction is enabled (count > 0).
+        let (compacted_summary, effective_messages) = if settings.context_uncompressed_msg_count > 0
+        {
+            match crate::llm::compactor::Compactor::compact(
+                messages.clone(),
+                &settings,
+                conversation_id.as_deref(),
+                state.librarian.clone(),
+            )
+            .await
+            {
+                Ok((summary, compacted_msgs)) => {
+                    if let Some(s) = &summary {
+                        tracing::debug!("Context compaction applied. Summary length: {}", s.len());
+                    }
+                    (summary, compacted_msgs)
+                }
+                Err(e) => {
+                    tracing::error!("Context compaction failed: {}. Using original messages.", e);
+                    (None, messages.clone())
+                }
+            }
+        } else {
+            (None, messages.clone())
+        };
+
+        // Use effective_messages for context retrieval and final generation
+        let messages_for_context = effective_messages.clone();
+
         // Retrieve Context (Long-term memory) via Strategist Orchestrator
         let mut context_text = String::new();
         if memory_enabled && !query.is_empty() {
             // Use strategist orchestrator for intelligent context assembly
             match crate::memory::StrategistMemoryOrchestrator::assemble_context(
                 &query,
-                &messages,
+                &messages_for_context, // Use compacted history
                 state.librarian.clone(),
                 settings.context_turns,
                 settings.context_model.as_deref(),
@@ -556,7 +583,7 @@ async fn send_message(
         }
 
         // Inject Context
-        let mut final_messages = messages.clone();
+        let mut final_messages = messages_for_context; // Use compacted messages
 
         // iterate over messages to inject timestamp, UNLESS it's the last message (current user query)
         // or specifically, we want the LLM to know when previous messages were sent.
@@ -1522,7 +1549,7 @@ async fn fetch_models(
                             id: id.to_string(),
                             name: id.to_string(),
                             visible: true,
-                            context_window: None,
+                            context_window: crate::llm::capabilities::get_model_context_window(id),
                             max_tokens: None,
                         });
                     }
@@ -1552,7 +1579,9 @@ async fn fetch_models(
                                 id: id.to_string(),
                                 name,
                                 visible: true,
-                                context_window: None,
+                                context_window: crate::llm::capabilities::get_model_context_window(
+                                    &id,
+                                ),
                                 max_tokens: None,
                             });
                         }
@@ -1562,17 +1591,25 @@ async fn fetch_models(
                 // Fallback if fetch fails (e.g. key invalid or network issue), but updated with latest models
                 // This ensures the dropdown isn't empty even if the API call fails.
                 let fallback_models = vec![
+                    "claude-3-5-sonnet-20241022",
+                    "claude-3-5-sonnet-20240620",
+                    "claude-3-5-haiku-20241022",
                     "claude-3-opus-20240229",
                     "claude-3-sonnet-20240229",
                     "claude-3-haiku-20240307",
-                    "claude-3-5-sonnet-20240620",
+                    "gpt-4o",
+                    "gpt-4o-mini",
+                    "o1-preview",
+                    "o1-mini",
+                    "gemini-1.5-pro",
+                    "gemini-1.5-flash",
                 ];
                 for id in fallback_models {
                     models.push(ModelConfig {
                         id: id.to_string(),
                         name: id.to_string(),
                         visible: true,
-                        context_window: None,
+                        context_window: crate::llm::capabilities::get_model_context_window(id),
                         max_tokens: None,
                     });
                 }
@@ -1599,7 +1636,9 @@ async fn fetch_models(
                             id: name.to_string(),
                             name: name.to_string(),
                             visible: true,
-                            context_window: None,
+                            context_window: crate::llm::capabilities::get_model_context_window(
+                                name,
+                            ),
                             max_tokens: None,
                         });
                     }
@@ -1609,6 +1648,16 @@ async fn fetch_models(
     }
 
     Ok(models)
+}
+
+#[tauri::command]
+async fn count_conversation_tokens(messages: Vec<Message>) -> Result<usize, String> {
+    let mut total = 0;
+    for msg in messages {
+        total += crate::llm::tokenizer::Tokenizer::count_message_tokens(&msg)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(total)
 }
 
 #[tauri::command]
@@ -2466,6 +2515,7 @@ pub fn run() {
             delete_system_prompt,
             set_active_system_prompt,
             rebuild_memory_index,
+            count_conversation_tokens,
             search_messages,
             export_conversation,
             get_tool_policies,
