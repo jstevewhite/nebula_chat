@@ -241,16 +241,26 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 if (last.tool_calls && last.tool_calls.length > 0) {
                     const toolsToRun = last.tool_calls
                         .map(tc => {
-                            try {
-                                return {
-                                    name: tc.function.name,
-                                    args: JSON.parse(tc.function.arguments),
-                                    callId: tc.id || "call_" + Math.random().toString(36).substr(2, 9)
-                                };
-                            } catch (e) {
-                                console.error("Failed to parse tool args (recovery)", e);
-                                return null;
-                            }
+                                try {
+                                    // Normalize callId by removing "functions." prefix if present
+                                    let callId = tc.id || "call_" + Math.random().toString(36).substr(2, 9);
+                                    if (callId.startsWith("functions.")) {
+                                        callId = callId.substring("functions.".length);
+                                        // Fallback if stripping "functions." results in empty string
+                                        if (callId.trim() === "") {
+                                            callId = "call_" + Math.random().toString(36).substr(2, 9);
+                                        }
+                                    }
+                                    
+                                    return {
+                                        name: tc.function.name,
+                                        args: JSON.parse(tc.function.arguments),
+                                        callId: callId
+                                    };
+                                } catch (e) {
+                                    console.error("Failed to parse tool args (recovery)", e);
+                                    return null;
+                                }
                         })
                         .filter(t => t !== null) as { name: string, args: any, callId: string }[];
 
@@ -593,10 +603,31 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 });
                 setShowContextModal(false);
                 setContextInspectionData(null);
-                setLoading(false); // Reset loading state since we cancelled
+                setLoading(false);
             } catch (e) {
                 console.error("Failed to reject context:", e);
             }
+        }
+    };
+
+    const handleSaveContext = async () => {
+        if (!contextInspectionData) return;
+        try {
+            const defaultName = `context_${contextInspectionData.model || 'llm'}_${new Date().toISOString().slice(0, 19).replace(/[:.]/g, '-')}.json`;
+            const filePath = await save({
+                defaultPath: defaultName,
+                filters: [{
+                    name: 'JSON',
+                    extensions: ['json']
+                }]
+            });
+            if (filePath) {
+                await writeTextFile(filePath, JSON.stringify(contextInspectionData, null, 2));
+            }
+        } catch (e) {
+            console.error("Failed to save context:", e);
+            setErrorMsg("Failed to save context: " + String(e));
+            setTimeout(() => setErrorMsg(null), 3000);
         }
     };
 
@@ -806,6 +837,37 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
             // Don't await immediately - let event loop process stream events
             console.log("🚀 Starting invoke at", new Date().toISOString());
+            
+            // Log messages being sent, especially tool messages
+            const toolMessages = currentHistory.filter(m => m.role === 'tool');
+            const assistantMessages = currentHistory.filter(m => m.role === 'assistant');
+            
+            if (toolMessages.length > 0) {
+                console.log(`📋 Sending ${toolMessages.length} tool messages:`, toolMessages.map(m => ({
+                    id: m.id,
+                    tool_call_id: m.tool_call_id,
+                    content_preview: m.content?.substring(0, 50)
+                })));
+                
+                // Log assistant messages with tool_calls to check for matching IDs
+                const assistantsWithCalls = assistantMessages.filter(m => m.tool_calls && m.tool_calls.length > 0);
+                console.log(`🤖 Assistant messages with tool_calls: ${assistantsWithCalls.length}`);
+                assistantsWithCalls.forEach((m, idx) => {
+                    console.log(`  Assistant #${idx}:`, m.tool_calls?.map((tc: any) => tc.id));
+                });
+                
+                // Check for orphaned tool messages
+                const allToolCallIds = new Set(
+                    assistantsWithCalls.flatMap(m => m.tool_calls?.map((tc: any) => tc.id) || [])
+                );
+                const orphaned = toolMessages.filter(m => !allToolCallIds.has(m.tool_call_id));
+                if (orphaned.length > 0) {
+                    console.warn(`⚠️ Found ${orphaned.length} orphaned tool messages (no matching assistant tool_call):`, 
+                        orphaned.map(m => m.tool_call_id));
+                }
+            }
+            console.log(`📨 Total messages: ${currentHistory.length}, roles:`, currentHistory.map(m => m.role));
+            
             invoke<Message>("send_message", {
                 messages: currentHistory,
                 providerId: providerId,
@@ -832,6 +894,19 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 if (streamAccumulatorRef.current.pendingFlush) {
                     clearTimeout(streamAccumulatorRef.current.pendingFlush);
                     streamAccumulatorRef.current.pendingFlush = null;
+                }
+
+                // Normalize tool_call IDs in response by removing "functions." prefix
+                if (response.tool_calls && response.tool_calls.length > 0) {
+                    response.tool_calls = response.tool_calls.map((tc: any) => {
+                        if (tc.id && tc.id.startsWith("functions.")) {
+                            return {
+                                ...tc,
+                                id: tc.id.substring("functions.".length)
+                            };
+                        }
+                        return tc;
+                    });
                 }
 
                 // Replace/Append Final Message (do not assume placeholder is last)
@@ -861,10 +936,20 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 if (response.tool_calls && response.tool_calls.length > 0) {
                     const toolsToRun = response.tool_calls.map(tc => {
                         try {
+                            // Normalize callId by removing "functions." prefix if present
+                            let callId = tc.id || "call_" + Math.random().toString(36).substr(2, 9);
+                            if (callId.startsWith("functions.")) {
+                                callId = callId.substring("functions.".length);
+                                // Fallback if stripping "functions." results in empty string
+                                if (callId.trim() === "") {
+                                    callId = "call_" + Math.random().toString(36).substr(2, 9);
+                                }
+                            }
+                            
                             return {
                                 name: tc.function.name,
                                 args: JSON.parse(tc.function.arguments),
-                                callId: tc.id || "call_" + Math.random().toString(36).substr(2, 9)
+                                callId: callId
                             };
                         } catch (e) {
                             console.error("Failed to parse tool args", e);
@@ -1549,19 +1634,28 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         </div>
 
                         {/* Footer Actions */}
-                        <div className="p-6 border-t border-[var(--color-border-primary)] flex justify-end gap-3">
+                        <div className="p-6 border-t border-[var(--color-border-primary)] flex justify-between items-center gap-3">
                             <button
-                                onClick={handleRejectContext}
-                                className="px-6 py-2.5 rounded-lg bg-[var(--color-bg-tertiary)] text-[var(--color-text-primary)] hover:bg-red-600/20 hover:text-red-400 border border-[var(--color-border-primary)] hover:border-red-500/50 transition-colors font-semibold"
+                                onClick={handleSaveContext}
+                                className="px-4 py-2.5 rounded-lg bg-[var(--color-bg-tertiary)] text-[var(--color-text-primary)] hover:bg-blue-600/20 hover:text-blue-400 border border-[var(--color-border-primary)] hover:border-blue-500/50 transition-colors font-semibold flex items-center gap-2"
                             >
-                                Cancel
+                                <Download size={16} />
+                                Save Raw
                             </button>
-                            <button
-                                onClick={handleApproveContext}
-                                className="px-6 py-2.5 rounded-lg bg-green-600 text-white hover:bg-green-700 transition-colors font-semibold shadow-lg"
-                            >
-                                Send to Model
-                            </button>
+                            <div className="flex gap-3">
+                                <button
+                                    onClick={handleRejectContext}
+                                    className="px-6 py-2.5 rounded-lg bg-[var(--color-bg-tertiary)] text-[var(--color-text-primary)] hover:bg-red-600/20 hover:text-red-400 border border-[var(--color-border-primary)] hover:border-red-500/50 transition-colors font-semibold"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={handleApproveContext}
+                                    className="px-6 py-2.5 rounded-lg bg-green-600 text-white hover:bg-green-700 transition-colors font-semibold shadow-lg"
+                                >
+                                    Send to Model
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1805,23 +1899,30 @@ const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRe
 
                     {/* Tool Call Info */}
                     {m.tool_calls && (
-                        <div className="mt-2 text-xs">
-                            <button
-                                onClick={() => setShowToolArgs(!showToolArgs)}
-                                className="bg-[var(--color-bg-secondary)]/50 p-2 rounded border border-[var(--color-border-primary)] hover:border-[var(--color-border-secondary)] transition-colors inline-flex items-center gap-2 text-yellow-500/80 hover:text-yellow-400"
-                            >
-                                <Terminal size={12} />
-                                <span className="font-mono">Called: {m.tool_calls[0]?.function?.name}</span>
-                                <span className="opacity-50 text-[10px] ml-1">{showToolArgs ? "▼" : "▶"}</span>
-                            </button>
+                        <div className="mt-2 text-xs space-y-2">
+                            {m.tool_calls.map((tc: any, tcIdx: number) => (
+                                <div key={tc.id || tcIdx}>
+                                    <button
+                                        onClick={() => setShowToolArgs(!showToolArgs)}
+                                        className="bg-[var(--color-bg-secondary)]/50 p-2 rounded border border-[var(--color-border-primary)] hover:border-[var(--color-border-secondary)] transition-colors inline-flex items-center gap-2 text-yellow-500/80 hover:text-yellow-400"
+                                    >
+                                        <Terminal size={12} />
+                                        <span className="font-mono">Called: {tc.function?.name}</span>
+                                        {m.tool_calls.length > 1 && (
+                                            <span className="opacity-50 text-[10px]">({tcIdx + 1}/{m.tool_calls.length})</span>
+                                        )}
+                                        <span className="opacity-50 text-[10px] ml-1">{showToolArgs ? "▼" : "▶"}</span>
+                                    </button>
 
-                            {showToolArgs && (
-                                <div className="mt-2 pl-4 border-l-2 border-[var(--color-border-primary)]">
-                                    <div className="bg-black/40 p-3 rounded-lg border border-[var(--color-border-primary)] font-mono text-[var(--color-text-secondary)] overflow-x-auto">
-                                        <pre>{m.tool_calls[0]?.function?.arguments}</pre>
-                                    </div>
+                                    {showToolArgs && (
+                                        <div className="mt-2 pl-4 border-l-2 border-[var(--color-border-primary)]">
+                                            <div className="bg-black/40 p-3 rounded-lg border border-[var(--color-border-primary)] font-mono text-[var(--color-text-secondary)] overflow-x-auto">
+                                                <pre>{tc.function?.arguments}</pre>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
-                            )}
+                            ))}
                         </div>
                     )}
 
@@ -1842,7 +1943,7 @@ const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRe
                                 <Edit2 size={14} />
                             </button>
                         )}
-                        {(m.role === "assistant" || m.role === "user") && (
+                        {(m.role === "assistant" || m.role === "user" || m.role === "tool") && (
                             <button onClick={() => onDelete(i, m.id)} className="p-1 text-[var(--color-text-tertiary)] hover:text-red-400 transition-colors" title="Delete">
                                 <Trash2 size={14} />
                             </button>

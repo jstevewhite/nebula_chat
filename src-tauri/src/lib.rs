@@ -353,6 +353,22 @@ async fn get_chat_history(
             }
         };
 
+        // Validate tool messages have valid tool_call_id before adding to history
+        if role == "tool" {
+            let has_valid_id = match &tool_call_id {
+                Some(id) => !id.trim().is_empty(),
+                None => false,
+            };
+            
+            if !has_valid_id {
+                tracing::warn!(
+                    "get_chat_history: Skipping tool message (id: {}) without valid tool_call_id",
+                    id
+                );
+                continue; // Skip this message
+            }
+        }
+
         messages.push(Message {
             id: Some(id),
             role,
@@ -401,6 +417,61 @@ async fn send_message(
 
         // We're working on clones now
         let mut messages = messages_clone;
+        
+        // Filter out invalid tool messages and detect duplicates
+        let mut seen_tool_call_ids = std::collections::HashSet::new();
+        let mut seen_assistant_tool_call_ids = std::collections::HashSet::new();
+        
+        // First pass: collect all tool_call IDs from assistant messages
+        for msg in messages.iter() {
+            if msg.role == "assistant" {
+                if let Some(calls) = &msg.tool_calls {
+                    for call in calls {
+                        if let Some(id) = call.get("id").and_then(|v| v.as_str()) {
+                            seen_assistant_tool_call_ids.insert(id.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        
+        messages.retain(|msg| {
+            if msg.role == "tool" {
+                let has_valid_id = match &msg.tool_call_id {
+                    Some(id) => !id.trim().is_empty(),
+                    None => false,
+                };
+                
+                if !has_valid_id {
+                    tracing::warn!(
+                        "send_message: Filtering out tool message without valid tool_call_id (id: {:?})",
+                        msg.id
+                    );
+                    return false;
+                }
+                
+                let tool_call_id = msg.tool_call_id.as_ref().unwrap();
+                
+                // Check if this tool_call_id has been seen before (duplicate)
+                if !seen_tool_call_ids.insert(tool_call_id.clone()) {
+                    tracing::warn!(
+                        "send_message: Filtering out duplicate tool message with tool_call_id: {}",
+                        tool_call_id
+                    );
+                    return false;
+                }
+                
+                // Check if this tool_call_id has a matching assistant message
+                if !seen_assistant_tool_call_ids.contains(tool_call_id) {
+                    tracing::warn!(
+                        "send_message: Filtering out orphaned tool message with tool_call_id: {} (no matching assistant)",
+                        tool_call_id
+                    );
+                    return false;
+                }
+            }
+            true
+        });
         let provider_id = provider_id_clone;
         let model = model_clone;
         let conversation_id = conversation_id_clone;
@@ -440,6 +511,14 @@ async fn send_message(
                     // Phase 1.3: Tool-call integrity check
                     if last.role == "tool" {
                         if let Some(tid) = &last.tool_call_id {
+                            // Reject empty tool_call_ids
+                            if tid.trim().is_empty() {
+                                tracing::error!(
+                                    "Security: Tool message submitted with empty tool_call_id"
+                                );
+                                return Err("Tool message has empty tool_call_id".to_string());
+                            }
+
                             // Verify this ID exists in the conversation history using database-backed validation
                             let tool_call_exists = match lib.tool_call_id_exists(conv_id, tid) {
                                 Ok(exists) => exists,
@@ -2411,6 +2490,85 @@ async fn get_active_mcp_servers(state: State<'_, AppState>) -> Result<Vec<String
     Ok(state.mcp_manager.list_servers().await)
 }
 
+#[tauri::command]
+async fn cleanup_invalid_tool_messages(state: State<'_, AppState>) -> Result<usize, String> {
+    let lib = state.librarian.lock().await;
+    
+    // Get all conversations
+    let conversations = lib.list_conversations().map_err(|e| e.to_string())?;
+    
+    let mut total_deleted = 0;
+    
+    for (conv_id, _title, _icon, _created_at) in conversations {
+        // Get all messages for this conversation
+        let messages_raw = lib
+            .get_complete_history(&conv_id)
+            .map_err(|e| e.to_string())?;
+        
+        let mut seen_tool_call_ids = std::collections::HashSet::new();
+        let mut assistant_tool_call_ids = std::collections::HashSet::new();
+        let mut ids_to_delete = Vec::new();
+        
+        // First pass: collect all tool_call IDs from assistant messages and detect duplicates
+        for (id, role, _content, tool_calls_json, _tool_call_id, _reasoning, _created_at, _attachments) in &messages_raw {
+            if role == "assistant" {
+                if let Some(json_str) = tool_calls_json {
+                    if !json_str.is_empty() {
+                        if let Ok(calls) = serde_json::from_str::<Vec<serde_json::Value>>(json_str) {
+                            for call in calls {
+                                if let Some(call_id) = call.get("id").and_then(|v| v.as_str()) {
+                                    // Check for duplicate tool_call_id in assistant messages
+                                    if !assistant_tool_call_ids.insert(call_id.to_string()) {
+                                        tracing::warn!("Found duplicate assistant tool_call_id: {}, marking message for deletion", call_id);
+                                        ids_to_delete.push(id.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Second pass: check tool messages
+        for (id, role, _content, _tool_calls_json, tool_call_id, _reasoning, _created_at, _attachments) in &messages_raw {
+            if role == "tool" {
+                let has_valid_id = match tool_call_id {
+                    Some(ref id) => !id.trim().is_empty(),
+                    None => false,
+                };
+                
+                if !has_valid_id {
+                    tracing::info!("Deleting invalid tool message (no ID): id={}", id);
+                    ids_to_delete.push(id.clone());
+                } else {
+                    let tcid = tool_call_id.as_ref().unwrap();
+                    
+                    // Check for duplicate tool messages
+                    if !seen_tool_call_ids.insert(tcid.clone()) {
+                        tracing::info!("Deleting duplicate tool message: tool_call_id={}", tcid);
+                        ids_to_delete.push(id.clone());
+                    }
+                    // Check for orphaned tool messages
+                    else if !assistant_tool_call_ids.contains(tcid) {
+                        tracing::info!("Deleting orphaned tool message: tool_call_id={}", tcid);
+                        ids_to_delete.push(id.clone());
+                    }
+                }
+            }
+        }
+        
+        // Delete all marked messages
+        if !ids_to_delete.is_empty() {
+            lib.sqlite.delete_messages(&ids_to_delete).map_err(|e| e.to_string())?;
+            total_deleted += ids_to_delete.len();
+        }
+    }
+    
+    tracing::info!("Cleanup complete: deleted {} invalid/duplicate messages", total_deleted);
+    Ok(total_deleted)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Set environment variables for Linux compatibility
@@ -2526,7 +2684,8 @@ pub fn run() {
             list_fact_entities,
             update_fact,
             delete_fact,
-            list_facts_for_entity
+            list_facts_for_entity,
+            cleanup_invalid_tool_messages
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
