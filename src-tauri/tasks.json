@@ -135,5 +135,65 @@
     "priority": "medium",
     "createdAt": "2026-01-08T21:57:53.427Z",
     "updatedAt": "2026-01-08T21:58:54.661Z"
+  },
+  {
+    "id": "wqmqvtv0j",
+    "title": "Develop complex backstory for stripper character",
+    "description": "Create a believable, nuanced backstory that explains how an intelligent, thoughtful woman became a stripper while avoiding trauma tropes and maintaining complexity",
+    "status": "in_progress",
+    "dependencies": [],
+    "priority": "high",
+    "createdAt": "2026-01-09T20:49:03.636Z",
+    "updatedAt": "2026-01-09T20:49:03.636Z"
+  },
+  {
+    "id": "cypxt1xms",
+    "title": "Develop multi-dimensional anthropology student stripper",
+    "description": "Expand the anthropology student concept into a fully realized character with layered motivations, contradictions, and depth beyond her academic interest",
+    "status": "in_progress",
+    "dependencies": [],
+    "priority": "high",
+    "createdAt": "2026-01-09T20:50:43.908Z",
+    "updatedAt": "2026-01-09T20:50:43.908Z"
+  },
+  {
+    "id": "cwpf26xcg",
+    "title": "Add dimensional layers to anthropology student stripper",
+    "description": "Build additional complexity beyond the academic angle - add contradictions, hidden depths, personal conflicts, and multi-faceted motivations",
+    "status": "in_progress",
+    "dependencies": [],
+    "priority": "high",
+    "createdAt": "2026-01-09T20:51:36.500Z",
+    "updatedAt": "2026-01-09T20:51:36.500Z"
+  },
+  {
+    "id": "l42qc6m6j",
+    "title": "Address academic anti-sex-work climate",
+    "description": "Explore how she navigates the current Gender Studies landscape that frames sex work as inherently exploitative, and how this creates academic/personal conflicts",
+    "status": "in_progress",
+    "dependencies": [],
+    "priority": "high",
+    "createdAt": "2026-01-09T20:53:36.882Z",
+    "updatedAt": "2026-01-09T20:53:36.882Z"
+  },
+  {
+    "id": "5rz3zd1s1",
+    "title": "Flesh out her full life beyond work/academics",
+    "description": "Develop her relationships, living situation, hobbies, daily routines, personal struggles, and other life dimensions that make her feel like a complete person",
+    "status": "in_progress",
+    "dependencies": [],
+    "priority": "high",
+    "createdAt": "2026-01-09T21:22:44.162Z",
+    "updatedAt": "2026-01-09T21:22:44.162Z"
+  },
+  {
+    "id": "16o7pvuzb",
+    "title": "Flesh out character's full life beyond work/school",
+    "description": "Develop her relationships, living situation, hobbies, daily routines, health, family dynamics, and other life dimensions to make her feel fully realized",
+    "status": "in_progress",
+    "dependencies": [],
+    "priority": "high",
+    "createdAt": "2026-01-09T21:36:23.819Z",
+    "updatedAt": "2026-01-09T21:36:23.819Z"
   }
 ]

@@ -23,7 +23,14 @@ impl Compactor {
         let conversation_id = conversation_id.unwrap();
 
         let limit = settings.context_uncompressed_msg_count;
+        tracing::debug!(
+            "Compactor: {} total messages, limit is {}, will compact if > limit",
+            messages.len(),
+            limit
+        );
+        
         if messages.len() <= limit {
+            tracing::debug!("Compactor: Message count within limit, no compaction needed");
             return Ok((None, messages));
         }
 
@@ -45,19 +52,64 @@ impl Compactor {
         let mut split_idx = messages.len().saturating_sub(limit);
 
         // Safety check: Don't split in the middle of a tool chain.
-        // If split_idx lands on a "tool" message, we must include the preceding
-        // assistant message (and any other related tool messages) in the "keep_raw" segment.
-        // We move split_idx backwards until we find a non-tool message.
-        // This effectively pulls the entire tool interaction into the "recent/raw" buffer.
-        while split_idx > 0 {
-            if messages[split_idx].role == "tool" {
+        // Tool chains follow this pattern:
+        //   assistant (with tool_calls) -> tool -> tool -> ... (multiple tool responses)
+        // We must keep these together. Move split_idx backward until we find a safe split point.
+        
+        // Step 1: If we land on tool messages, move back past all consecutive tool messages
+        while split_idx > 0 && messages[split_idx].role == "tool" {
+            split_idx -= 1;
+        }
+        
+        // Step 2: If we're now at an assistant message with tool_calls, move back one more
+        // to ensure we don't separate the assistant's tool_calls from the tool responses
+        if split_idx > 0 && messages[split_idx].role == "assistant" {
+            if let Some(ref tool_calls) = messages[split_idx].tool_calls {
+                if !tool_calls.is_empty() {
+                    // This assistant message has tool calls, so tool responses likely follow.
+                    // Move split point back to before this assistant message.
+                    split_idx -= 1;
+                }
+            }
+        }
+        
+        // Step 3: Safety check - if we ended up at another tool message after step 2,
+        // continue moving backward (handles edge cases with nested tool chains)
+        while split_idx > 0 && messages[split_idx].role == "tool" {
+            split_idx -= 1;
+        }
+        
+        // Step 4: CRITICAL - After all adjustments, ensure we don't start keep_raw with a tool message
+        // because the summary (system message) would be prepended, creating invalid sequence:
+        // [system (summary), tool] which is invalid.
+        // Move back to include the assistant message that owns these tool responses.
+        if split_idx < messages.len() && messages[split_idx].role == "tool" {
+            tracing::warn!(
+                "Split would start keep_raw with tool message at index {}. Moving back to find owning assistant.",
+                split_idx
+            );
+            // Move backward to find the assistant message with tool_calls
+            while split_idx > 0 {
                 split_idx -= 1;
-            } else {
-                break;
+                if messages[split_idx].role == "assistant" {
+                    if let Some(ref tool_calls) = messages[split_idx].tool_calls {
+                        if !tool_calls.is_empty() {
+                            // Found the assistant, keep it in keep_raw
+                            break;
+                        }
+                    }
+                }
             }
         }
         let to_compact = &messages[..split_idx];
         let keep_raw = &messages[split_idx..];
+        
+        tracing::debug!(
+            "Compactor: Split at index {}. To compact: {} messages, Keep raw: {} messages",
+            split_idx,
+            to_compact.len(),
+            keep_raw.len()
+        );
 
         // Filter messages that are already covered by the previous summary
         // Usage: if last_id is present, skip messages up to and including that ID.
@@ -96,7 +148,21 @@ impl Compactor {
             if !last_summary.is_empty() {
                 result.push(Self::create_summary_message(last_summary.clone()));
             }
-            result.extend(keep_raw.iter().cloned());
+            
+            // Validate and add keep_raw messages
+            for msg in keep_raw.iter() {
+                // Validate tool messages have required tool_call_id
+                if msg.role == "tool" {
+                    if msg.tool_call_id.is_none() || msg.tool_call_id.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true) {
+                        tracing::error!(
+                            "Compactor (early exit): Dropping tool message without valid tool_call_id (id: {:?})",
+                            msg.id
+                        );
+                        continue; // Skip invalid tool messages
+                    }
+                }
+                result.push(msg.clone());
+            }
             return Ok((Some(last_summary), result));
         }
 
@@ -133,12 +199,12 @@ impl Compactor {
 
         let prompt = if last_summary.is_empty() {
             format!(
-                "Summarize the following conversation fragment concisely, preserving key facts, decisions, and context.\n\nFRAGMENT:\n{}",
+                "Summarize this conversation fragment in 2-4 concise sentences. Preserve key facts, decisions, and context. Output ONLY the summary.\n\nCONVERSATION:\n{}\n\nSUMMARY:",
                 chunk_text
             )
         } else {
             format!(
-                "Update the existing conversation summary with the new conversation fragment.\n\nEXISTING SUMMARY:\n{}\n\nNEW FRAGMENT:\n{}\n\nTASK:\nMerge the new information into the summary. Keep it concise but comprehensive. Output ONLY the new summary.",
+                "Update the summary below by incorporating the new conversation fragment. Output ONLY the updated summary in 2-4 concise sentences.\n\nCURRENT SUMMARY:\n{}\n\nNEW CONVERSATION:\n{}\n\nUPDATED SUMMARY:",
                 last_summary, chunk_text
             )
         };
@@ -147,7 +213,7 @@ impl Compactor {
             id: None,
             role: "system".to_string(),
             content: Some(
-                "You are a helpful assistant acting as a Conversation Summarizer.".to_string(),
+                "You are a Conversation Summarizer. Your ONLY job is to produce a concise factual summary of conversation history. Output ONLY the summary text with no commentary, no meta-discussion, no markdown formatting, and no preamble.".to_string(),
             ),
             reasoning_content: None,
             tool_calls: None,
@@ -172,6 +238,12 @@ impl Compactor {
             .context("Compaction LLM call failed")?;
 
         let new_summary = response.content.unwrap_or_default();
+        
+        tracing::debug!(
+            "Compactor: Generated summary of {} chars for {} compacted messages",
+            new_summary.len(),
+            new_chunk_msgs.len()
+        );
 
         // 4. Save new summary
         // The last message ID we compacted is the ID of the last message in new_chunk_msgs
@@ -186,7 +258,37 @@ impl Compactor {
         // 5. Return Result
         let mut result = Vec::new();
         result.push(Self::create_summary_message(new_summary.clone()));
-        result.extend(keep_raw.iter().cloned());
+        
+        // Clone and validate keep_raw messages
+        for msg in keep_raw.iter() {
+            // Validate tool messages have required tool_call_id
+            if msg.role == "tool" {
+                if msg.tool_call_id.is_none() || msg.tool_call_id.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true) {
+                    tracing::error!(
+                        "Compactor: Dropping tool message without valid tool_call_id (id: {:?}, content preview: {:?})",
+                        msg.id,
+                        msg.content.as_ref().map(|c| &c[..c.len().min(50)])
+                    );
+                    continue; // Skip invalid tool messages
+                }
+            }
+            result.push(msg.clone());
+        }
+
+        // Final validation: Log message sequence for debugging
+        let role_sequence: Vec<&str> = result.iter().map(|m| m.role.as_str()).collect();
+        tracing::debug!(
+            "Compactor returning {} messages. Role sequence: {:?}",
+            result.len(),
+            role_sequence
+        );
+        
+        // Validate no tool messages immediately follow system message
+        if result.len() >= 2 && result[0].role == "system" && result[1].role == "tool" {
+            tracing::error!(
+                "CRITICAL: Compactor produced invalid sequence [system, tool]. This should never happen!"
+            );
+        }
 
         Ok((Some(new_summary), result))
     }

@@ -822,6 +822,26 @@ export default function SettingsPage() {
                             Use this if search results seem stale or incorrect.
                         </p>
                     </div>
+
+                    {/* Cleanup Invalid Tool Messages */}
+                    <div className="text-center">
+                        <button
+                            onClick={async () => {
+                                try {
+                                    const count = await invoke<number>("cleanup_invalid_tool_messages");
+                                    alert(`Cleanup complete! Deleted ${count} invalid tool messages.`);
+                                } catch (e) {
+                                    alert(`Error: ${e}`);
+                                }
+                            }}
+                            className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg transition-colors flex items-center gap-2 mx-auto"
+                        >
+                            <Trash2 className="w-4 h-4" /> Cleanup Tool Messages
+                        </button>
+                        <p className="text-xs text-[var(--color-text-tertiary)] mt-2 text-center">
+                            Remove tool messages with missing tool_call_id (fixes Groq/Moonshot errors).
+                        </p>
+                    </div>
                 </div>
             </div>
 
