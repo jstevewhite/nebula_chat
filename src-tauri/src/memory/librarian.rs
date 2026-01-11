@@ -4,6 +4,7 @@ use anyhow::Result;
 use std::sync::Arc;
 
 use crate::memory::audit_logger::AuditLogger;
+use rusqlite::ToSql;
 
 /// Options for customizing memory search behavior
 #[derive(Debug, Clone, Default)]
@@ -102,8 +103,82 @@ impl Librarian {
     }
 
     pub fn delete_messages(&self, ids: &[String]) -> Result<()> {
-        self.sqlite.delete_messages(ids)?;
-        for id in ids {
+        if ids.is_empty() {
+            return Ok(());
+        }
+
+        // Load messages to derive cascading deletions
+        let rows = self.sqlite.get_messages_by_ids(ids)?;
+
+        // Collect tool_call_ids from the messages being deleted
+        let mut tool_call_ids: Vec<String> = rows
+            .iter()
+            .filter_map(|(_id, _role, _tc_json, tcid)| tcid.clone())
+            .collect();
+
+        // Collect tool_call_ids referenced by assistant tool_calls to delete their tool messages
+        let mut tool_call_ids_from_assistants: Vec<String> = Vec::new();
+        for (_id, role, tool_calls_json, _tcid) in rows.iter() {
+            if role == "assistant" {
+                if let Some(json) = tool_calls_json {
+                    if let Ok(calls) = serde_json::from_str::<Vec<serde_json::Value>>(json) {
+                        for call in calls {
+                            if let Some(cid) = call.get("id").and_then(|v| v.as_str()) {
+                                tool_call_ids_from_assistants.push(cid.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Find tool messages that correspond to assistant tool_call_ids
+        let mut child_tool_message_ids: Vec<String> = Vec::new();
+        if !tool_call_ids_from_assistants.is_empty() {
+            let mut placeholders = std::iter::repeat("?")
+                .take(tool_call_ids_from_assistants.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "SELECT id FROM messages WHERE role = 'tool' AND tool_call_id IN ({})",
+                placeholders
+            );
+            let mut params: Vec<&dyn ToSql> = tool_call_ids_from_assistants
+                .iter()
+                .map(|s| s as &dyn ToSql)
+                .collect();
+            let mut stmt = self.sqlite.conn.prepare(&sql)?;
+            let rows = stmt.query_map(params.as_slice(), |row| row.get::<_, String>(0))?;
+            for r in rows {
+                child_tool_message_ids.push(r?);
+            }
+        }
+
+        let mut all_ids: Vec<String> = ids.to_vec();
+        all_ids.extend(child_tool_message_ids);
+        all_ids.sort();
+        all_ids.dedup();
+
+        // Attachments
+        self.sqlite.delete_attachments(&all_ids)?;
+
+        // Facts provenance
+        for id in &all_ids {
+            let _ = self.sqlite.delete_facts_by_source_message(id);
+        }
+
+        // Tool executions (use tool_call_ids from messages)
+        tool_call_ids.extend(tool_call_ids_from_assistants);
+        tool_call_ids.sort();
+        tool_call_ids.dedup();
+        self.sqlite
+            .delete_tool_executions_by_tool_call_ids(&tool_call_ids)?;
+
+        // Delete messages
+        self.sqlite.delete_messages(&all_ids)?;
+
+        // Delete from search index
+        for id in &all_ids {
             self.tantivy.delete_by_message_id(id)?;
         }
         Ok(())

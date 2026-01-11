@@ -1,5 +1,5 @@
 use anyhow::Result;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, ToSql};
 
 use crate::memory::{Fact, NewFact, ObjectKind};
 
@@ -83,6 +83,73 @@ impl SqliteManager {
         let _ = self
             .conn
             .execute("ALTER TABLE messages ADD COLUMN tool_call_id TEXT", []);
+        Ok(())
+    }
+
+    pub fn delete_attachments(&self, message_ids: &[String]) -> Result<()> {
+        if message_ids.is_empty() {
+            return Ok(());
+        }
+        let mut stmt = format!(
+            "DELETE FROM attachments WHERE message_id IN ({})",
+            std::iter::repeat("?")
+                .take(message_ids.len())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::new();
+        for id in message_ids {
+            params.push(id);
+        }
+        self.conn.execute(&stmt, params.as_slice())?;
+        Ok(())
+    }
+
+    pub fn get_messages_by_ids(
+        &self,
+        ids: &[String],
+    ) -> Result<Vec<(String, String, Option<String>, Option<String>)>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let sql = format!(
+            "SELECT id, role, tool_calls, tool_call_id FROM messages WHERE id IN ({})",
+            std::iter::repeat("?")
+                .take(ids.len())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::new();
+        for id in ids {
+            params.push(id);
+        }
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params.as_slice(), |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    pub fn delete_tool_executions_by_tool_call_ids(&self, tool_call_ids: &[String]) -> Result<()> {
+        if tool_call_ids.is_empty() {
+            return Ok(());
+        }
+        let sql = format!(
+            "DELETE FROM tool_executions WHERE tool_call_id IN ({})",
+            std::iter::repeat("?")
+                .take(tool_call_ids.len())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::new();
+        for id in tool_call_ids {
+            params.push(id);
+        }
+        self.conn.execute(&sql, params.as_slice())?;
         Ok(())
     }
 
@@ -600,7 +667,7 @@ impl SqliteManager {
                 ";
                 Ok(self.conn.query_row(
                     fallback_query,
-                    params![conversation_id, format!("%{}", tool_call_id)],
+                    params![conversation_id, format!("%{}%", tool_call_id)],
                     |row| row.get::<_, bool>(0),
                 )?)
             }

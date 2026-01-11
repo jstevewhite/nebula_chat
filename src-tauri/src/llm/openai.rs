@@ -363,10 +363,29 @@ impl LlmProvider for OpenAiProvider {
                     }
 
                     if !content_parts.is_empty() {
-                        return json!({
+                        // Preserve tool_call_id/tool_calls even when attachments are present
+                        let mut obj = json!({
                             "role": msg.role,
                             "content": content_parts
                         });
+
+                        if let Some(tool_call_id) = msg
+                            .tool_call_id
+                            .as_ref()
+                            .filter(|id| !id.trim().is_empty())
+                        {
+                            obj.as_object_mut()
+                                .unwrap()
+                                .insert("tool_call_id".to_string(), json!(tool_call_id));
+                        }
+
+                        if let Some(tool_calls) = &msg.tool_calls {
+                            obj.as_object_mut()
+                                .unwrap()
+                                .insert("tool_calls".to_string(), json!(tool_calls));
+                        }
+
+                        return obj;
                     }
                 }
 
@@ -585,18 +604,46 @@ impl LlmProvider for OpenAiProvider {
                     }
 
                     if !text_content.is_empty() {
-                        content_parts.push(json!({"type": "text", "text": text_content}));
+                        content_parts.push(json!({
+                            "type": "text",
+                            "text": text_content
+                        }));
                     }
 
                     for att in attachments {
                         if att.is_binary {
-                            content_parts
-                                .push(json!({"type": "image_url", "image_url": {"url": att.data}}));
+                            content_parts.push(json!({
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": att.data
+                                }
+                            }));
                         }
                     }
 
                     if !content_parts.is_empty() {
-                        return json!({"role": msg.role, "content": content_parts});
+                        let mut obj = json!({
+                            "role": msg.role,
+                            "content": content_parts
+                        });
+
+                        if let Some(tool_call_id) = msg
+                            .tool_call_id
+                            .as_ref()
+                            .filter(|id| !id.trim().is_empty())
+                        {
+                            obj.as_object_mut()
+                                .unwrap()
+                                .insert("tool_call_id".to_string(), json!(tool_call_id));
+                        }
+
+                        if let Some(tool_calls) = &msg.tool_calls {
+                            obj.as_object_mut()
+                                .unwrap()
+                                .insert("tool_calls".to_string(), json!(tool_calls));
+                        }
+
+                        return obj;
                     }
                 }
 

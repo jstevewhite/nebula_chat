@@ -307,6 +307,33 @@ async fn get_chat_history(
     let raw = lib
         .get_complete_history(&conversation_id)
         .map_err(|e| e.to_string())?;
+    // Collect valid tool_call_ids from assistant messages first
+    let mut assistant_tool_call_ids = std::collections::HashSet::new();
+    for (
+        _id,
+        role,
+        _content,
+        tool_calls_json,
+        _tool_call_id,
+        _reasoning_content,
+        _created_at,
+        _attachments_json,
+    ) in raw.iter()
+    {
+        if role == "assistant" {
+            if let Some(json_str) = tool_calls_json {
+                if !json_str.is_empty() {
+                    if let Ok(calls) = serde_json::from_str::<Vec<serde_json::Value>>(json_str) {
+                        for call in calls {
+                            if let Some(cid) = call.get("id").and_then(|v| v.as_str()) {
+                                assistant_tool_call_ids.insert(cid.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     let mut messages = Vec::new();
     for (
@@ -366,6 +393,17 @@ async fn get_chat_history(
                     id
                 );
                 continue; // Skip this message
+            }
+
+            if let Some(tcid) = &tool_call_id {
+                if !assistant_tool_call_ids.contains(tcid) {
+                    tracing::warn!(
+                        "get_chat_history: Skipping orphan tool message (id: {}, tool_call_id: {})",
+                        id,
+                        tcid
+                    );
+                    continue;
+                }
             }
         }
 
@@ -962,7 +1000,6 @@ async fn send_message(
             }
         });
 
-        let assistant_message_id = uuid::Uuid::new_v4().to_string(); // Generate ID for the assistant's response
         let on_token = Box::new(move |content: crate::llm::provider::StreamContent| {
             let _ = tx.send(content);
         });
@@ -1035,7 +1072,6 @@ async fn send_message(
         let _ = aggregator_handle.await;
 
         let mut response = response_result.map_err(|e| e.to_string())?;
-        response.id = Some(assistant_message_id.clone()); // Assign the generated ID
 
         // Handle Response (Save & Prune triggers)
         if let Some(conv_id) = conversation_id.clone() {
@@ -1063,6 +1099,10 @@ async fn send_message(
                     None
                 }
             };
+
+            if let Some(saved_id) = &assistant_message_id_for_save {
+                response.id = Some(saved_id.clone());
+            }
 
             // Trigger Background Pruning (Fire & Forget)
             let app_handle_for_pruning = app_handle.clone();
