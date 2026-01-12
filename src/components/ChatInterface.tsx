@@ -1847,7 +1847,9 @@ const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRe
                                                                     style={vscDarkPlus}
                                                                     language={match[1]}
                                                                     PreTag="div"
-                                                                    customStyle={{ margin: 0, padding: '1rem', background: 'var(--color-bg-primary)', fontSize: '14px' }}
+                                                                    customStyle={{ margin: 0, padding: '1rem', background: 'var(--color-bg-primary)', fontSize: '14px', whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}
+                                                                    wrapLines={true}
+                                                                    wrapLongLines={true}
                                                                     {...props}
                                                                 >
                                                                     {codeText}

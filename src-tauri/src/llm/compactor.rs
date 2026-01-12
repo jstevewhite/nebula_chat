@@ -3,14 +3,84 @@ use crate::llm::ollama::OllamaProvider;
 use crate::llm::openai::OpenAiProvider;
 use crate::llm::provider::{LlmProvider, Message};
 use crate::mcp::config::{ProviderType, Settings};
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub struct Compactor;
 
+pub struct CompactionState {
+    conversation_id: String,
+    phase: String,
+    messages_before: Vec<Message>,
+    original_summary: Option<(String, String)>,
+}
+
 impl Compactor {
     pub async fn compact(
+        messages: Vec<Message>,
+        settings: &Settings,
+        conversation_id: Option<&str>,
+        librarian_arc: Arc<Mutex<crate::memory::librarian::Librarian>>,
+    ) -> Result<(Option<String>, Vec<Message>)> {
+        let mut backup_state: Option<CompactionState> = None;
+        let mut compact_conv_id: Option<&str> = conversation_id;
+
+        if let Some(conv_id) = conversation_id {
+            match Self::backup_state(conv_id, &messages, &librarian_arc).await {
+                Ok(state) => {
+                    backup_state = Some(state);
+                    compact_conv_id = Some(&backup_state.as_ref().unwrap().conversation_id);
+                }
+                Err(e) => {
+                    tracing::error!("Failed to backup state for compaction: {}", e);
+                }
+            }
+        }
+
+        let result = Self::compact_inner(messages, settings, compact_conv_id, librarian_arc.clone()).await;
+
+        if let Some(state) = backup_state {
+            if result.is_err() {
+                tracing::error!("Compaction failed, initiating rollback");
+                Self::rollback(state, &librarian_arc).await;
+            }
+        }
+
+        result
+    }
+
+    async fn backup_state(
+        conversation_id: &str,
+        messages: &[Message],
+        librarian_arc: &Arc<Mutex<crate::memory::librarian::Librarian>>,
+    ) -> Result<CompactionState> {
+        let lib = librarian_arc.lock().await;
+        let existing_summary = lib.sqlite.get_conversation_summary(conversation_id)?;
+        Ok(CompactionState {
+            conversation_id: conversation_id.to_string(),
+            phase: "compact".to_string(),
+            messages_before: messages.to_vec(),
+            original_summary: existing_summary,
+        })
+    }
+
+    async fn rollback(
+        state: CompactionState,
+        librarian_arc: &Arc<Mutex<crate::memory::librarian::Librarian>>,
+    ) {
+        let lib = librarian_arc.lock().await;
+        tracing::warn!(
+            "Rolling back compaction for conversation {}, restoring {} messages",
+            state.conversation_id,
+            state.messages_before.len()
+        );
+        if let Some((msg_id, summary)) = state.original_summary {
+            let _ = lib.sqlite.save_conversation_summary(&state.conversation_id, &msg_id, &summary);
+        }
+    }
+
+    async fn compact_inner(
         messages: Vec<Message>,
         settings: &Settings,
         conversation_id: Option<&str>,
@@ -116,6 +186,30 @@ impl Compactor {
         let mut new_chunk_msgs = Vec::new();
         let mut found_last = last_id.is_none(); // If no last_id, we start from beginning
 
+        // Safety validation: If last_id is provided but not found in to_compact,
+        // reset it to None to process all messages from the beginning.
+        // This prevents silent data loss when the marker message is outside the compaction range.
+        let mut effective_last_id = last_id.clone();
+        if let Some(ref lid) = last_id {
+            let id_exists = to_compact.iter().any(|msg| {
+                msg.id.as_ref() == Some(lid)
+            });
+            if !id_exists {
+                tracing::warn!(
+                    "Compaction: last_id '{}' not found in to_compact range ({} messages). \
+                     Starting compaction from beginning to prevent data loss.",
+                    lid,
+                    to_compact.len()
+                );
+                effective_last_id = None;
+            } else {
+                tracing::debug!(
+                    "Compaction: Found last_id '{}' in to_compact range",
+                    lid
+                );
+            }
+        }
+
         // If we have a last_id, we need to find where it is in `to_compact`.
         // If it's not found in `to_compact`, it might be that our 'last_id' is actually *older*
         // than the start of `to_compact` (which shouldn't happen if we strictly append),
@@ -125,7 +219,7 @@ impl Compactor {
         for msg in to_compact {
             if !found_last {
                 if let Some(id) = &msg.id {
-                    if Some(id.clone()) == last_id {
+                    if Some(id.clone()) == effective_last_id {
                         found_last = true;
                         // Don't include this one, it was the last one summarized (inclusive).
                         continue;
@@ -141,8 +235,20 @@ impl Compactor {
             new_chunk_msgs.push(msg);
         }
 
+        tracing::debug!(
+            "Compaction filtering complete: {} messages selected for compaction out of {} in range",
+            new_chunk_msgs.len(),
+            to_compact.len()
+        );
+
         // If nothing new to compact, just assemble result
         if new_chunk_msgs.is_empty() {
+            tracing::info!(
+                "Compaction: No new messages to compact. Summary: '{}' ({} chars), Raw messages: {}",
+                if last_summary.is_empty() { "(none)" } else { &last_summary[..last_summary.len().min(100)] },
+                last_summary.len(),
+                keep_raw.len()
+            );
             // We still need to return the summary message + kept raw messages
             let mut result = Vec::new();
             if !last_summary.is_empty() {
@@ -346,5 +452,132 @@ impl Compactor {
         };
 
         Ok(provider)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::librarian::Librarian;
+
+    fn create_test_settings() -> Settings {
+        Settings {
+            context_uncompressed_msg_count: 10,
+            context_model: Some("openai::gpt-4".to_string()),
+            default_model: Some("openai::gpt-4".to_string()),
+            providers: std::collections::HashMap::new(),
+            ..Default::default()
+        }
+    }
+
+    fn create_test_message(id: &str, role: &str, content: &str) -> Message {
+        Message {
+            id: Some(id.to_string()),
+            role: role.to_string(),
+            content: Some(content.to_string()),
+            reasoning_content: None,
+            tool_calls: None,
+            tool_call_id: None,
+            attachments: None,
+            created_at: None,
+        }
+    }
+
+    async fn create_test_librarian() -> Arc<Mutex<Librarian>> {
+        let librarian = Librarian::new(std::path::Path::new(":memory:")).unwrap();
+        Arc::new(Mutex::new(librarian))
+    }
+
+    #[tokio::test]
+    async fn test_compaction_disabled_when_count_is_zero() {
+        let mut settings = Settings::default();
+        settings.context_uncompressed_msg_count = 0;
+        let messages = vec![
+            create_test_message("1", "user", "Hello"),
+            create_test_message("2", "assistant", "Hi there"),
+        ];
+        let librarian: Arc<Mutex<Librarian>> = create_test_librarian().await;
+
+        let result = Compactor::compact(messages, &settings, Some("test"), librarian).await;
+        assert!(result.is_ok());
+        let (summary, msgs) = result.unwrap();
+        assert!(summary.is_none());
+        assert_eq!(msgs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_compaction_skip_when_within_limit() {
+        let settings = create_test_settings();
+        let messages = vec![
+            create_test_message("1", "user", "Hello"),
+            create_test_message("2", "assistant", "Hi there"),
+        ];
+        let librarian: Arc<Mutex<Librarian>> = create_test_librarian().await;
+
+        let result = Compactor::compact(messages, &settings, Some("test"), librarian).await;
+        assert!(result.is_ok());
+        let (summary, msgs) = result.unwrap();
+        assert!(summary.is_none());
+        assert_eq!(msgs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_last_id_not_in_range_safety() {
+        let librarian: Arc<Mutex<Librarian>> = create_test_librarian().await;
+
+        let mut settings = Settings::default();
+        settings.context_uncompressed_msg_count = 5;
+        settings.context_model = Some("invalid_model_id".to_string());
+        settings.default_model = Some("invalid_model_id".to_string());
+
+        let messages: Vec<Message> = (1..=15)
+            .map(|i| create_test_message(&i.to_string(), "user", &format!("Message {}", i)))
+            .collect();
+
+        let conv_id = {
+            let lib = librarian.lock().await;
+            lib.sqlite.init_conversation("test_conv").unwrap()
+        };
+
+        {
+            let lib = librarian.lock().await;
+            lib.sqlite.save_conversation_summary(&conv_id, "100", "Old summary").unwrap();
+        }
+
+        let result = Compactor::compact(messages.clone(), &settings, Some(&conv_id), librarian).await;
+
+        assert!(result.is_ok(), "Compaction should succeed");
+        let (summary, msgs) = result.unwrap();
+        assert!(summary.is_some(), "Should return a summary after compaction");
+        assert_eq!(msgs.len(), 6, "Should have 1 summary + 5 raw messages");
+    }
+
+    #[tokio::test]
+    async fn test_empty_messages() {
+        let settings = create_test_settings();
+        let messages = vec![];
+        let librarian: Arc<Mutex<Librarian>> = create_test_librarian().await;
+
+        let result = Compactor::compact(messages, &settings, Some("test"), librarian).await;
+        assert!(result.is_ok());
+        let (summary, msgs) = result.unwrap();
+        assert!(summary.is_none());
+        assert!(msgs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_no_conversation_id() {
+        let settings = create_test_settings();
+        let messages = vec![
+            create_test_message("1", "user", "Hello"),
+            create_test_message("2", "assistant", "Hi there"),
+        ];
+        let librarian: Arc<Mutex<Librarian>> = create_test_librarian().await;
+
+        let result = Compactor::compact(messages, &settings, None, librarian).await;
+        assert!(result.is_ok());
+        let (summary, msgs) = result.unwrap();
+        assert!(summary.is_none());
+        assert_eq!(msgs.len(), 2);
     }
 }

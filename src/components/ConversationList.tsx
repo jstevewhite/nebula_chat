@@ -394,8 +394,8 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
             {/* Delete Confirmation Modal */}
             {deleteTarget && (
                 <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
-                    <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border-primary)] rounded-xl w-full max-w-md overflow-hidden shadow-2xl">
-                        <div className="p-4 border-b border-[var(--color-border-primary)] flex items-center justify-between">
+                    <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border-primary)] rounded-xl w-full max-w-md max-h-[80vh] flex flex-col shadow-2xl">
+                        <div className="p-4 border-b border-[var(--color-border-primary)] flex items-center justify-between shrink-0">
                             <h4 className="font-bold text-[var(--color-text-primary)]">Delete chat?</h4>
                             <button
                                 className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
@@ -405,10 +405,10 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
                                 ×
                             </button>
                         </div>
-                        <div className="p-4 text-sm text-[var(--color-text-secondary)]">
-                            This will permanently delete <span className="font-semibold text-gray-100">{deleteTarget.title}</span> and all its messages.
+                        <div className="p-4 text-sm text-[var(--color-text-secondary)] overflow-y-auto">
+                            This will permanently delete <span className="font-semibold text-gray-100 break-words">{deleteTarget.title}</span> and all its messages.
                         </div>
-                        <div className="p-4 border-t border-[var(--color-border-primary)] flex justify-end gap-2">
+                        <div className="p-4 border-t border-[var(--color-border-primary)] flex justify-end gap-2 shrink-0">
                             <button
                                 className="px-4 py-2 rounded-lg hover:bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)] font-semibold"
                                 onClick={() => setDeleteTarget(null)}
