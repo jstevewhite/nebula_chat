@@ -142,6 +142,15 @@ pub struct Settings {
 
     #[serde(default = "default_weight")]
     pub chat_font_weight: String,
+
+    // Number of recent messages to keep uncompressed.
+    // If messages exceed this count, older ones are summarized.
+    #[serde(default = "default_uncompressed_count")]
+    pub context_uncompressed_msg_count: usize,
+}
+
+fn default_uncompressed_count() -> usize {
+    20
 }
 
 fn default_font_interface() -> String {
@@ -303,6 +312,12 @@ impl Settings {
         }
         if let Some(weight) = val.get("chat_font_weight").and_then(|v| v.as_str()) {
             s.chat_font_weight = weight.to_string();
+        }
+        if let Some(count) = val
+            .get("context_uncompressed_msg_count")
+            .and_then(|v| v.as_u64())
+        {
+            s.context_uncompressed_msg_count = count as usize;
         }
 
         if let Some(mcp) = val.get("mcp_servers").and_then(|v| v.as_object()) {

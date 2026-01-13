@@ -55,6 +55,7 @@ interface ModelOption {
     name: string;
     providerId: string;
     providerType: string;
+    context_window?: number;
 }
 
 interface SystemPrompt {
@@ -240,16 +241,26 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 if (last.tool_calls && last.tool_calls.length > 0) {
                     const toolsToRun = last.tool_calls
                         .map(tc => {
-                            try {
-                                return {
-                                    name: tc.function.name,
-                                    args: JSON.parse(tc.function.arguments),
-                                    callId: tc.id || "call_" + Math.random().toString(36).substr(2, 9)
-                                };
-                            } catch (e) {
-                                console.error("Failed to parse tool args (recovery)", e);
-                                return null;
-                            }
+                                try {
+                                    // Normalize callId by removing "functions." prefix if present
+                                    let callId = tc.id || "call_" + Math.random().toString(36).substr(2, 9);
+                                    if (callId.startsWith("functions.")) {
+                                        callId = callId.substring("functions.".length);
+                                        // Fallback if stripping "functions." results in empty string
+                                        if (callId.trim() === "") {
+                                            callId = "call_" + Math.random().toString(36).substr(2, 9);
+                                        }
+                                    }
+                                    
+                                    return {
+                                        name: tc.function.name,
+                                        args: JSON.parse(tc.function.arguments),
+                                        callId: callId
+                                    };
+                                } catch (e) {
+                                    console.error("Failed to parse tool args (recovery)", e);
+                                    return null;
+                                }
                         })
                         .filter(t => t !== null) as { name: string, args: any, callId: string }[];
 
@@ -302,6 +313,72 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
         return () => clearTimeout(timer);
     }, [messages]);
+
+    // Token Counting
+    const [tokenCount, setTokenCount] = useState<number>(0);
+    const [contextLimit, setContextLimit] = useState<number | null>(null);
+
+    const getModelContextLimit = (modelId: string): number | null => {
+        const m = modelId.toLowerCase();
+        if (m.includes("gpt-4o") || m.includes("gpt-4-turbo") || m.includes("gpt-4-0125") || m.includes("gpt-4-1106")) return 128000;
+        if (m.includes("gpt-4")) return 8192;
+        if (m.includes("gpt-3.5")) return 16385;
+        if (m.includes("o1-preview") || m.includes("o1-mini")) return 128000;
+        if (m.includes("o1")) return 200000;
+
+        if (m.includes("claude-4.5")) return 200000;
+        if (m.includes("claude-3-5") || m.includes("claude-3.5")) return 200000;
+        if (m.includes("claude-3")) return 200000;
+
+        if (m.includes("gemini-1.5-pro") || m.includes("gemini-pro-1.5") || m.includes("gemini-2")) return 2000000;
+        if (m.includes("gemini-1.5-flash")) return 1000000;
+
+        if (m.includes("deepseek-v3") || m.includes("deepseek-3")) return 128000;
+        if (m.includes("deepseek")) return 32000;
+
+        if (m.includes("llama-3.1") || m.includes("llama3.1")) return 128000;
+        if (m.includes("llama-3") || m.includes("llama3")) return 8192;
+        if (m.includes("mistral-large")) return 32000;
+
+        return null;
+    };
+
+    useEffect(() => {
+        // Debounce token counting
+        const timer = setTimeout(async () => {
+            if (messages.length === 0) {
+                setTokenCount(0);
+                return;
+            }
+            try {
+                // We send the current history + current input (optional, but usually context is history)
+                // For now just history
+                const count = await invoke<number>("count_conversation_tokens", { messages });
+                setTokenCount(count);
+            } catch (e) {
+                console.error("Failed to count tokens", e);
+            }
+        }, 500);
+        return () => clearTimeout(timer);
+    }, [messages]);
+
+    useEffect(() => {
+        if (selectedModel && availableModels.length > 0) {
+            const [pid, mid] = selectedModel.split("::");
+            const model = availableModels.find(m => m.providerId === pid && m.id === mid);
+            if (model) {
+                if (model.context_window) {
+                    setContextLimit(model.context_window);
+                } else {
+                    // Fallback to local heuristic
+                    const fallback = getModelContextLimit(model.id);
+                    setContextLimit(fallback);
+                }
+            } else {
+                setContextLimit(null);
+            }
+        }
+    }, [selectedModel, availableModels]);
 
     // Tauri File Drop Listeners
     useEffect(() => {
@@ -425,7 +502,8 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                                     id: m.id,
                                     name: m.name || m.id,
                                     providerId: providerKey,
-                                    providerType: config.provider_type // Extract provider type
+                                    providerType: config.provider_type, // Extract provider type
+                                    context_window: m.context_window
                                 });
                             }
                         });
@@ -525,10 +603,31 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 });
                 setShowContextModal(false);
                 setContextInspectionData(null);
-                setLoading(false); // Reset loading state since we cancelled
+                setLoading(false);
             } catch (e) {
                 console.error("Failed to reject context:", e);
             }
+        }
+    };
+
+    const handleSaveContext = async () => {
+        if (!contextInspectionData) return;
+        try {
+            const defaultName = `context_${contextInspectionData.model || 'llm'}_${new Date().toISOString().slice(0, 19).replace(/[:.]/g, '-')}.json`;
+            const filePath = await save({
+                defaultPath: defaultName,
+                filters: [{
+                    name: 'JSON',
+                    extensions: ['json']
+                }]
+            });
+            if (filePath) {
+                await writeTextFile(filePath, JSON.stringify(contextInspectionData, null, 2));
+            }
+        } catch (e) {
+            console.error("Failed to save context:", e);
+            setErrorMsg("Failed to save context: " + String(e));
+            setTimeout(() => setErrorMsg(null), 3000);
         }
     };
 
@@ -738,6 +837,37 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
             // Don't await immediately - let event loop process stream events
             console.log("🚀 Starting invoke at", new Date().toISOString());
+            
+            // Log messages being sent, especially tool messages
+            const toolMessages = currentHistory.filter(m => m.role === 'tool');
+            const assistantMessages = currentHistory.filter(m => m.role === 'assistant');
+            
+            if (toolMessages.length > 0) {
+                console.log(`📋 Sending ${toolMessages.length} tool messages:`, toolMessages.map(m => ({
+                    id: m.id,
+                    tool_call_id: m.tool_call_id,
+                    content_preview: m.content?.substring(0, 50)
+                })));
+                
+                // Log assistant messages with tool_calls to check for matching IDs
+                const assistantsWithCalls = assistantMessages.filter(m => m.tool_calls && m.tool_calls.length > 0);
+                console.log(`🤖 Assistant messages with tool_calls: ${assistantsWithCalls.length}`);
+                assistantsWithCalls.forEach((m, idx) => {
+                    console.log(`  Assistant #${idx}:`, m.tool_calls?.map((tc: any) => tc.id));
+                });
+                
+                // Check for orphaned tool messages
+                const allToolCallIds = new Set(
+                    assistantsWithCalls.flatMap(m => m.tool_calls?.map((tc: any) => tc.id) || [])
+                );
+                const orphaned = toolMessages.filter(m => !allToolCallIds.has(m.tool_call_id));
+                if (orphaned.length > 0) {
+                    console.warn(`⚠️ Found ${orphaned.length} orphaned tool messages (no matching assistant tool_call):`, 
+                        orphaned.map(m => m.tool_call_id));
+                }
+            }
+            console.log(`📨 Total messages: ${currentHistory.length}, roles:`, currentHistory.map(m => m.role));
+            
             invoke<Message>("send_message", {
                 messages: currentHistory,
                 providerId: providerId,
@@ -764,6 +894,19 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 if (streamAccumulatorRef.current.pendingFlush) {
                     clearTimeout(streamAccumulatorRef.current.pendingFlush);
                     streamAccumulatorRef.current.pendingFlush = null;
+                }
+
+                // Normalize tool_call IDs in response by removing "functions." prefix
+                if (response.tool_calls && response.tool_calls.length > 0) {
+                    response.tool_calls = response.tool_calls.map((tc: any) => {
+                        if (tc.id && tc.id.startsWith("functions.")) {
+                            return {
+                                ...tc,
+                                id: tc.id.substring("functions.".length)
+                            };
+                        }
+                        return tc;
+                    });
                 }
 
                 // Replace/Append Final Message (do not assume placeholder is last)
@@ -793,10 +936,20 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 if (response.tool_calls && response.tool_calls.length > 0) {
                     const toolsToRun = response.tool_calls.map(tc => {
                         try {
+                            // Normalize callId by removing "functions." prefix if present
+                            let callId = tc.id || "call_" + Math.random().toString(36).substr(2, 9);
+                            if (callId.startsWith("functions.")) {
+                                callId = callId.substring("functions.".length);
+                                // Fallback if stripping "functions." results in empty string
+                                if (callId.trim() === "") {
+                                    callId = "call_" + Math.random().toString(36).substr(2, 9);
+                                }
+                            }
+                            
                             return {
                                 name: tc.function.name,
                                 args: JSON.parse(tc.function.arguments),
-                                callId: tc.id || "call_" + Math.random().toString(36).substr(2, 9)
+                                callId: callId
                             };
                         } catch (e) {
                             console.error("Failed to parse tool args", e);
@@ -934,9 +1087,9 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         // 1. Find the user message to resubmit from
         // 2. Delete all messages after that user message
         // 3. Resubmit from that user message
-        
+
         let userMessageIndex = index;
-        
+
         // If this is an assistant message, find the user message before it
         if (role === "assistant") {
             userMessageIndex = index - 1;
@@ -945,17 +1098,17 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 userMessageIndex--;
             }
         }
-        
+
         if (userMessageIndex < 0) {
             console.error("No user message found to regenerate from");
             return;
         }
-        
+
         // Get all message IDs after the user message to delete
         const messagesToDelete = messages.slice(userMessageIndex + 1)
             .filter(m => m.id)
             .map(m => m.id!);
-        
+
         // Delete messages from backend if they have IDs
         if (messagesToDelete.length > 0) {
             try {
@@ -964,13 +1117,13 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 console.error("Failed to delete messages", e);
             }
         }
-        
+
         // Truncate the history
         const historyToReplay = messages.slice(0, userMessageIndex + 1);
-        
+
         // Update UI state to show truncated history
         setMessages(historyToReplay);
-        
+
         // Trigger regeneration with the truncated history
         // The backend will detect existing message IDs and not duplicate them
         await stableSendMessage(historyToReplay);
@@ -1099,6 +1252,23 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         {showSettings && (
                             <div className="absolute top-full right-0 mt-2 w-72 bg-[var(--color-bg-secondary)] border border-[var(--color-border-secondary)] rounded-xl shadow-2xl p-4 z-50 animate-in fade-in zoom-in-95 duration-100">
                                 <h4 className="text-sm font-bold text-[var(--color-text-secondary)] mb-4 uppercase tracking-wider border-b border-[var(--color-border-primary)] pb-2">Generation Options</h4>
+
+                                {contextLimit && (
+                                    <div className="mb-4 p-2 bg-[var(--color-bg-tertiary)] rounded-lg border border-[var(--color-border-primary)]">
+                                        <div className="flex justify-between items-center mb-1">
+                                            <span className="text-xs font-bold text-[var(--color-text-secondary)]">Context Usage</span>
+                                            <span className="text-xs text-[var(--color-text-primary)]">{tokenCount.toLocaleString()} / {contextLimit.toLocaleString()}</span>
+                                        </div>
+                                        <div className="w-full bg-[var(--color-bg-secondary)] rounded-full h-1.5 overflow-hidden">
+                                            <div
+                                                className={`h-full rounded-full transition-all duration-500 ${(tokenCount / contextLimit) > 0.9 ? 'bg-red-500' :
+                                                    (tokenCount / contextLimit) > 0.7 ? 'bg-yellow-500' : 'bg-green-500'
+                                                    }`}
+                                                style={{ width: `${Math.min((tokenCount / contextLimit) * 100, 100)}%` }}
+                                            />
+                                        </div>
+                                    </div>
+                                )}
 
                                 <div className="space-y-4">
                                     {/* Streaming Toggle */}
@@ -1464,19 +1634,28 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         </div>
 
                         {/* Footer Actions */}
-                        <div className="p-6 border-t border-[var(--color-border-primary)] flex justify-end gap-3">
+                        <div className="p-6 border-t border-[var(--color-border-primary)] flex justify-between items-center gap-3">
                             <button
-                                onClick={handleRejectContext}
-                                className="px-6 py-2.5 rounded-lg bg-[var(--color-bg-tertiary)] text-[var(--color-text-primary)] hover:bg-red-600/20 hover:text-red-400 border border-[var(--color-border-primary)] hover:border-red-500/50 transition-colors font-semibold"
+                                onClick={handleSaveContext}
+                                className="px-4 py-2.5 rounded-lg bg-[var(--color-bg-tertiary)] text-[var(--color-text-primary)] hover:bg-blue-600/20 hover:text-blue-400 border border-[var(--color-border-primary)] hover:border-blue-500/50 transition-colors font-semibold flex items-center gap-2"
                             >
-                                Cancel
+                                <Download size={16} />
+                                Save Raw
                             </button>
-                            <button
-                                onClick={handleApproveContext}
-                                className="px-6 py-2.5 rounded-lg bg-green-600 text-white hover:bg-green-700 transition-colors font-semibold shadow-lg"
-                            >
-                                Send to Model
-                            </button>
+                            <div className="flex gap-3">
+                                <button
+                                    onClick={handleRejectContext}
+                                    className="px-6 py-2.5 rounded-lg bg-[var(--color-bg-tertiary)] text-[var(--color-text-primary)] hover:bg-red-600/20 hover:text-red-400 border border-[var(--color-border-primary)] hover:border-red-500/50 transition-colors font-semibold"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={handleApproveContext}
+                                    className="px-6 py-2.5 rounded-lg bg-green-600 text-white hover:bg-green-700 transition-colors font-semibold shadow-lg"
+                                >
+                                    Send to Model
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1668,7 +1847,9 @@ const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRe
                                                                     style={vscDarkPlus}
                                                                     language={match[1]}
                                                                     PreTag="div"
-                                                                    customStyle={{ margin: 0, padding: '1rem', background: 'var(--color-bg-primary)', fontSize: '14px' }}
+                                                                    customStyle={{ margin: 0, padding: '1rem', background: 'var(--color-bg-primary)', fontSize: '14px', whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}
+                                                                    wrapLines={true}
+                                                                    wrapLongLines={true}
                                                                     {...props}
                                                                 >
                                                                     {codeText}
@@ -1720,23 +1901,30 @@ const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRe
 
                     {/* Tool Call Info */}
                     {m.tool_calls && (
-                        <div className="mt-2 text-xs">
-                            <button
-                                onClick={() => setShowToolArgs(!showToolArgs)}
-                                className="bg-[var(--color-bg-secondary)]/50 p-2 rounded border border-[var(--color-border-primary)] hover:border-[var(--color-border-secondary)] transition-colors inline-flex items-center gap-2 text-yellow-500/80 hover:text-yellow-400"
-                            >
-                                <Terminal size={12} />
-                                <span className="font-mono">Called: {m.tool_calls[0]?.function?.name}</span>
-                                <span className="opacity-50 text-[10px] ml-1">{showToolArgs ? "▼" : "▶"}</span>
-                            </button>
+                        <div className="mt-2 text-xs space-y-2">
+                            {m.tool_calls.map((tc: any, tcIdx: number) => (
+                                <div key={tc.id || tcIdx}>
+                                    <button
+                                        onClick={() => setShowToolArgs(!showToolArgs)}
+                                        className="bg-[var(--color-bg-secondary)]/50 p-2 rounded border border-[var(--color-border-primary)] hover:border-[var(--color-border-secondary)] transition-colors inline-flex items-center gap-2 text-yellow-500/80 hover:text-yellow-400"
+                                    >
+                                        <Terminal size={12} />
+                                        <span className="font-mono">Called: {tc.function?.name}</span>
+                                        {m.tool_calls.length > 1 && (
+                                            <span className="opacity-50 text-[10px]">({tcIdx + 1}/{m.tool_calls.length})</span>
+                                        )}
+                                        <span className="opacity-50 text-[10px] ml-1">{showToolArgs ? "▼" : "▶"}</span>
+                                    </button>
 
-                            {showToolArgs && (
-                                <div className="mt-2 pl-4 border-l-2 border-[var(--color-border-primary)]">
-                                    <div className="bg-black/40 p-3 rounded-lg border border-[var(--color-border-primary)] font-mono text-[var(--color-text-secondary)] overflow-x-auto">
-                                        <pre>{m.tool_calls[0]?.function?.arguments}</pre>
-                                    </div>
+                                    {showToolArgs && (
+                                        <div className="mt-2 pl-4 border-l-2 border-[var(--color-border-primary)]">
+                                            <div className="bg-black/40 p-3 rounded-lg border border-[var(--color-border-primary)] font-mono text-[var(--color-text-secondary)] overflow-x-auto">
+                                                <pre>{tc.function?.arguments}</pre>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
-                            )}
+                            ))}
                         </div>
                     )}
 
@@ -1757,12 +1945,12 @@ const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRe
                                 <Edit2 size={14} />
                             </button>
                         )}
-                        {(m.role === "assistant" || m.role === "user") && (
+                        {(m.role === "assistant" || m.role === "user" || m.role === "tool") && (
                             <button onClick={() => onDelete(i, m.id)} className="p-1 text-[var(--color-text-tertiary)] hover:text-red-400 transition-colors" title="Delete">
                                 <Trash2 size={14} />
                             </button>
                         )}
-                        {(m.role === "assistant" || m.role === "user") && (
+                        {(m.role === "assistant" || m.role === "user" || m.role === "tool") && (
                             <button onClick={() => onRegenerate(i, m.role)} className="p-1 text-[var(--color-text-tertiary)] hover:text-green-400 transition-colors" title="Regenerate">
                                 <RefreshCw size={14} />
                             </button>

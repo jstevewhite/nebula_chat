@@ -1,5 +1,6 @@
 pub mod anthropic;
 pub mod capabilities;
+pub mod compactor;
 pub mod context;
 pub mod context_assembler;
 pub mod ollama;
