@@ -5,6 +5,7 @@ import ConversationList from "./components/ConversationList";
 import ToolsPanel from "./components/ToolsPanel";
 import { MessageSquare, Settings, Wrench } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import AppIcon from "../nebula.png";
 
 interface Conversation {
   id: string;
@@ -51,7 +52,11 @@ export default function App() {
     <div className="flex h-screen bg-[var(--color-bg-primary)] text-[var(--color-text-primary)] overflow-hidden">
       {/* Activity Bar */}
       <div className="w-16 flex flex-col items-center py-6 bg-[var(--color-bg-tertiary)] border-r border-[var(--color-border-primary)] space-y-4 z-20 shrink-0">
-        <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-purple-600 rounded-xl mb-4 shadow-lg shadow-blue-500/20" />
+        <img
+          src={AppIcon}
+          alt="Nebula"
+          className="w-10 h-10 rounded-xl mb-4 shadow-lg shadow-blue-500/20 object-cover"
+        />
 
         <button
           onClick={() => setActiveTab("chat")}
