@@ -93,7 +93,7 @@ export default function App() {
           {showTools && <ToolsPanel />}
         </div>
 
-        <div className={activeTab === "settings" ? "flex flex-1 overflow-hidden" : "hidden"}>
+        <div className={activeTab === "settings" ? "flex flex-1 overflow-auto justify-center" : "hidden"}>
           <SettingsPage />
         </div>
       </div>

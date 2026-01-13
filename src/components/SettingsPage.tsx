@@ -504,7 +504,7 @@ export default function SettingsPage() {
     };
 
     return (
-        <div className="p-6 bg-[var(--color-bg-primary)] h-full text-[var(--color-text-primary)] overflow-auto relative">
+        <div className="p-6 bg-[var(--color-bg-primary)] h-full text-[var(--color-text-primary)] overflow-auto relative flex-1 w-full max-w-5xl mx-auto">
             {/* Status Banner */}
             {status && (
                 <div className={`mb-6 p-4 rounded-lg flex items-center gap-2 border ${status.includes("Error") || status.includes("Warning") || status.includes("Failed")
