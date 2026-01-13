@@ -38,7 +38,7 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GenerationOptions {
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,

@@ -4,7 +4,8 @@ use crate::mcp::config::Settings;
 use crate::mcp::config::{McpServerConfig, ModelConfig, ProviderType};
 use crate::mcp::manager::McpManager;
 use crate::memory::tantivy_index::SearchResult;
-use crate::memory::{Fact as MemoryFact, NewFact, ObjectKind};
+use crate::memory::{Fact as MemoryFact, ObjectKind};
+use crate::memory::extraction::FactExtractor;
 use anyhow::Result;
 use serde::Serialize;
 use std::sync::Arc;
@@ -591,6 +592,37 @@ async fn send_message(
                                 last.attachments.as_deref(),
                             ) {
                                 tracing::error!("Failed to save user message for facts: {}", e);
+                            } else if let Ok(msg_id) = lib.save_full_message_returning_id(
+                                conv_id,
+                                &last.role,
+                                last.content.as_deref(),
+                                tool_calls_json.as_deref(),
+                                last.tool_call_id.as_deref(),
+                                None,
+                                last.attachments.as_deref(),
+                            ) {
+                                // Trigger Background Fact Extraction
+                                let app_handle_bg = app_handle.clone();
+                                let lib_clone = state.librarian.clone();
+                                let content_clone = last.content.clone().unwrap_or_default();
+                                let msg_id_clone = msg_id.clone();
+                                
+                                tokio::spawn(async move {
+                                     let config_dir = app_handle_bg.path().app_config_dir().unwrap_or_default();
+                                     let settings_path = config_dir.join("settings.json");
+                                     let settings = Settings::load_migrated(&settings_path);
+
+                                    if let Some(model_id) = &settings.context_model {
+                                        let parts: Vec<&str> = model_id.split("::").collect();
+                                        if parts.len() == 2 {
+                                            if let Ok(provider) = crate::memory::StrategistMemoryOrchestrator::create_provider(parts[0], parts[1], &settings) {
+                                                if let Err(e) = FactExtractor::extract(lib_clone, provider.as_ref(), "user", &content_clone, &msg_id_clone).await {
+                                                    tracing::warn!("Fact extraction failed: {}", e);
+                                                }
+                                            }
+                                        }
+                                    }
+                                });
                             }
                         } else {
                             let _ = lib.save_full_message(
@@ -1129,19 +1161,20 @@ async fn send_message(
                 ) {
                     let app_for_facts = app_handle.clone();
                     let librarian_for_facts = state.librarian.clone();
+                    
                     tauri::async_runtime::spawn(async move {
-                        if let Err(e) = extract_facts_for_message(
-                            app_for_facts,
-                            librarian_for_facts,
-                            &context_model,
-                            "assistant",
-                            &content,
-                            &msg_id,
-                        )
-                        .await
-                        {
-                            tracing::error!("Assistant fact extraction failed: {}", e);
-                        }
+                         let config_dir = app_for_facts.path().app_config_dir().unwrap_or_default();
+                         let settings_path = config_dir.join("settings.json");
+                         let settings = Settings::load_migrated(&settings_path);
+
+                         let parts: Vec<&str> = context_model.split("::").collect();
+                         if parts.len() == 2 {
+                             if let Ok(provider) = crate::memory::StrategistMemoryOrchestrator::create_provider(parts[0], parts[1], &settings) {
+                                 if let Err(e) = FactExtractor::extract(librarian_for_facts, provider.as_ref(), "assistant", &content, &msg_id).await {
+                                     tracing::error!("Assistant fact extraction failed: {}", e);
+                                 }
+                             }
+                         }
                     });
                 }
             }
@@ -1178,249 +1211,8 @@ async fn send_message(
     }
 }
 
-/// Internal representation of a fact as returned by the extraction model.
-#[derive(Debug, serde::Deserialize)]
-struct ExtractedFactDto {
-    subject: String,
-    predicate: String,
-    object: String,
-    #[serde(default)]
-    object_kind: Option<String>,
-    #[serde(default)]
-    confidence: Option<f32>,
-}
 
-#[derive(Debug, serde::Deserialize)]
-struct ExtractedFactsEnvelope {
-    facts: Vec<ExtractedFactDto>,
-}
 
-/// Extract a JSON snippet from a possibly-noisy LLM response body.
-fn extract_json_snippet(content: &str) -> &str {
-    let trimmed = content.trim();
-
-    // Strip simple ```json fences if present
-    let without_fence = if trimmed.starts_with("```") {
-        let mut body = trimmed.trim_start_matches('`');
-        if body.starts_with("json") {
-            body = body.trim_start_matches("json");
-        }
-        if let Some(end) = body.rfind("```") {
-            &body[..end]
-        } else {
-            body
-        }
-    } else {
-        trimmed
-    };
-
-    if let Some(start) = without_fence.find('{') {
-        if let Some(end) = without_fence.rfind('}') {
-            &without_fence[start..=end]
-        } else {
-            without_fence
-        }
-    } else if let Some(start) = without_fence.find('[') {
-        if let Some(end) = without_fence.rfind(']') {
-            &without_fence[start..=end]
-        } else {
-            without_fence
-        }
-    } else {
-        without_fence
-    }
-}
-
-/// Parse extracted facts JSON into a flat vector of DTOs.
-fn parse_extracted_facts(json_str: &str) -> Vec<ExtractedFactDto> {
-    if json_str.trim().is_empty() {
-        return Vec::new();
-    }
-
-    // Try envelope first
-    if let Ok(env) = serde_json::from_str::<ExtractedFactsEnvelope>(json_str) {
-        return env.facts;
-    }
-
-    // Then try bare array
-    if let Ok(list) = serde_json::from_str::<Vec<ExtractedFactDto>>(json_str) {
-        return list;
-    }
-
-    Vec::new()
-}
-
-/// Normalize a key for lookup: lowercase, trim, collapse whitespace to single underscore.
-fn normalize_key(value: &str) -> String {
-    let lower = value.to_lowercase();
-    let parts: Vec<&str> = lower.split_whitespace().collect();
-    parts.join("_")
-}
-
-/// Perform background fact extraction for a single message.
-async fn extract_facts_for_message(
-    app: tauri::AppHandle,
-    librarian: Arc<Mutex<crate::memory::librarian::Librarian>>,
-    context_model: &str,
-    role: &str,
-    content: &str,
-    message_id: &str,
-) -> Result<(), String> {
-    let content = content.trim();
-    if content.is_empty() {
-        return Ok(());
-    }
-
-    let parts: Vec<&str> = context_model.split("::").collect();
-    if parts.len() != 2 {
-        tracing::warn!("Invalid context_model for extraction: {}", context_model);
-        return Ok(());
-    }
-    let provider_id = parts[0];
-    let model_name = parts[1];
-
-    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
-    let settings_path = config_dir.join("settings.json");
-    let settings = Settings::load_migrated(&settings_path);
-
-    let provider = match crate::memory::StrategistMemoryOrchestrator::create_provider(
-        provider_id,
-        model_name,
-        &settings,
-    ) {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::error!("Failed to create provider for fact extraction: {}", e);
-            return Ok(());
-        }
-    };
-
-    let prompt = format!(
-        r#"You are a long-term memory extraction model for a coding assistant.
-
-Your job:
-- Read the following {role} message.
-- Decide which facts should be stored as **long-term memory** because they are likely to matter in future conversations with this same user.
-- Only extract facts that would still be useful days or weeks from now.
-
-What to STORE (examples):
-- User identity and role: jobs, seniority, areas of expertise.
-- Stable preferences: editors, languages, frameworks, libraries, tools, workflows.
-- Persistent environment details: OS, CPU/GPU, main devices, IDEs, hosting platforms, CI/CD systems.
-- Long-lived projects: project names, repositories, tech stacks, key decisions.
-- Stable account / organization context (without secrets): "company uses GitHub Enterprise", "deploys to GKE".
-- Clear decisions and constraints: "we decided to use Postgres, not MySQL", "production cluster is Kubernetes 1.30".
-
-What to IGNORE (do NOT store):
-- One-off questions or search queries (e.g. "look up the specs for X", "what is the error in this log?").
-- Ephemeral status: "I'm tired", "today", "this week", "right now I'm running a benchmark".
-- Raw tool outputs, logs, stack traces, and long URLs unless they define a stable choice (e.g. a canonical docs URL).
-- Speculative statements or guesses ("I think maybe we should use Rust").
-- Anything that looks like a secret, password, token, or private key.
-
-Return format:
-Return a JSON object with a single key "facts" whose value is an array of objects with this schema:
-{{
-  "subject": "normalized_subject_key",
-  "predicate": "normalized_predicate_key",
-  "object": "raw object value or entity key",
-  "object_kind": "entity" | "literal",
-  "confidence": 0.0-1.0
-}}
-
-Normalization:
-- subject and predicate should be lowercase, snake_case keys for stable lookup (e.g. "user", "owns_device", "main_editor").
-- object may be a normalized key (for entities) or a free-form literal string.
-
-If there are **no** facts that meet the criteria above, return:
-{{"facts": []}}
-"#
-    );
-
-    let _app_state = app.state::<AppState>();
-    let prompt_msg = Message {
-        id: None,
-        role: "user".to_string(),
-        content: Some(prompt),
-        reasoning_content: None,
-        tool_calls: None,
-        tool_call_id: None,
-        attachments: None,
-        created_at: None,
-    };
-    let content_msg = Message {
-        id: None,
-        role: role.to_string(),
-        content: Some(content.to_string()),
-        reasoning_content: None,
-        tool_calls: None,
-        tool_call_id: None,
-        attachments: None,
-        created_at: None,
-    };
-
-    let messages = vec![prompt_msg, content_msg];
-
-    let response = match provider.chat(messages, vec![], None).await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!("Fact extraction model call failed: {}", e);
-            return Ok(());
-        }
-    };
-
-    let raw = response.content.unwrap_or_default();
-    let json_str = extract_json_snippet(&raw);
-    let dtos = parse_extracted_facts(json_str);
-
-    if dtos.is_empty() {
-        tracing::debug!("Fact extraction returned no facts");
-        return Ok(());
-    }
-
-    let lib = librarian.lock().await;
-    for dto in dtos {
-        let subject = normalize_key(&dto.subject);
-        let predicate = normalize_key(&dto.predicate);
-        let object = dto.object.trim().to_string();
-
-        let kind = match dto
-            .object_kind
-            .as_deref()
-            .map(|s| s.to_lowercase())
-            .as_deref()
-        {
-            Some("entity") => ObjectKind::Entity,
-            _ => ObjectKind::Literal,
-        };
-
-        let mut confidence = dto.confidence.unwrap_or(1.0);
-        if !confidence.is_finite() {
-            confidence = 1.0;
-        }
-        if confidence < 0.0 {
-            confidence = 0.0;
-        }
-        if confidence > 1.0 {
-            confidence = 1.0;
-        }
-
-        let fact = NewFact::new(
-            subject,
-            predicate,
-            object,
-            kind,
-            confidence,
-            Some(message_id.to_string()),
-        );
-
-        if let Err(e) = lib.upsert_fact(fact) {
-            tracing::error!("Failed to upsert extracted fact: {}", e);
-        }
-    }
-
-    Ok(())
-}
 
 #[tauri::command]
 async fn list_user_facts(state: State<'_, AppState>) -> Result<Vec<MemoryFact>, String> {

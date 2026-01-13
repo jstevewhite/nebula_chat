@@ -1,13 +1,16 @@
 pub mod audit_logger;
+pub mod extraction;
 pub mod librarian;
 pub mod strategist;
 
 pub mod sqlite_manager;
 pub mod tantivy_index;
 
-use tantivy_index::SearchResult;
 pub use librarian::SearchOptions;
-pub use strategist::{SearchPlan, SearchQuery, StrategistContextResult, StrategistMemoryOrchestrator};
+pub use strategist::{
+    SearchPlan, SearchQuery, StrategistContextResult, StrategistMemoryOrchestrator,
+};
+use tantivy_index::SearchResult;
 
 /// Kind of fact object: another entity eligible for traversal or a literal value.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -91,7 +94,10 @@ pub struct RelevantFact {
 impl RelevantFact {
     pub fn from_fact(fact: Fact) -> Self {
         let has_provenance = fact.source_message_id.is_some();
-        Self { fact, has_provenance }
+        Self {
+            fact,
+            has_provenance,
+        }
     }
 }
 

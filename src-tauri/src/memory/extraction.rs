@@ -1,0 +1,214 @@
+use crate::llm::provider::{LlmProvider, Message};
+use crate::memory::librarian::Librarian;
+use crate::memory::{NewFact, ObjectKind};
+use anyhow::Result;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+/// Extracts structured facts from messages and saves them to the knowledge graph.
+pub struct FactExtractor;
+
+impl FactExtractor {
+    /// Extract facts from a message and save them to the librarian.
+    /// This is intended to run in the background.
+    pub async fn extract(
+        librarian: Arc<Mutex<Librarian>>,
+        provider: &dyn LlmProvider,
+        role: &str,
+        content: &str,
+        source_message_id: &str,
+    ) -> Result<String> {
+        let prompt = format!(
+            r#"You are a long-term memory extraction model for a coding assistant.
+
+Your job:
+- Read the following {role} message.
+- Decide which facts should be stored as **long-term memory** because they are likely to matter in future conversations with this same user.
+- Only extract facts that would still be useful days or weeks from now.
+
+What to STORE (examples):
+- User identity and role: jobs, seniority, areas of expertise.
+- Stable preferences: editors, languages, frameworks, libraries, tools, workflows.
+- Persistent environment details: OS, CPU/GPU, main devices, IDEs, hosting platforms, CI/CD systems.
+- Long-lived projects: project names, repositories, tech stacks, key decisions.
+- Stable account / organization context (without secrets): "company uses GitHub Enterprise", "deploys to GKE".
+- Clear decisions and constraints: "we decided to use Postgres, not MySQL", "production cluster is Kubernetes 1.30".
+
+What to IGNORE (do NOT store):
+- One-off questions or search queries (e.g. "look up the specs for X", "what is the error in this log?").
+- Ephemeral status: "I'm tired", "today", "this week", "right now I'm running a benchmark".
+- Raw tool outputs, logs, stack traces, and long URLs unless they define a stable choice (e.g. a canonical docs URL).
+- Speculative statements or guesses ("I think maybe we should use Rust").
+- Anything that looks like a secret, password, token, or private key.
+
+Return format:
+Return a JSON object with a single key "facts" whose value is an array of objects with this schema:
+{{
+  "subject": "normalized_subject_key",
+  "predicate": "normalized_predicate_key",
+  "object": "raw object value or entity key",
+  "object_kind": "entity" | "literal",
+  "confidence": 0.0-1.0
+}}
+
+Normalization:
+- subject and predicate should be lowercase, snake_case keys for stable lookup (e.g. "user", "owns_device", "main_editor").
+- object may be a normalized key (for entities) or a free-form literal string.
+
+If there are **no** facts that meet the criteria above, return:
+{{"facts": []}}
+"#,
+            role = role
+        );
+
+        let messages = vec![
+            Message {
+                id: None,
+                role: "user".to_string(),
+                content: Some(prompt),
+                tool_calls: None,
+                tool_call_id: None,
+                attachments: None,
+                reasoning_content: None,
+                created_at: None,
+            },
+            Message {
+                id: None,
+                role: role.to_string(),
+                content: Some(content.to_string()),
+                tool_calls: None,
+                tool_call_id: None,
+                attachments: None,
+                reasoning_content: None,
+                created_at: None,
+            },
+        ];
+
+        let options = crate::llm::provider::GenerationOptions {
+            temperature: Some(0.1),
+            ..Default::default()
+        };
+        let response = provider.chat(messages, vec![], Some(options)).await?;
+        let output = response.content.unwrap_or_default();
+        let extracted_facts: Vec<ExtractedFactDto> = Self::extract_and_parse_json(&output);
+        let count = extracted_facts.len();
+
+        if count == 0 {
+            return Ok("No facts extracted".to_string());
+        }
+
+        let lib = librarian.lock().await;
+        for dto in extracted_facts {
+            let subject = Self::normalize_key(&dto.subject);
+            let predicate = Self::normalize_key(&dto.predicate);
+            let object = dto.object.trim().to_string();
+
+            let object_kind = match dto
+                .object_kind
+                .as_deref()
+                .map(|s| s.to_lowercase())
+                .as_deref()
+            {
+                Some("entity") => ObjectKind::Entity,
+                _ => ObjectKind::Literal,
+            };
+
+            let mut confidence = dto.confidence.unwrap_or(1.0);
+            if !confidence.is_finite() {
+                confidence = 1.0;
+            } else {
+                confidence = confidence.clamp(0.0, 1.0);
+            }
+
+            let new_fact = NewFact::new(
+                subject,
+                predicate,
+                object,
+                object_kind,
+                confidence,
+                Some(source_message_id.to_string()),
+            );
+
+            if let Err(e) = lib.upsert_fact(new_fact) {
+                tracing::warn!("Failed to upsert fact: {}", e);
+            }
+        }
+
+        Ok(format!("Extracted and saved {} facts", count))
+    }
+
+    fn extract_and_parse_json(content: &str) -> Vec<ExtractedFactDto> {
+        let trimmed = content.trim();
+        let without_fence = if trimmed.starts_with("```") {
+            let mut body = trimmed.trim_start_matches('`');
+            if body.starts_with("json") {
+                body = body.trim_start_matches("json");
+            }
+            if let Some(end) = body.rfind("```") {
+                &body[..end]
+            } else {
+                body
+            }
+        } else {
+            trimmed
+        };
+
+        let json_part = if let Some(start) = without_fence.find('{') {
+            if let Some(end) = without_fence.rfind('}') {
+                &without_fence[start..=end]
+            } else {
+                without_fence
+            }
+        } else if let Some(start) = without_fence.find('[') {
+            if let Some(end) = without_fence.rfind(']') {
+                &without_fence[start..=end]
+            } else {
+                without_fence
+            }
+        } else {
+            without_fence
+        };
+
+        // Try envelope
+        if let Ok(env) = serde_json::from_str::<ExtractedFactsEnvelope>(json_part) {
+            return env.facts;
+        }
+
+        // Try bare array
+        if let Ok(list) = serde_json::from_str::<Vec<ExtractedFactDto>>(json_part) {
+            return list;
+        }
+
+        Vec::new()
+    }
+
+    fn normalize_key(value: &str) -> String {
+        let lower = value.to_lowercase();
+        let parts: Vec<&str> = lower.split_whitespace().collect();
+        parts.join("_")
+    }
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct ExtractedFactsEnvelope {
+    facts: Vec<ExtractedFactDto>,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct ExtractedFactDto {
+    subject: String,
+    predicate: String,
+    object: String,
+    object_kind: Option<String>,
+    confidence: Option<f32>,
+}
+
+#[allow(dead_code)]
+#[derive(serde::Deserialize)]
+struct ExtractedFact {
+    subject: String,
+    predicate: String,
+    object: String,
+    kind: String,
+    confidence: f32,
+}
