@@ -6,6 +6,7 @@ import PromptsSettings from "./PromptsSettings";
 import { ThemeSelector } from "./ThemeSelector";
 import { CustomSelect } from "./ui/CustomSelect";
 import { useTheme } from "../contexts/ThemeContext";
+import pkg from "../../package.json";
 
 const SANS_FALLBACK = "system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif";
 const MONO_FALLBACK = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace";
@@ -505,6 +506,9 @@ export default function SettingsPage() {
 
     return (
         <div className="p-6 bg-[var(--color-bg-primary)] h-full text-[var(--color-text-primary)] overflow-auto relative flex-1 w-full max-w-5xl mx-auto">
+            <div className="mb-4 text-sm text-[var(--color-text-secondary)] font-mono">
+                Nebula version {pkg.version}
+            </div>
             {/* Status Banner */}
             {status && (
                 <div className={`mb-6 p-4 rounded-lg flex items-center gap-2 border ${status.includes("Error") || status.includes("Warning") || status.includes("Failed")
