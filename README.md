@@ -2,6 +2,14 @@
 
 **Nebula** is a native, high-performance **Intelligent Orchestrator** designed to bridge user intent, personal memory, and external tools. Built with [Tauri](https://tauri.app/) and Rust, it serves as a privacy-first AI client that doesn't just chat—it *remembers* and *acts*.
 
+**Current version:** `v0.5.1`
+
+### What's new in v0.5.1
+- **Context compaction**: automatically summarizes older turns while keeping the most recent messages raw; tool-call-aware splitting prevents broken chains and rolls back safely on errors. Tunable in *Settings → Intelligence → Context Compaction* with a dedicated support model.
+- **Sidebar polish**: per-chat emoji icons, adjustable width, compact mode toggle, and inline global search results for messages and titles.
+- **Tool hygiene**: stricter `tool_call_id` validation, a one-click “Cleanup Tool Messages” action, and UI controls to delete problematic tool responses; code blocks now wrap to avoid overflow.
+- **Model defaults**: pin a default model from the chat header for quick reuse across new conversations.
+
 ## Key Features
 
 ### 🧠 Deep Context & Memory
