@@ -59,22 +59,24 @@ Nebula implements the **[Model Context Protocol (MCP)](https://modelcontextproto
 Nebula acts as an orchestrator between the user, the memory sidecar, and external MCP servers.
 
 ```mermaid
-graph TD
-    User[User] --> UI[Frontend (Tauri/React)]
-    UI --> Core[Nebula Core (Rust)]
-    
-    subgraph Core "Nebula Core"
-        Planner[Context Planner]
-        Manager[MCP Manager]
-        Provider[LLM Provider]
+
+flowchart TD
+    User[User] --> UI["Frontend (Tauri/React)"]
+
+    subgraph CoreSystem["Nebula Core"]
+        Planner["Context Planner"]
+        Manager["MCP Manager"]
+        Provider["LLM Provider"]
     end
 
-    Core -->|Search & Store| Memory[(Memory Sidecar\nSQLite + Tantivy)]
-    Core -->|Execute| Tools[External MCP Servers\n(File System, Git, etc.)]
-    Core -->|Inference| API[LLM APIs\n(OpenAI / Anthropic / Local)]
+    UI --> Planner
 
-    Tools -- MCP Protocol --> Manager
-    Memory -- Context --> Planner
+    Planner -->|"Search & Store"| Memory[("Memory Sidecar / SQLite + Tantivy")]
+    Manager -->|"Execute"| Tools["External MCP Servers (File System, Git, etc.)"]
+    Provider -->|"Inference"| API["LLM APIs (OpenAI, Anthropic, Local)"]
+
+    Tools -- "MCP Protocol" --> Manager
+    Memory -- "Context" --> Planner
 ```
 
 ## Getting Started
