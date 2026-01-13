@@ -92,3 +92,6 @@ src-tauri/Cargo.lock
 
 # dist directory
 /dist/
+
+# local settings dump (may contain secrets)
+settings_dump.json
