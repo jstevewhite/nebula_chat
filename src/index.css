@@ -134,3 +134,16 @@ body,
 ::-webkit-scrollbar-corner {
   background: transparent;
 }
+
+/* Code block soft-wrap for markdown */
+.prose pre {
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.prose pre code {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  display: block;
+}

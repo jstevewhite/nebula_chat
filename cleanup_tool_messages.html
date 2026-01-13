@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Cleanup Invalid Tool Messages</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #fff;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 16px;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        #result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 4px;
+            background: #2a2a2a;
+        }
+        .success { color: #4CAF50; }
+        .error { color: #f44336; }
+    </style>
+</head>
+<body>
+    <h1>Database Cleanup Tool</h1>
+    <p>This will scan all conversations and delete tool messages that are missing valid tool_call_id values.</p>
+    <p><strong>Note:</strong> This operation cannot be undone. Make sure you have a backup if needed.</p>
+    
+    <button id="cleanupBtn" onclick="runCleanup()">Run Cleanup</button>
+    
+    <div id="result"></div>
+
+    <script>
+        const { invoke } = window.__TAURI__.core;
+
+        async function runCleanup() {
+            const btn = document.getElementById('cleanupBtn');
+            const result = document.getElementById('result');
+            
+            btn.disabled = true;
+            result.innerHTML = '<p>Running cleanup...</p>';
+            
+            try {
+                const deletedCount = await invoke('cleanup_invalid_tool_messages');
+                result.innerHTML = `<p class="success">✓ Cleanup complete!</p><p>Deleted ${deletedCount} invalid tool messages.</p>`;
+                
+                if (deletedCount > 0) {
+                    result.innerHTML += '<p><em>Please refresh your conversations to see the changes.</em></p>';
+                }
+            } catch (error) {
+                result.innerHTML = `<p class="error">✗ Error: ${error}</p>`;
+                btn.disabled = false;
+            }
+        }
+    </script>
+</body>
+</html>

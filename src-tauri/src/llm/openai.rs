@@ -61,6 +61,187 @@ impl OpenAiProvider {
             model,
         }
     }
+
+    fn sanitize_messages(messages: Vec<Message>) -> Vec<Message> {
+        let mut healed = messages;
+
+        // Pass 1: Heal IDs (Block-based)
+        // We iterate through the messages. When we find an Assistant message with tool_calls,
+        // we look ahead to see how many Tool messages follow it.
+        // We then try to assign missing IDs to those Tool messages sequentially.
+        let len = healed.len();
+        for i in 0..len {
+            if healed[i].role == "assistant" {
+                if let Some(calls) = &healed[i].tool_calls {
+                    if !calls.is_empty() {
+                        // Gather IDs from this assistant message
+                        let valid_ids: Vec<Option<String>> = calls
+                            .iter()
+                            .map(|c| c.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                            .collect();
+
+                        // Look ahead for sequential tool messages
+                        let mut tool_idx = 0;
+                        for j in (i + 1)..len {
+                            if healed[j].role == "tool" {
+                                // If this tool message has no ID (or empty), try to assign one
+                                let needs_id = match &healed[j].tool_call_id {
+                                    Some(id) => id.trim().is_empty(),
+                                    None => true,
+                                };
+
+                                if needs_id {
+                                    if let Some(Some(target_id)) = valid_ids.get(tool_idx) {
+                                        tracing::warn!("Healed missing tool_call_id for message at index {} using assistant call index {}", j, tool_idx);
+                                        healed[j].tool_call_id = Some(target_id.clone());
+                                    }
+                                }
+                                tool_idx += 1;
+                            } else {
+                                // Stop if we hit a non-tool message (e.g. user or another assistant)
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Pass 2: Prune invalid
+        let mut final_msgs: Vec<Message> = Vec::new();
+        let len = healed.len();
+
+        for i in 0..len {
+            let mut msg = healed[i].clone();
+
+            if msg.role == "tool" {
+                // 1. Must have valid ID
+                let has_valid_id = match &msg.tool_call_id {
+                    Some(id) => !id.trim().is_empty(),
+                    None => false,
+                };
+
+                if !has_valid_id {
+                    tracing::warn!("Dropping invalid tool message without ID at index {}", i);
+                    continue;
+                }
+
+                // 2. Must be preceded by Assistant or Tool (Sequential) in the FINAL stream
+                // If it's the first message, it's definitely an orphan (unless system msg exists? No, system usually at 0)
+                // Actually, if final_msgs is empty, it's an orphan.
+                // If final_msgs.last() is Not Assistant AND Not Tool, it's an orphan.
+
+                let is_orphan = if let Some(last) = final_msgs.last() {
+                    let r = last.role.as_str();
+                    r != "assistant" && r != "tool"
+                } else {
+                    true // Orphan at start of queue
+                };
+
+                if is_orphan {
+                    tracing::warn!(
+                        "Dropping orphaned tool message at index {} (preceded by {:?})",
+                        i,
+                        final_msgs.last().map(|m| &m.role)
+                    );
+                    continue;
+                }
+
+                // 3. Validate that tool_call_id references an actual tool call in a preceding assistant message
+                // Search backwards through final_msgs to find the assistant message with this tool_call_id
+                let tool_call_id = msg.tool_call_id.as_ref().unwrap(); // Safe: validated above
+                let mut found_matching_call = false;
+                
+                for prev_msg in final_msgs.iter().rev() {
+                    if prev_msg.role == "assistant" {
+                        if let Some(calls) = &prev_msg.tool_calls {
+                            // Check if any tool_call has this ID
+                            found_matching_call = calls.iter().any(|call| {
+                                call.get("id")
+                                    .and_then(|v| v.as_str())
+                                    .map(|id| id == tool_call_id)
+                                    .unwrap_or(false)
+                            });
+                            if found_matching_call {
+                                break; // Found it, stop searching
+                            }
+                        }
+                    }
+                }
+
+                if !found_matching_call {
+                    tracing::error!(
+                        "SANITIZE: Dropping tool message at index {} with invalid tool_call_id '{}' (not found in any preceding assistant message). Searched {} assistant messages.",
+                        i,
+                        tool_call_id,
+                        final_msgs.iter().filter(|m| m.role == "assistant").count()
+                    );
+                    continue;
+                }
+            } else if msg.role == "assistant" {
+                // 1. Validate internal integrity of tool_calls (must have IDs)
+                if let Some(tc) = &mut msg.tool_calls {
+                    tc.retain(|call| {
+                         let has_id = call.get("id").and_then(|v| v.as_str()).map(|s| !s.trim().is_empty()).unwrap_or(false);
+                         if !has_id {
+                             tracing::warn!("Pruning malformed tool_call without ID inside assistant message at index {}", i);
+                         }
+                         has_id
+                     });
+                    // If filtered to empty, set to None
+                    if tc.is_empty() {
+                        msg.tool_calls = None;
+                    }
+                }
+
+                // 2. Check for orphaned tool calls
+                let mut has_tool_calls = false;
+                if let Some(tc) = &msg.tool_calls {
+                    if !tc.is_empty() {
+                        has_tool_calls = true;
+                    }
+                }
+
+                if has_tool_calls {
+                    // Check if next is tool.
+                    let next_is_valid_tool = if i + 1 < len {
+                        let next = &healed[i + 1];
+                        match &next.tool_call_id {
+                            Some(id) => next.role == "tool" && !id.trim().is_empty(),
+                            None => false,
+                        }
+                    } else {
+                        false
+                    };
+
+                    // If it's the last message, it's fine (pending execution).
+                    let is_last = i == len - 1;
+
+                    if !is_last && !next_is_valid_tool {
+                        if let Some(calls) = &msg.tool_calls {
+                            let ids: Vec<String> = calls.iter()
+                                .filter_map(|c| c.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                                .collect();
+                            tracing::error!("SANITIZE: Removing orphaned tool_calls {:?} from assistant at index {} (no following tool messages)", ids, i);
+                        }
+                        msg.tool_calls = None;
+
+                        // If content also empty, drop?
+                        let has_content =
+                            msg.content.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
+                        if !has_content {
+                            tracing::error!("SANITIZE: Dropping empty assistant message at index {}", i);
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            final_msgs.push(msg);
+        }
+
+        final_msgs
+    }
 }
 
 #[async_trait]
@@ -71,6 +252,65 @@ impl LlmProvider for OpenAiProvider {
         tools: Vec<ToolDefinition>,
         options: Option<GenerationOptions>,
     ) -> Result<Message> {
+        // Log message roles for debugging
+        let role_seq: Vec<String> = messages.iter().map(|m| {
+            if m.role == "tool" {
+                format!("tool(id:{:?})", m.tool_call_id)
+            } else {
+                m.role.clone()
+            }
+        }).collect();
+        tracing::debug!("OpenAI chat called with {} messages: {:?}", messages.len(), role_seq);
+        
+        let messages = Self::sanitize_messages(messages);
+
+        // Log final message count and roles after sanitization
+        let sanitized_roles: Vec<&str> = messages.iter().map(|m| m.role.as_str()).collect();
+        tracing::debug!("After sanitization: {} messages: {:?}", messages.len(), sanitized_roles);
+
+        // Log detailed info about assistant messages with tool_calls
+        for (idx, msg) in messages.iter().enumerate() {
+            if msg.role == "assistant" && msg.tool_calls.is_some() {
+                if let Some(calls) = &msg.tool_calls {
+                    let ids: Vec<String> = calls.iter()
+                        .filter_map(|c| c.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                        .collect();
+                    tracing::warn!("Assistant at index {} has tool_calls with IDs: {:?}", idx, ids);
+                }
+            }
+        }
+        
+        // Log and validate tool messages have valid IDs
+        for (idx, msg) in messages.iter().enumerate() {
+            if msg.role == "tool" {
+                tracing::warn!(
+                    "Tool message at index {}: tool_call_id = {:?}, content preview = {:?}",
+                    idx,
+                    msg.tool_call_id,
+                    msg.content.as_ref().map(|c| &c[..c.len().min(100)])
+                );
+
+                // Validate tool message has valid tool_call_id
+                match &msg.tool_call_id {
+                    Some(id) if !id.trim().is_empty() => {
+                        // Valid
+                    }
+                    Some(_) => {
+                        return Err(anyhow::anyhow!(
+                            "CRITICAL: Tool message at index {} has empty tool_call_id. This violates API requirements.",
+                            idx
+                        ));
+                    }
+                    None => {
+                        return Err(anyhow::anyhow!(
+                            "CRITICAL: Tool message at index {} missing tool_call_id field. This violates API requirements.",
+                            idx
+                        ));
+                    }
+                }
+            }
+        }
+
         let openai_tools: Vec<Value> = tools
             .into_iter()
             .map(|t| {
@@ -123,10 +363,29 @@ impl LlmProvider for OpenAiProvider {
                     }
 
                     if !content_parts.is_empty() {
-                        return json!({
+                        // Preserve tool_call_id/tool_calls even when attachments are present
+                        let mut obj = json!({
                             "role": msg.role,
                             "content": content_parts
                         });
+
+                        if let Some(tool_call_id) = msg
+                            .tool_call_id
+                            .as_ref()
+                            .filter(|id| !id.trim().is_empty())
+                        {
+                            obj.as_object_mut()
+                                .unwrap()
+                                .insert("tool_call_id".to_string(), json!(tool_call_id));
+                        }
+
+                        if let Some(tool_calls) = &msg.tool_calls {
+                            obj.as_object_mut()
+                                .unwrap()
+                                .insert("tool_calls".to_string(), json!(tool_calls));
+                        }
+
+                        return obj;
                     }
                 }
 
@@ -142,9 +401,13 @@ impl LlmProvider for OpenAiProvider {
                 }
 
                 if let Some(tool_call_id) = msg.tool_call_id {
-                    obj.as_object_mut()
-                        .unwrap()
-                        .insert("tool_call_id".to_string(), json!(tool_call_id));
+                    // Only insert if not empty/whitespace
+                    if !tool_call_id.trim().is_empty() {
+                        obj.as_object_mut()
+                            .unwrap()
+                            .insert("tool_call_id".to_string(), json!(tool_call_id));
+                    }
+                    // Note: Empty tool_call_id already validated above, won't reach here for tool messages
                 }
 
                 if let Some(tool_calls) = msg.tool_calls {
@@ -274,6 +537,42 @@ impl LlmProvider for OpenAiProvider {
         options: Option<GenerationOptions>,
         on_token: Box<dyn Fn(StreamContent) + Send + Sync>,
     ) -> Result<Message> {
+        let messages = Self::sanitize_messages(messages);
+        
+        // Log final message count and roles after sanitization
+        let sanitized_roles: Vec<&str> = messages.iter().map(|m| m.role.as_str()).collect();
+        tracing::debug!("Stream after sanitization: {} messages: {:?}", messages.len(), sanitized_roles);
+        
+        // Log and validate tool messages have valid IDs
+        for (idx, msg) in messages.iter().enumerate() {
+            if msg.role == "tool" {
+                tracing::debug!(
+                    "Stream tool message at index {}: tool_call_id = {:?}",
+                    idx,
+                    msg.tool_call_id
+                );
+
+                // Validate tool message has valid tool_call_id
+                match &msg.tool_call_id {
+                    Some(id) if !id.trim().is_empty() => {
+                        // Valid
+                    }
+                    Some(_) => {
+                        return Err(anyhow::anyhow!(
+                            "CRITICAL: Tool message at index {} has empty tool_call_id. This violates API requirements.",
+                            idx
+                        ));
+                    }
+                    None => {
+                        return Err(anyhow::anyhow!(
+                            "CRITICAL: Tool message at index {} missing tool_call_id field. This violates API requirements.",
+                            idx
+                        ));
+                    }
+                }
+            }
+        }
+
         let openai_tools: Vec<Value> = tools
             .into_iter()
             .map(|t| {
@@ -305,18 +604,46 @@ impl LlmProvider for OpenAiProvider {
                     }
 
                     if !text_content.is_empty() {
-                        content_parts.push(json!({"type": "text", "text": text_content}));
+                        content_parts.push(json!({
+                            "type": "text",
+                            "text": text_content
+                        }));
                     }
 
                     for att in attachments {
                         if att.is_binary {
-                            content_parts
-                                .push(json!({"type": "image_url", "image_url": {"url": att.data}}));
+                            content_parts.push(json!({
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": att.data
+                                }
+                            }));
                         }
                     }
 
                     if !content_parts.is_empty() {
-                        return json!({"role": msg.role, "content": content_parts});
+                        let mut obj = json!({
+                            "role": msg.role,
+                            "content": content_parts
+                        });
+
+                        if let Some(tool_call_id) = msg
+                            .tool_call_id
+                            .as_ref()
+                            .filter(|id| !id.trim().is_empty())
+                        {
+                            obj.as_object_mut()
+                                .unwrap()
+                                .insert("tool_call_id".to_string(), json!(tool_call_id));
+                        }
+
+                        if let Some(tool_calls) = &msg.tool_calls {
+                            obj.as_object_mut()
+                                .unwrap()
+                                .insert("tool_calls".to_string(), json!(tool_calls));
+                        }
+
+                        return obj;
                     }
                 }
 
@@ -332,9 +659,13 @@ impl LlmProvider for OpenAiProvider {
                 }
 
                 if let Some(tool_call_id) = msg.tool_call_id {
-                    obj.as_object_mut()
-                        .unwrap()
-                        .insert("tool_call_id".to_string(), json!(tool_call_id));
+                    // Only insert if not empty/whitespace
+                    if !tool_call_id.trim().is_empty() {
+                        obj.as_object_mut()
+                            .unwrap()
+                            .insert("tool_call_id".to_string(), json!(tool_call_id));
+                    }
+                    // Note: Empty tool_call_id already validated above, won't reach here for tool messages
                 }
 
                 if let Some(tool_calls) = msg.tool_calls {

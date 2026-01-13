@@ -147,10 +147,10 @@ async fn update_conversation_icon(
     let lib = state.librarian.lock().await;
     lib.update_conversation_icon(&conversation_id, icon.as_deref())
         .map_err(|e| e.to_string())?;
-    
+
     use tauri::Emitter;
     let _ = app.emit("conversations-updated", ());
-    
+
     Ok(())
 }
 
@@ -275,11 +275,7 @@ async fn generate_title(
                 .trim_matches('"')
                 .to_string();
         } else if line.starts_with("Emoji:") {
-            let emoji = line
-                .strip_prefix("Emoji:")
-                .unwrap_or("")
-                .trim()
-                .to_string();
+            let emoji = line.strip_prefix("Emoji:").unwrap_or("").trim().to_string();
             if !emoji.is_empty() {
                 new_icon = Some(emoji);
             }
@@ -311,6 +307,33 @@ async fn get_chat_history(
     let raw = lib
         .get_complete_history(&conversation_id)
         .map_err(|e| e.to_string())?;
+    // Collect valid tool_call_ids from assistant messages first
+    let mut assistant_tool_call_ids = std::collections::HashSet::new();
+    for (
+        _id,
+        role,
+        _content,
+        tool_calls_json,
+        _tool_call_id,
+        _reasoning_content,
+        _created_at,
+        _attachments_json,
+    ) in raw.iter()
+    {
+        if role == "assistant" {
+            if let Some(json_str) = tool_calls_json {
+                if !json_str.is_empty() {
+                    if let Ok(calls) = serde_json::from_str::<Vec<serde_json::Value>>(json_str) {
+                        for call in calls {
+                            if let Some(cid) = call.get("id").and_then(|v| v.as_str()) {
+                                assistant_tool_call_ids.insert(cid.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     let mut messages = Vec::new();
     for (
@@ -356,6 +379,33 @@ async fn get_chat_history(
                 None
             }
         };
+
+        // Validate tool messages have valid tool_call_id before adding to history
+        if role == "tool" {
+            let has_valid_id = match &tool_call_id {
+                Some(id) => !id.trim().is_empty(),
+                None => false,
+            };
+            
+            if !has_valid_id {
+                tracing::warn!(
+                    "get_chat_history: Skipping tool message (id: {}) without valid tool_call_id",
+                    id
+                );
+                continue; // Skip this message
+            }
+
+            if let Some(tcid) = &tool_call_id {
+                if !assistant_tool_call_ids.contains(tcid) {
+                    tracing::warn!(
+                        "get_chat_history: Skipping orphan tool message (id: {}, tool_call_id: {})",
+                        id,
+                        tcid
+                    );
+                    continue;
+                }
+            }
+        }
 
         messages.push(Message {
             id: Some(id),
@@ -405,6 +455,61 @@ async fn send_message(
 
         // We're working on clones now
         let mut messages = messages_clone;
+        
+        // Filter out invalid tool messages and detect duplicates
+        let mut seen_tool_call_ids = std::collections::HashSet::new();
+        let mut seen_assistant_tool_call_ids = std::collections::HashSet::new();
+        
+        // First pass: collect all tool_call IDs from assistant messages
+        for msg in messages.iter() {
+            if msg.role == "assistant" {
+                if let Some(calls) = &msg.tool_calls {
+                    for call in calls {
+                        if let Some(id) = call.get("id").and_then(|v| v.as_str()) {
+                            seen_assistant_tool_call_ids.insert(id.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        
+        messages.retain(|msg| {
+            if msg.role == "tool" {
+                let has_valid_id = match &msg.tool_call_id {
+                    Some(id) => !id.trim().is_empty(),
+                    None => false,
+                };
+                
+                if !has_valid_id {
+                    tracing::warn!(
+                        "send_message: Filtering out tool message without valid tool_call_id (id: {:?})",
+                        msg.id
+                    );
+                    return false;
+                }
+                
+                let tool_call_id = msg.tool_call_id.as_ref().unwrap();
+                
+                // Check if this tool_call_id has been seen before (duplicate)
+                if !seen_tool_call_ids.insert(tool_call_id.clone()) {
+                    tracing::warn!(
+                        "send_message: Filtering out duplicate tool message with tool_call_id: {}",
+                        tool_call_id
+                    );
+                    return false;
+                }
+                
+                // Check if this tool_call_id has a matching assistant message
+                if !seen_assistant_tool_call_ids.contains(tool_call_id) {
+                    tracing::warn!(
+                        "send_message: Filtering out orphaned tool message with tool_call_id: {} (no matching assistant)",
+                        tool_call_id
+                    );
+                    return false;
+                }
+            }
+            true
+        });
         let provider_id = provider_id_clone;
         let model = model_clone;
         let conversation_id = conversation_id_clone;
@@ -444,6 +549,14 @@ async fn send_message(
                     // Phase 1.3: Tool-call integrity check
                     if last.role == "tool" {
                         if let Some(tid) = &last.tool_call_id {
+                            // Reject empty tool_call_ids
+                            if tid.trim().is_empty() {
+                                tracing::error!(
+                                    "Security: Tool message submitted with empty tool_call_id"
+                                );
+                                return Err("Tool message has empty tool_call_id".to_string());
+                            }
+
                             // Verify this ID exists in the conversation history using database-backed validation
                             let tool_call_exists = match lib.tool_call_id_exists(conv_id, tid) {
                                 Ok(exists) => exists,
@@ -505,13 +618,44 @@ async fn send_message(
         let extraction_model = settings.context_model.clone();
         let memory_enabled = settings.memory_enabled;
 
+        // --- CONTEXT COMPACTION ---
+        // Compact messages before generating context.
+        // We do this if compaction is enabled (count > 0).
+        let (compacted_summary, effective_messages) = if settings.context_uncompressed_msg_count > 0
+        {
+            match crate::llm::compactor::Compactor::compact(
+                messages.clone(),
+                &settings,
+                conversation_id.as_deref(),
+                state.librarian.clone(),
+            )
+            .await
+            {
+                Ok((summary, compacted_msgs)) => {
+                    if let Some(s) = &summary {
+                        tracing::debug!("Context compaction applied. Summary length: {}", s.len());
+                    }
+                    (summary, compacted_msgs)
+                }
+                Err(e) => {
+                    tracing::error!("Context compaction failed: {}. Using original messages.", e);
+                    (None, messages.clone())
+                }
+            }
+        } else {
+            (None, messages.clone())
+        };
+
+        // Use effective_messages for context retrieval and final generation
+        let messages_for_context = effective_messages.clone();
+
         // Retrieve Context (Long-term memory) via Strategist Orchestrator
         let mut context_text = String::new();
         if memory_enabled && !query.is_empty() {
             // Use strategist orchestrator for intelligent context assembly
             match crate::memory::StrategistMemoryOrchestrator::assemble_context(
                 &query,
-                &messages,
+                &messages_for_context, // Use compacted history
                 state.librarian.clone(),
                 settings.context_turns,
                 settings.context_model.as_deref(),
@@ -556,7 +700,7 @@ async fn send_message(
         }
 
         // Inject Context
-        let mut final_messages = messages.clone();
+        let mut final_messages = messages_for_context; // Use compacted messages
 
         // iterate over messages to inject timestamp, UNLESS it's the last message (current user query)
         // or specifically, we want the LLM to know when previous messages were sent.
@@ -856,7 +1000,6 @@ async fn send_message(
             }
         });
 
-        let assistant_message_id = uuid::Uuid::new_v4().to_string(); // Generate ID for the assistant's response
         let on_token = Box::new(move |content: crate::llm::provider::StreamContent| {
             let _ = tx.send(content);
         });
@@ -929,7 +1072,6 @@ async fn send_message(
         let _ = aggregator_handle.await;
 
         let mut response = response_result.map_err(|e| e.to_string())?;
-        response.id = Some(assistant_message_id.clone()); // Assign the generated ID
 
         // Handle Response (Save & Prune triggers)
         if let Some(conv_id) = conversation_id.clone() {
@@ -957,6 +1099,10 @@ async fn send_message(
                     None
                 }
             };
+
+            if let Some(saved_id) = &assistant_message_id_for_save {
+                response.id = Some(saved_id.clone());
+            }
 
             // Trigger Background Pruning (Fire & Forget)
             let app_handle_for_pruning = app_handle.clone();
@@ -1522,7 +1668,7 @@ async fn fetch_models(
                             id: id.to_string(),
                             name: id.to_string(),
                             visible: true,
-                            context_window: None,
+                            context_window: crate::llm::capabilities::get_model_context_window(id),
                             max_tokens: None,
                         });
                     }
@@ -1552,7 +1698,9 @@ async fn fetch_models(
                                 id: id.to_string(),
                                 name,
                                 visible: true,
-                                context_window: None,
+                                context_window: crate::llm::capabilities::get_model_context_window(
+                                    &id,
+                                ),
                                 max_tokens: None,
                             });
                         }
@@ -1562,17 +1710,25 @@ async fn fetch_models(
                 // Fallback if fetch fails (e.g. key invalid or network issue), but updated with latest models
                 // This ensures the dropdown isn't empty even if the API call fails.
                 let fallback_models = vec![
+                    "claude-3-5-sonnet-20241022",
+                    "claude-3-5-sonnet-20240620",
+                    "claude-3-5-haiku-20241022",
                     "claude-3-opus-20240229",
                     "claude-3-sonnet-20240229",
                     "claude-3-haiku-20240307",
-                    "claude-3-5-sonnet-20240620",
+                    "gpt-4o",
+                    "gpt-4o-mini",
+                    "o1-preview",
+                    "o1-mini",
+                    "gemini-1.5-pro",
+                    "gemini-1.5-flash",
                 ];
                 for id in fallback_models {
                     models.push(ModelConfig {
                         id: id.to_string(),
                         name: id.to_string(),
                         visible: true,
-                        context_window: None,
+                        context_window: crate::llm::capabilities::get_model_context_window(id),
                         max_tokens: None,
                     });
                 }
@@ -1599,7 +1755,9 @@ async fn fetch_models(
                             id: name.to_string(),
                             name: name.to_string(),
                             visible: true,
-                            context_window: None,
+                            context_window: crate::llm::capabilities::get_model_context_window(
+                                name,
+                            ),
                             max_tokens: None,
                         });
                     }
@@ -1609,6 +1767,16 @@ async fn fetch_models(
     }
 
     Ok(models)
+}
+
+#[tauri::command]
+async fn count_conversation_tokens(messages: Vec<Message>) -> Result<usize, String> {
+    let mut total = 0;
+    for msg in messages {
+        total += crate::llm::tokenizer::Tokenizer::count_message_tokens(&msg)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(total)
 }
 
 #[tauri::command]
@@ -2362,6 +2530,85 @@ async fn get_active_mcp_servers(state: State<'_, AppState>) -> Result<Vec<String
     Ok(state.mcp_manager.list_servers().await)
 }
 
+#[tauri::command]
+async fn cleanup_invalid_tool_messages(state: State<'_, AppState>) -> Result<usize, String> {
+    let lib = state.librarian.lock().await;
+    
+    // Get all conversations
+    let conversations = lib.list_conversations().map_err(|e| e.to_string())?;
+    
+    let mut total_deleted = 0;
+    
+    for (conv_id, _title, _icon, _created_at) in conversations {
+        // Get all messages for this conversation
+        let messages_raw = lib
+            .get_complete_history(&conv_id)
+            .map_err(|e| e.to_string())?;
+        
+        let mut seen_tool_call_ids = std::collections::HashSet::new();
+        let mut assistant_tool_call_ids = std::collections::HashSet::new();
+        let mut ids_to_delete = Vec::new();
+        
+        // First pass: collect all tool_call IDs from assistant messages and detect duplicates
+        for (id, role, _content, tool_calls_json, _tool_call_id, _reasoning, _created_at, _attachments) in &messages_raw {
+            if role == "assistant" {
+                if let Some(json_str) = tool_calls_json {
+                    if !json_str.is_empty() {
+                        if let Ok(calls) = serde_json::from_str::<Vec<serde_json::Value>>(json_str) {
+                            for call in calls {
+                                if let Some(call_id) = call.get("id").and_then(|v| v.as_str()) {
+                                    // Check for duplicate tool_call_id in assistant messages
+                                    if !assistant_tool_call_ids.insert(call_id.to_string()) {
+                                        tracing::warn!("Found duplicate assistant tool_call_id: {}, marking message for deletion", call_id);
+                                        ids_to_delete.push(id.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Second pass: check tool messages
+        for (id, role, _content, _tool_calls_json, tool_call_id, _reasoning, _created_at, _attachments) in &messages_raw {
+            if role == "tool" {
+                let has_valid_id = match tool_call_id {
+                    Some(ref id) => !id.trim().is_empty(),
+                    None => false,
+                };
+                
+                if !has_valid_id {
+                    tracing::info!("Deleting invalid tool message (no ID): id={}", id);
+                    ids_to_delete.push(id.clone());
+                } else {
+                    let tcid = tool_call_id.as_ref().unwrap();
+                    
+                    // Check for duplicate tool messages
+                    if !seen_tool_call_ids.insert(tcid.clone()) {
+                        tracing::info!("Deleting duplicate tool message: tool_call_id={}", tcid);
+                        ids_to_delete.push(id.clone());
+                    }
+                    // Check for orphaned tool messages
+                    else if !assistant_tool_call_ids.contains(tcid) {
+                        tracing::info!("Deleting orphaned tool message: tool_call_id={}", tcid);
+                        ids_to_delete.push(id.clone());
+                    }
+                }
+            }
+        }
+        
+        // Delete all marked messages
+        if !ids_to_delete.is_empty() {
+            lib.sqlite.delete_messages(&ids_to_delete).map_err(|e| e.to_string())?;
+            total_deleted += ids_to_delete.len();
+        }
+    }
+    
+    tracing::info!("Cleanup complete: deleted {} invalid/duplicate messages", total_deleted);
+    Ok(total_deleted)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Set environment variables for Linux compatibility
@@ -2466,6 +2713,7 @@ pub fn run() {
             delete_system_prompt,
             set_active_system_prompt,
             rebuild_memory_index,
+            count_conversation_tokens,
             search_messages,
             export_conversation,
             get_tool_policies,
@@ -2476,7 +2724,8 @@ pub fn run() {
             list_fact_entities,
             update_fact,
             delete_fact,
-            list_facts_for_entity
+            list_facts_for_entity,
+            cleanup_invalid_tool_messages
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
