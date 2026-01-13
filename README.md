@@ -2,6 +2,10 @@
 
 **Nebula** is a native, high-performance **Intelligent Orchestrator** designed to bridge user intent, personal memory, and external tools. Built with [Tauri](https://tauri.app/) and Rust, it serves as a privacy-first AI client that doesn't just chat—it *remembers* and *acts*.
 
+Nebula is the result of my dissatisfaction with the chat clients available, and my desire to explore memory architectures for LLMs. Long term memory is a constant source of friction.
+
+This code is mostly written by LLMs. See the HLD for the design I presented. I type some code in here or there, but as little as humanly possible. Clients that helped: Warp, Claude Code, Codex, Gemini, Antigravity, and Opencode. LLMS: Gemini Pro 2.5 and 3, Claude Opus, Sonnet, and Haiku; Deepseek 3.2, GLM 4.7, Devstral 3 small, and many others. 
+
 **Current version:** `v0.5.1`
 
 ### What's new in v0.5.1
