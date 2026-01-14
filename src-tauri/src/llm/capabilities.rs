@@ -127,3 +127,28 @@ pub fn get_model_context_window(model: &str) -> Option<usize> {
 
     None
 }
+
+// Reasoning capability detection based on model name patterns
+pub fn supports_reasoning_effort(model: &str) -> bool {
+    let m = model.to_lowercase();
+    // OpenAI o1/o3 series models support reasoning_effort parameter
+    m.contains("o1-") || m.contains("o3-") || m.starts_with("o1") || m.starts_with("o3")
+}
+
+pub fn supports_thinking_mode(model: &str) -> bool {
+    let m = model.to_lowercase();
+    // DeepSeek R1 and reasoner models support thinking mode
+    m.contains("deepseek-r1") 
+        || m.contains("deepseek-reasoner") 
+        || m.contains("deepseek-v3.1") 
+        || m.contains("deepseek") && (m.contains("thinking") || m.contains("reasoner"))
+}
+
+pub fn supports_extended_thinking(model: &str) -> bool {
+    let m = model.to_lowercase();
+    // Anthropic Claude 4 models support extended thinking
+    m.contains("claude-4") 
+        || m.contains("claude-opus-4") 
+        || m.contains("claude-sonnet-4") 
+        || m.contains("claude-4.5")
+}

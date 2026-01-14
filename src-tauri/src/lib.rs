@@ -1456,12 +1456,60 @@ async fn fetch_models(
             if let Some(arr) = json["data"].as_array() {
                 for m in arr {
                     if let Some(id) = m["id"].as_str() {
+                        // Check if this is OpenRouter (has rich metadata) or standard OpenAI
+                        let is_openrouter = base.contains("openrouter");
+                        
+                        let (context_window, prompt_cost, completion_cost, parameters, description, 
+                             supports_reasoning_effort, supports_thinking_mode, supports_extended_thinking) = if is_openrouter {
+                            // Extract OpenRouter metadata
+                            let ctx_window = m["context_length"].as_u64().map(|v| v as usize);
+                            let prompt_cost = m["pricing"]["prompt"].as_str().map(|s| s.to_string());
+                            let completion_cost = m["pricing"]["completion"].as_str().map(|s| s.to_string());
+                            let parameters = m["architecture"]["parameters"].as_u64();
+                            let description = m["description"].as_str().map(|s| s.to_string());
+                            
+                            // Detect reasoning capabilities from supported_parameters
+                            let supported_params = m["supported_parameters"].as_array();
+                            let reasoning_effort = supported_params.map(|arr| {
+                                arr.iter().any(|p| p.as_str() == Some("reasoning_effort"))
+                            });
+                            let thinking = supported_params.map(|arr| {
+                                arr.iter().any(|p| {
+                                    let s = p.as_str();
+                                    s == Some("reasoning") || s == Some("thinking") || s == Some("include_reasoning")
+                                })
+                            });
+                            
+                            // Check architecture.instruct_type for model family hints
+                            let instruct_type = m["architecture"]["instruct_type"].as_str();
+                            let extended_thinking = instruct_type.map(|t| {
+                                t.contains("claude") || id.contains("claude-4") || id.contains("claude-opus-4") || id.contains("claude-sonnet-4")
+                            }).or(Some(false));
+                            
+                            (ctx_window, prompt_cost, completion_cost, parameters, description, 
+                             reasoning_effort, thinking, extended_thinking)
+                        } else {
+                            // Fallback to capabilities lookup and pattern detection
+                            let ctx = crate::llm::capabilities::get_model_context_window(id);
+                            let reasoning_effort = crate::llm::capabilities::supports_reasoning_effort(id);
+                            let thinking = crate::llm::capabilities::supports_thinking_mode(id);
+                            let extended_thinking = crate::llm::capabilities::supports_extended_thinking(id);
+                            (ctx, None, None, None, None, Some(reasoning_effort), Some(thinking), Some(extended_thinking))
+                        };
+                        
                         models.push(ModelConfig {
                             id: id.to_string(),
-                            name: id.to_string(),
+                            name: m["name"].as_str().unwrap_or(id).to_string(),
                             visible: true,
-                            context_window: crate::llm::capabilities::get_model_context_window(id),
+                            context_window,
                             max_tokens: None,
+                            prompt_cost,
+                            completion_cost,
+                            parameters,
+                            description,
+                            supports_reasoning_effort,
+                            supports_thinking_mode,
+                            supports_extended_thinking,
                         });
                     }
                 }
@@ -1494,6 +1542,13 @@ async fn fetch_models(
                                     &id,
                                 ),
                                 max_tokens: None,
+                                prompt_cost: None,
+                                completion_cost: None,
+                                parameters: None,
+                                description: None,
+                                supports_reasoning_effort: Some(crate::llm::capabilities::supports_reasoning_effort(&id)),
+                                supports_thinking_mode: Some(crate::llm::capabilities::supports_thinking_mode(&id)),
+                                supports_extended_thinking: Some(crate::llm::capabilities::supports_extended_thinking(&id)),
                             });
                         }
                     }
@@ -1522,6 +1577,13 @@ async fn fetch_models(
                         visible: true,
                         context_window: crate::llm::capabilities::get_model_context_window(id),
                         max_tokens: None,
+                        prompt_cost: None,
+                        completion_cost: None,
+                        parameters: None,
+                        description: None,
+                        supports_reasoning_effort: Some(crate::llm::capabilities::supports_reasoning_effort(id)),
+                        supports_thinking_mode: Some(crate::llm::capabilities::supports_thinking_mode(id)),
+                        supports_extended_thinking: Some(crate::llm::capabilities::supports_extended_thinking(id)),
                     });
                 }
             }
@@ -1551,6 +1613,13 @@ async fn fetch_models(
                                 name,
                             ),
                             max_tokens: None,
+                            prompt_cost: None,
+                            completion_cost: None,
+                            parameters: None,
+                            description: None,
+                            supports_reasoning_effort: Some(crate::llm::capabilities::supports_reasoning_effort(name)),
+                            supports_thinking_mode: Some(crate::llm::capabilities::supports_thinking_mode(name)),
+                            supports_extended_thinking: Some(crate::llm::capabilities::supports_extended_thinking(name)),
                         });
                     }
                 }

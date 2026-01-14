@@ -56,6 +56,9 @@ interface ModelOption {
     providerId: string;
     providerType: string;
     context_window?: number;
+    supports_reasoning_effort?: boolean;
+    supports_thinking_mode?: boolean;
+    supports_extended_thinking?: boolean;
 }
 
 interface SystemPrompt {
@@ -362,10 +365,16 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         return () => clearTimeout(timer);
     }, [messages]);
 
+    // Get current model capabilities
+    const getCurrentModel = (): ModelOption | null => {
+        if (!selectedModel || availableModels.length === 0) return null;
+        const [pid, mid] = selectedModel.split("::");
+        return availableModels.find(m => m.providerId === pid && m.id === mid) || null;
+    };
+
     useEffect(() => {
         if (selectedModel && availableModels.length > 0) {
-            const [pid, mid] = selectedModel.split("::");
-            const model = availableModels.find(m => m.providerId === pid && m.id === mid);
+            const model = getCurrentModel();
             if (model) {
                 if (model.context_window) {
                     setContextLimit(model.context_window);
@@ -503,7 +512,10 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                                     name: m.name || m.id,
                                     providerId: providerKey,
                                     providerType: config.provider_type, // Extract provider type
-                                    context_window: m.context_window
+                                    context_window: m.context_window,
+                                    supports_reasoning_effort: m.supports_reasoning_effort,
+                                    supports_thinking_mode: m.supports_thinking_mode,
+                                    supports_extended_thinking: m.supports_extended_thinking,
                                 });
                             }
                         });
@@ -1358,25 +1370,40 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                                         />
                                     </div>
 
-                                    {/* Reasoning Effort */}
-                                    <div className="space-y-1">
-                                        <div className="flex justify-between text-xs text-[var(--color-text-secondary)]">
-                                            <span>Reasoning Effort</span>
-                                            <span className="capitalize">{genSettings.reasoning_effort || 'None'}</span>
-                                        </div>
-                                        <CustomSelect
-                                            value={genSettings.reasoning_effort || ''}
-                                            onChange={(val) => setGenSettings({ ...genSettings, reasoning_effort: val || undefined })}
-                                            options={[
-                                                { id: "none", label: "None", value: "" },
-                                                { id: "low", label: "Low", value: "low" },
-                                                { id: "medium", label: "Medium", value: "medium" },
-                                                { id: "high", label: "High", value: "high" },
-                                            ]}
-                                            className="w-full"
-                                            placeholder="None"
-                                        />
-                                    </div>
+                                    {/* Reasoning Controls - Show based on model capabilities */}
+                                    {(() => {
+                                        const currentModel = getCurrentModel();
+                                        const supportsReasoning = currentModel?.supports_reasoning_effort || 
+                                                                 currentModel?.supports_thinking_mode || 
+                                                                 currentModel?.supports_extended_thinking;
+                                        
+                                        if (!supportsReasoning) return null;
+
+                                        return (
+                                            <div className="space-y-1">
+                                                <div className="flex justify-between text-xs text-[var(--color-text-secondary)]">
+                                                    <span>
+                                                        {currentModel?.supports_reasoning_effort && "Reasoning Effort"}
+                                                        {currentModel?.supports_thinking_mode && !currentModel?.supports_reasoning_effort && "Thinking Mode"}
+                                                        {currentModel?.supports_extended_thinking && !currentModel?.supports_reasoning_effort && !currentModel?.supports_thinking_mode && "Extended Thinking"}
+                                                    </span>
+                                                    <span className="capitalize">{genSettings.reasoning_effort || 'None'}</span>
+                                                </div>
+                                                <CustomSelect
+                                                    value={genSettings.reasoning_effort || ''}
+                                                    onChange={(val) => setGenSettings({ ...genSettings, reasoning_effort: val || undefined })}
+                                                    options={[
+                                                        { id: "none", label: "None", value: "" },
+                                                        { id: "low", label: "Low", value: "low" },
+                                                        { id: "medium", label: "Medium", value: "medium" },
+                                                        { id: "high", label: "High", value: "high" },
+                                                    ]}
+                                                    className="w-full"
+                                                    placeholder="None"
+                                                />
+                                            </div>
+                                        );
+                                    })()}
                                 </div>
                             </div>
                         )}

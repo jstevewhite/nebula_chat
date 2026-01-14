@@ -58,6 +58,21 @@ pub struct ModelConfig {
     pub visible: bool,
     pub context_window: Option<usize>,
     pub max_tokens: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cost: Option<String>, // Cost per token for prompt (as string to preserve precision)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_cost: Option<String>, // Cost per token for completion
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<u64>, // Number of model parameters
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>, // Model description
+    // Reasoning capabilities (auto-detected from OpenRouter or manually overridden)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_reasoning_effort: Option<bool>, // OpenAI o1/o3 style reasoning_effort parameter
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_thinking_mode: Option<bool>, // DeepSeek style thinking parameter
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_extended_thinking: Option<bool>, // Anthropic Claude 4 style extended thinking
 }
 
 fn default_true() -> bool {

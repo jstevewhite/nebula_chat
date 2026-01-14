@@ -9,6 +9,14 @@ export interface ModelConfig {
     name: string;
     visible?: boolean;
     context_window?: number;
+    max_tokens?: number;
+    prompt_cost?: string;
+    completion_cost?: string;
+    parameters?: number;
+    description?: string;
+    supports_reasoning_effort?: boolean;
+    supports_thinking_mode?: boolean;
+    supports_extended_thinking?: boolean;
 }
 
 export type ProviderType = "OpenAI" | "Anthropic" | "Ollama" | "OpenAICompatible";
@@ -34,10 +42,16 @@ function ProviderCard({ providerKey, config, onUpdate, onDelete, onFetch, loadin
     const [searchQuery, setSearchQuery] = useState("");
     const [editingModelId, setEditingModelId] = useState<string | null>(null);
     const [editContext, setEditContext] = useState<string>("");
+    const [editReasoningEffort, setEditReasoningEffort] = useState<boolean | undefined>(undefined);
+    const [editThinkingMode, setEditThinkingMode] = useState<boolean | undefined>(undefined);
+    const [editExtendedThinking, setEditExtendedThinking] = useState<boolean | undefined>(undefined);
 
     const startEditing = (m: ModelConfig) => {
         setEditingModelId(m.id);
         setEditContext(m.context_window?.toString() || "");
+        setEditReasoningEffort(m.supports_reasoning_effort);
+        setEditThinkingMode(m.supports_thinking_mode);
+        setEditExtendedThinking(m.supports_extended_thinking);
     };
 
     const saveEdit = () => {
@@ -50,7 +64,13 @@ function ProviderCard({ providerKey, config, onUpdate, onDelete, onFetch, loadin
         }
 
         const newModels = config.models.map(m =>
-            m.id === editingModelId ? { ...m, context_window: val } : m
+            m.id === editingModelId ? { 
+                ...m, 
+                context_window: val,
+                supports_reasoning_effort: editReasoningEffort,
+                supports_thinking_mode: editThinkingMode,
+                supports_extended_thinking: editExtendedThinking,
+            } : m
         );
         onUpdate({ models: newModels });
         setEditingModelId(null);
@@ -211,21 +231,52 @@ function ProviderCard({ providerKey, config, onUpdate, onDelete, onFetch, loadin
                                         className={`flex items-center justify-between bg-[var(--color-bg-primary)] border rounded px-3 py-2 text-xs transition-colors ${m.visible !== false ? "border-[var(--color-border-primary)] text-[var(--color-text-primary)]" : "border-[var(--color-border-primary)]/50 text-[var(--color-text-tertiary)]"}`}
                                     >
                                         {editingModelId === m.id ? (
-                                            <div className="flex items-center gap-2 w-full">
-                                                <span className="truncate flex-1 font-mono text-[var(--color-text-secondary)]" title={m.name}>{m.name}</span>
-                                                <input
-                                                    className="w-20 bg-[var(--color-bg-tertiary)] border border-[var(--color-border-secondary)] rounded px-1 py-0.5 text-right focus:border-blue-500 outline-none"
-                                                    placeholder="Context"
-                                                    value={editContext}
-                                                    onChange={e => setEditContext(e.target.value)}
-                                                    autoFocus
-                                                    onKeyDown={e => {
-                                                        if (e.key === 'Enter') saveEdit();
-                                                        if (e.key === 'Escape') cancelEdit();
-                                                    }}
-                                                />
-                                                <button onClick={saveEdit} className="p-1 hover:text-green-500 text-[var(--color-text-secondary)]"><Save size={14} /></button>
-                                                <button onClick={cancelEdit} className="p-1 hover:text-red-500 text-[var(--color-text-secondary)]"><X size={14} /></button>
+                                            <div className="flex flex-col gap-2 w-full">
+                                                <div className="flex items-center gap-2 w-full">
+                                                    <span className="truncate flex-1 font-mono text-[var(--color-text-secondary)]" title={m.name}>{m.name}</span>
+                                                    <input
+                                                        className="w-20 bg-[var(--color-bg-tertiary)] border border-[var(--color-border-secondary)] rounded px-1 py-0.5 text-right focus:border-blue-500 outline-none"
+                                                        placeholder="Context"
+                                                        value={editContext}
+                                                        onChange={e => setEditContext(e.target.value)}
+                                                        autoFocus
+                                                        onKeyDown={e => {
+                                                            if (e.key === 'Enter') saveEdit();
+                                                            if (e.key === 'Escape') cancelEdit();
+                                                        }}
+                                                    />
+                                                    <button onClick={saveEdit} className="p-1 hover:text-green-500 text-[var(--color-text-secondary)]"><Save size={14} /></button>
+                                                    <button onClick={cancelEdit} className="p-1 hover:text-red-500 text-[var(--color-text-secondary)]"><X size={14} /></button>
+                                                </div>
+                                                <div className="flex items-center gap-3 text-[10px] text-[var(--color-text-tertiary)]">
+                                                    <label className="flex items-center gap-1 cursor-pointer" title="OpenAI o1/o3 style reasoning_effort parameter">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={editReasoningEffort ?? false}
+                                                            onChange={e => setEditReasoningEffort(e.target.checked)}
+                                                            className="rounded"
+                                                        />
+                                                        <span>Effort</span>
+                                                    </label>
+                                                    <label className="flex items-center gap-1 cursor-pointer" title="DeepSeek style thinking mode">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={editThinkingMode ?? false}
+                                                            onChange={e => setEditThinkingMode(e.target.checked)}
+                                                            className="rounded"
+                                                        />
+                                                        <span>Thinking</span>
+                                                    </label>
+                                                    <label className="flex items-center gap-1 cursor-pointer" title="Anthropic Claude 4 extended thinking">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={editExtendedThinking ?? false}
+                                                            onChange={e => setEditExtendedThinking(e.target.checked)}
+                                                            className="rounded"
+                                                        />
+                                                        <span>Extended</span>
+                                                    </label>
+                                                </div>
                                             </div>
                                         ) : (
                                             <>
@@ -234,6 +285,11 @@ function ProviderCard({ providerKey, config, onUpdate, onDelete, onFetch, loadin
                                                     {m.context_window && (
                                                         <span className="px-1.5 py-0.5 rounded-full bg-[var(--color-bg-tertiary)] text-[var(--color-text-tertiary)] text-[10px]">
                                                             {Math.round(m.context_window / 1000)}k
+                                                        </span>
+                                                    )}
+                                                    {(m.supports_reasoning_effort || m.supports_thinking_mode || m.supports_extended_thinking) && (
+                                                        <span className="px-1.5 py-0.5 rounded-full bg-purple-900/30 text-purple-300 text-[10px]" title="Supports reasoning features">
+                                                            💭
                                                         </span>
                                                     )}
                                                 </div>
