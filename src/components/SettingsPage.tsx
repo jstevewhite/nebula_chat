@@ -198,6 +198,7 @@ export default function SettingsPage() {
                 context_turns: fullSettings.context_turns ?? latest.context_turns,
 
                 context_uncompressed_msg_count: fullSettings.context_uncompressed_msg_count ?? latest.context_uncompressed_msg_count,
+                show_message_timestamps: fullSettings.show_message_timestamps ?? latest.show_message_timestamps,
                 // Other settings this page may toggle in the future can be added here explicitly.
             };
 
@@ -854,6 +855,28 @@ export default function SettingsPage() {
                     <Palette className="w-5 h-5 text-blue-500" /> Appearance
                 </h3>
                 <ThemeSelector />
+
+                <div className="mt-6 border-t border-[var(--color-border-secondary)] pt-4">
+                    <div className="flex items-center justify-between gap-4">
+                        <div>
+                            <label className="block text-sm font-bold text-[var(--color-text-secondary)]">
+                                Show Message Timestamps
+                            </label>
+                            <p className="text-xs text-[var(--color-text-tertiary)]">
+                                Display per-message timestamps (UTC) next to the action icons in chat.
+                            </p>
+                        </div>
+                        <label className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)] select-none">
+                            <input
+                                type="checkbox"
+                                checked={fullSettings.show_message_timestamps ?? false}
+                                onChange={(e) => setFullSettings({ ...fullSettings, show_message_timestamps: e.target.checked })}
+                                className="h-4 w-4 rounded border-[var(--color-border-secondary)] bg-[var(--color-bg-primary)]"
+                            />
+                            Enabled
+                        </label>
+                    </div>
+                </div>
 
                 <div className="mt-8 border-t border-[var(--color-border-secondary)] pt-6">
                     <h3 className="text-lg font-semibold text-[var(--color-text-primary)] mb-4">Typography</h3>

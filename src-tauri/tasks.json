@@ -195,5 +195,27 @@
     "priority": "high",
     "createdAt": "2026-01-09T21:36:23.819Z",
     "updatedAt": "2026-01-09T21:36:23.819Z"
+  },
+  {
+    "id": "roip8v0l2",
+    "title": "Search for latest US news stories",
+    "description": "Use web search to find the most recent US news articles and identify top stories",
+    "status": "completed",
+    "dependencies": [],
+    "priority": "high",
+    "createdAt": "2026-01-14T14:40:56.925Z",
+    "updatedAt": "2026-01-14T14:41:45.108Z"
+  },
+  {
+    "id": "fj4aplzsx",
+    "title": "Summarize top 3 US news stories",
+    "description": "Analyze search results and provide concise summaries of the top three most important news stories",
+    "status": "in_progress",
+    "dependencies": [
+      "roip8v0l2"
+    ],
+    "priority": "medium",
+    "createdAt": "2026-01-14T14:41:11.509Z",
+    "updatedAt": "2026-01-14T14:42:01.853Z"
   }
 ]

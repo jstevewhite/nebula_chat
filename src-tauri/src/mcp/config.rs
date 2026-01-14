@@ -82,6 +82,9 @@ fn default_true() -> bool {
 fn default_true_bool() -> bool {
     true
 }
+fn default_false_bool() -> bool {
+    false
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ProviderConfig {
@@ -135,6 +138,9 @@ pub struct Settings {
     // with Cancel/OK dialog for debugging and transparency.
     #[serde(default)]
     pub context_inspection_enabled: bool,
+    // Show per-message timestamps in the chat UI.
+    #[serde(default = "default_false_bool")]
+    pub show_message_timestamps: bool,
 
     // Theme preference: "light", "dark", "solarized-light", "solarized-dark"
     #[serde(default = "default_theme")]

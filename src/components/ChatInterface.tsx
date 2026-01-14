@@ -36,7 +36,7 @@ interface Message {
         data: string;
         is_binary: boolean;
     }[];
-    created_at?: number;
+    created_at?: number | string;
 }
 
 interface StreamChunkEvent {
@@ -122,6 +122,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     const [fullSettings, setFullSettings] = useState<any>(null);
     const [showContextModal, setShowContextModal] = useState(false);
     const [contextInspectionData, setContextInspectionData] = useState<any>(null);
+    const [showMessageTimestamps, setShowMessageTimestamps] = useState<boolean>(false);
 
     // Tool Execution State
     const [pendingTools, setPendingTools] = useState<{ name: string, args: any, callId: string }[]>([]);
@@ -514,6 +515,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             setFullSettings(settings);
             setContextInspectionEnabled(settings.context_inspection_enabled || false);
             setMemoryEnabled(settings.memory_enabled ?? true);
+            setShowMessageTimestamps(settings.show_message_timestamps ?? false);
             const models: ModelOption[] = [];
 
             if (settings.providers) {
@@ -741,7 +743,8 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 currentHistory = [...currentHistory, {
                     role: "tool",
                     content: typeof result === 'string' ? result : JSON.stringify(result),
-                    tool_call_id: tool.callId
+                    tool_call_id: tool.callId,
+                    created_at: Math.floor(Date.now() / 1000)
                 }];
                 setMessages([...currentHistory]);
             } catch (e) {
@@ -749,7 +752,8 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 currentHistory = [...currentHistory, {
                     role: "tool",
                     content: `Error: ${e}`,
-                    tool_call_id: tool.callId
+                    tool_call_id: tool.callId,
+                    created_at: Math.floor(Date.now() / 1000)
                 }];
                 setMessages([...currentHistory]);
             }
@@ -795,7 +799,8 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 setMessages(prev => [...prev, {
                     id: tempMsgId,
                     role: "assistant",
-                    content: ""
+                    content: "",
+                    created_at: Math.floor(Date.now() / 1000)
                 }]);
 
                 // Reset accumulator
@@ -912,6 +917,8 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 console.log("✅ Invoke completed at", new Date().toISOString());
                 activeStreamRef.current = null;
 
+                // Ensure created_at exists so timestamps render immediately
+                response.created_at = response.created_at ?? Math.floor(Date.now() / 1000);
                 if (unlistenTransform) {
                     unlistenTransform();
                 }
@@ -1067,7 +1074,8 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         const userMsg: Message = {
             role: "user",
             content: input,
-            attachments: currentAttachments.length > 0 ? currentAttachments : undefined
+            attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
+            created_at: Math.floor(Date.now() / 1000)
         };
 
         const newHistory = [...messages, userMsg];
@@ -1493,6 +1501,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         onEdit={handleEdit}
                         onDelete={handleDelete}
                         onRegenerate={handleRegenerate}
+                        showTimestamp={showMessageTimestamps}
                     />
                 ))}
             </div>
@@ -1722,7 +1731,7 @@ const ThinkingBlock = memo(({ content }: { content: string }) => {
     );
 });
 
-const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRegenerate }: any) => {
+const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRegenerate, showTimestamp }: { message: Message, index: number, onCopy: any, onEdit: any, onDelete: any, onRegenerate: any, showTimestamp: boolean }) => {
     const [isExpanded, setIsExpanded] = useState(m.role !== "tool");
     const [showRaw, setShowRaw] = useState(false);
     const [showToolArgs, setShowToolArgs] = useState(false);
@@ -1747,6 +1756,16 @@ const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRe
         navigator.clipboard.writeText(text);
         setCopiedCodeVal(text);
     };
+
+    const formatTimestamp = (value?: number | string) => {
+        if (value === undefined || value === null) return "";
+        const date = typeof value === "number" ? new Date(value * 1000) : new Date(value);
+        if (isNaN(date.getTime())) return "";
+        const pad = (n: number) => n.toString().padStart(2, "0");
+        return `${date.getUTCFullYear()}:${pad(date.getUTCMonth() + 1)}:${pad(date.getUTCDate())}:${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
+    };
+
+    const timestampText = showTimestamp ? formatTimestamp(m.created_at) : "";
 
     // Parsing logic for <thinking> or <reasoning> tags
     const { cleanContent, thinkingContent } = (() => {
@@ -1932,9 +1951,12 @@ const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRe
                     </div>
 
                     {/* Tool Call Info */}
-                    {m.tool_calls && (
+                    {(() => {
+                        const toolCalls = m.tool_calls ?? [];
+                        if (toolCalls.length === 0) return null;
+                        return (
                         <div className="mt-2 text-xs space-y-2">
-                            {m.tool_calls.map((tc: any, tcIdx: number) => (
+                            {toolCalls.map((tc: any, tcIdx: number) => (
                                 <div key={tc.id || tcIdx}>
                                     <button
                                         onClick={() => setShowToolArgs(!showToolArgs)}
@@ -1942,8 +1964,8 @@ const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRe
                                     >
                                         <Terminal size={12} />
                                         <span className="font-mono">Called: {tc.function?.name}</span>
-                                        {m.tool_calls.length > 1 && (
-                                            <span className="opacity-50 text-[10px]">({tcIdx + 1}/{m.tool_calls.length})</span>
+                                        {toolCalls.length > 1 && (
+                                            <span className="opacity-50 text-[10px]">({tcIdx + 1}/{toolCalls.length})</span>
                                         )}
                                         <span className="opacity-50 text-[10px] ml-1">{showToolArgs ? "▼" : "▶"}</span>
                                     </button>
@@ -1958,10 +1980,16 @@ const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRe
                                 </div>
                             ))}
                         </div>
-                    )}
+                        );
+                    })()}
 
                     {/* Action Bar (Below message) */}
-                    <div className="flex gap-2 mt-1 select-none">
+                    <div className="flex gap-2 mt-1 select-none items-center">
+                        {showTimestamp && timestampText && (
+                            <span className="text-[var(--color-text-tertiary)] text-[11px] font-mono mr-1">
+                                {timestampText}
+                            </span>
+                        )}
                         <button
                             onClick={() => setShowRaw(!showRaw)}
                             className={`p-1 text-[var(--color-text-tertiary)] hover:text-blue-400 transition-colors ${showRaw ? "text-blue-400" : ""}`}
