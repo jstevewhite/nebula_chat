@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, memo, useCallback } from "react";
+import { useState, useRef, useEffect, memo, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check, Pin, FileText, Book, Paperclip, X, Brain, Square, Sliders, Download, Eye, EyeOff, ChevronRight, ChevronDown } from "lucide-react";
@@ -365,16 +365,30 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         return () => clearTimeout(timer);
     }, [messages]);
 
-    // Get current model capabilities
-    const getCurrentModel = (): ModelOption | null => {
+    // Get current model capabilities - memoized to ensure proper re-renders
+    const currentModel = useMemo((): ModelOption | null => {
         if (!selectedModel || availableModels.length === 0) return null;
         const [pid, mid] = selectedModel.split("::");
         return availableModels.find(m => m.providerId === pid && m.id === mid) || null;
-    };
+    }, [selectedModel, availableModels]);
+
+    // Memoize reasoning capability check to ensure dropdown visibility updates
+    const modelReasoningCapabilities = useMemo(() => {
+        if (!currentModel) return null;
+        const supportsReasoning = currentModel.supports_reasoning_effort ||
+                                  currentModel.supports_thinking_mode ||
+                                  currentModel.supports_extended_thinking;
+        if (!supportsReasoning) return null;
+        return {
+            supportsReasoningEffort: currentModel.supports_reasoning_effort,
+            supportsThinkingMode: currentModel.supports_thinking_mode,
+            supportsExtendedThinking: currentModel.supports_extended_thinking,
+        };
+    }, [currentModel]);
 
     useEffect(() => {
         if (selectedModel && availableModels.length > 0) {
-            const model = getCurrentModel();
+            const model = currentModel;
             if (model) {
                 if (model.context_window) {
                     setContextLimit(model.context_window);
@@ -1371,39 +1385,30 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                                     </div>
 
                                     {/* Reasoning Controls - Show based on model capabilities */}
-                                    {(() => {
-                                        const currentModel = getCurrentModel();
-                                        const supportsReasoning = currentModel?.supports_reasoning_effort || 
-                                                                 currentModel?.supports_thinking_mode || 
-                                                                 currentModel?.supports_extended_thinking;
-                                        
-                                        if (!supportsReasoning) return null;
-
-                                        return (
-                                            <div className="space-y-1">
-                                                <div className="flex justify-between text-xs text-[var(--color-text-secondary)]">
-                                                    <span>
-                                                        {currentModel?.supports_reasoning_effort && "Reasoning Effort"}
-                                                        {currentModel?.supports_thinking_mode && !currentModel?.supports_reasoning_effort && "Thinking Mode"}
-                                                        {currentModel?.supports_extended_thinking && !currentModel?.supports_reasoning_effort && !currentModel?.supports_thinking_mode && "Extended Thinking"}
-                                                    </span>
-                                                    <span className="capitalize">{genSettings.reasoning_effort || 'None'}</span>
-                                                </div>
-                                                <CustomSelect
-                                                    value={genSettings.reasoning_effort || ''}
-                                                    onChange={(val) => setGenSettings({ ...genSettings, reasoning_effort: val || undefined })}
-                                                    options={[
-                                                        { id: "none", label: "None", value: "" },
-                                                        { id: "low", label: "Low", value: "low" },
-                                                        { id: "medium", label: "Medium", value: "medium" },
-                                                        { id: "high", label: "High", value: "high" },
-                                                    ]}
-                                                    className="w-full"
-                                                    placeholder="None"
-                                                />
+                                    {modelReasoningCapabilities && (
+                                        <div className="space-y-1">
+                                            <div className="flex justify-between text-xs text-[var(--color-text-secondary)]">
+                                                <span>
+                                                    {modelReasoningCapabilities.supportsReasoningEffort && "Reasoning Effort"}
+                                                    {modelReasoningCapabilities.supportsThinkingMode && !modelReasoningCapabilities.supportsReasoningEffort && "Thinking Mode"}
+                                                    {modelReasoningCapabilities.supportsExtendedThinking && !modelReasoningCapabilities.supportsReasoningEffort && !modelReasoningCapabilities.supportsThinkingMode && "Extended Thinking"}
+                                                </span>
+                                                <span className="capitalize">{genSettings.reasoning_effort || 'None'}</span>
                                             </div>
-                                        );
-                                    })()}
+                                            <CustomSelect
+                                                value={genSettings.reasoning_effort || ''}
+                                                onChange={(val) => setGenSettings({ ...genSettings, reasoning_effort: val || undefined })}
+                                                options={[
+                                                    { id: "none", label: "None", value: "" },
+                                                    { id: "low", label: "Low", value: "low" },
+                                                    { id: "medium", label: "Medium", value: "medium" },
+                                                    { id: "high", label: "High", value: "high" },
+                                                ]}
+                                                className="w-full"
+                                                placeholder="None"
+                                            />
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         )}
