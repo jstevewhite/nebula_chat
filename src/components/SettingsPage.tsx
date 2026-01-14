@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { Server, Plus, Edit2, Book, Trash2, Palette, Brain, RefreshCw } from "lucide-react";
 import ProvidersSettings, { ProviderConfig } from "./ProvidersSettings";
 import PromptsSettings from "./PromptsSettings";
@@ -85,9 +86,42 @@ export default function SettingsPage() {
 
     const [denylist, setDenylist] = useState("");
     const [autoApprove, setAutoApprove] = useState(false);
+    const runtimeStatusRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const settingsRef = useRef<any>(null);
 
     useEffect(() => {
         loadServers();
+
+        const handleFocus = () => {
+            if (settingsRef.current) {
+                refreshRuntimeStatus(settingsRef.current);
+            }
+        };
+        const handleVisibility = () => {
+            if (document.visibilityState === "visible" && settingsRef.current) {
+                refreshRuntimeStatus(settingsRef.current);
+            }
+        };
+
+        window.addEventListener("focus", handleFocus);
+        document.addEventListener("visibilitychange", handleVisibility);
+
+        const unlistenTools = listen("tools-updated", () => {
+            if (settingsRef.current) {
+                refreshRuntimeStatus(settingsRef.current);
+            } else {
+                loadServers();
+            }
+        });
+
+        return () => {
+            if (runtimeStatusRetryRef.current) {
+                clearTimeout(runtimeStatusRetryRef.current);
+            }
+            window.removeEventListener("focus", handleFocus);
+            document.removeEventListener("visibilitychange", handleVisibility);
+            unlistenTools.then(u => u());
+        };
     }, []);
 
     const reloadFactsForEntity = async (
@@ -128,6 +162,35 @@ export default function SettingsPage() {
         }
     };
 
+    const refreshRuntimeStatus = async (settings: any) => {
+        try {
+            console.log("[SettingsPage] Calling get_mcp_servers...");
+            const active: string[] = await invoke("get_mcp_servers");
+            console.log("[SettingsPage] get_mcp_servers returned:", active);
+            console.log("[SettingsPage] MCP servers in settings:", Object.keys(settings.mcp_servers || {}));
+            const merged = Object.entries(settings.mcp_servers || {}).map(([key, val]: [string, any]) => ({
+                name: key,
+                status: active.includes(key) ? 'connected' : 'error',
+                config: val
+            }));
+            console.log("[SettingsPage] Merged server statuses:", merged);
+            console.log("[SettingsPage] Calling setServers with merged statuses");
+            setServers(merged as any);
+            setStatus("");
+            return merged;
+        } catch (e) {
+            console.error("[SettingsPage] Failed to get MCP servers:", e);
+            const fallback = Object.entries(settings.mcp_servers || {}).map(([key, val]: [string, any]) => ({
+                name: key,
+                status: 'error' as const,
+                config: val
+            }));
+            setServers(fallback as any);
+            setStatus(`Warning: MCP runtime status unavailable: ${e}`);
+            return null;
+        }
+    };
+
     const loadServers = async () => {
         setStatus("Loading settings...");
         try {
@@ -141,42 +204,61 @@ export default function SettingsPage() {
                 return; // Critical failure
             }
 
+            settingsRef.current = settings;
             setFullSettings(settings);
             setProviders(settings.providers || {});
 
             // Load entity list + facts for the currently selected entity when memory is enabled
             await reloadFactsForEntity(undefined, settings);
 
-            const baseServers = Object.entries(settings.mcp_servers || {}).map(([key, val]: [string, any]) => ({
-                name: key,
-                status: 'unknown' as const,
-                config: val
-            }));
-            setServers(baseServers as any);
-
-            // Best-effort runtime status
-            try {
-                const active: string[] = await invoke("get_mcp_servers");
-                const merged = Object.entries(settings.mcp_servers || {}).map(([key, val]: [string, any]) => ({
+            // Prefer live status; fallback to unknown placeholders if it fails.
+            console.log("[SettingsPage] About to call refreshRuntimeStatus in loadServers");
+            const merged = await refreshRuntimeStatus(settings);
+            console.log("[SettingsPage] refreshRuntimeStatus returned:", merged);
+            if (!merged) {
+                console.log("[SettingsPage] merged is null/undefined, setting servers to unknown");
+                const baseServers = Object.entries(settings.mcp_servers || {}).map(([key, val]: [string, any]) => ({
                     name: key,
-                    status: active.includes(key) ? 'connected' : 'error',
+                    status: 'unknown' as const,
                     config: val
                 }));
-                setServers(merged as any);
-            } catch (e) {
-                console.error("Failed to get MCP servers:", e);
-                setStatus(`Warning: MCP runtime status unavailable: ${e}`);
+                setServers(baseServers as any);
+            } else {
+                console.log("[SettingsPage] merged is valid, servers should be set with correct status");
+            }
+
+            // If they looked errored/unknown (common during startup), retry once shortly after mount.
+            if (runtimeStatusRetryRef.current) {
+                clearTimeout(runtimeStatusRetryRef.current);
+            }
+            const needsRetry = !merged || merged.some(s => s.status !== 'connected');
+            if (needsRetry) {
+                runtimeStatusRetryRef.current = setTimeout(() => {
+                    refreshRuntimeStatus(settings);
+                }, 1500);
             }
 
             // Debug empty settings
             if (!settings.mcp_servers && !settings.providers) {
                 setStatus("Warning: Settings appear empty.");
-            } else {
+            } else if (!needsRetry) {
                 setStatus("");
             }
         } catch (e) {
             console.error(e);
             setStatus("Uncaught error: " + e);
+        }
+    };
+
+    const manualRefreshServers = async () => {
+        setStatus("Refreshing MCP status...");
+        const settings = settingsRef.current || await invoke("get_settings").catch(() => null);
+        if (settings) {
+            settingsRef.current = settings;
+            setFullSettings(settings);
+            await refreshRuntimeStatus(settings);
+        } else {
+            setStatus("Unable to refresh: settings unavailable.");
         }
     };
 
@@ -942,9 +1024,18 @@ export default function SettingsPage() {
 
             </div>
 
-            <h2 className="text-2xl font-bold mb-6 flex items-center gap-2 text-[var(--color-text-primary)]">
-                <Server className="text-blue-500" /> MCP Servers
-            </h2>
+            <div className="flex items-center justify-between mb-6">
+                <h2 className="text-2xl font-bold flex items-center gap-2 text-[var(--color-text-primary)]">
+                    <Server className="text-blue-500" /> MCP Servers
+                </h2>
+                <button
+                    onClick={manualRefreshServers}
+                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--color-border-secondary)] text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)] transition-colors"
+                    title="Refresh MCP server runtime status"
+                >
+                    <RefreshCw className="w-4 h-4" /> Refresh
+                </button>
+            </div>
 
             <div className="grid gap-4 mb-8">
                 {servers.map(s => (
