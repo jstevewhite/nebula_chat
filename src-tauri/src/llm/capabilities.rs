@@ -147,8 +147,133 @@ pub fn supports_thinking_mode(model: &str) -> bool {
 pub fn supports_extended_thinking(model: &str) -> bool {
     let m = model.to_lowercase();
     // Anthropic Claude 4 models support extended thinking
-    m.contains("claude-4") 
-        || m.contains("claude-opus-4") 
-        || m.contains("claude-sonnet-4") 
+    m.contains("claude-4")
+        || m.contains("claude-opus-4")
+        || m.contains("claude-sonnet-4")
         || m.contains("claude-4.5")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capabilities_openai_supports_full_feature_set() {
+        let c = get_capabilities(&ProviderType::OpenAI, "gpt-4o");
+        assert!(c.supports_tools);
+        assert!(c.supports_streaming);
+        assert!(c.supports_streaming_tools);
+        assert!(c.supports_multimodal);
+    }
+
+    #[test]
+    fn capabilities_anthropic_disables_streaming_tools() {
+        let c = get_capabilities(&ProviderType::Anthropic, "claude-3-5-sonnet");
+        assert!(c.supports_tools);
+        assert!(c.supports_streaming);
+        assert!(!c.supports_streaming_tools, "Anthropic streaming+tools should be off by safe default");
+        assert!(c.supports_multimodal);
+    }
+
+    #[test]
+    fn capabilities_ollama_disables_tools_and_multimodal() {
+        let c = get_capabilities(&ProviderType::Ollama, "llama3");
+        assert!(!c.supports_tools);
+        assert!(c.supports_streaming);
+        assert!(!c.supports_streaming_tools);
+        assert!(!c.supports_multimodal);
+    }
+
+    #[test]
+    fn capabilities_openai_compatible_matches_openai() {
+        let c = get_capabilities(&ProviderType::OpenAICompatible, "openrouter/some-model");
+        assert!(c.supports_tools);
+        assert!(c.supports_streaming);
+        assert!(c.supports_streaming_tools);
+        assert!(c.supports_multimodal);
+    }
+
+    #[test]
+    fn context_window_openai_models() {
+        assert_eq!(get_model_context_window("gpt-4o-2024-05-13"), Some(128_000));
+        assert_eq!(get_model_context_window("gpt-4-turbo"), Some(128_000));
+        assert_eq!(get_model_context_window("gpt-4-0125-preview"), Some(128_000));
+        assert_eq!(get_model_context_window("gpt-4-1106-preview"), Some(128_000));
+        assert_eq!(get_model_context_window("gpt-3.5-turbo-0125"), Some(16_385));
+        // Plain gpt-4 (after turbo branches) falls through to 8192
+        assert_eq!(get_model_context_window("gpt-4"), Some(8_192));
+    }
+
+    #[test]
+    fn context_window_o_series_models() {
+        assert_eq!(get_model_context_window("o1-preview"), Some(128_000));
+        assert_eq!(get_model_context_window("o1-mini"), Some(128_000));
+        // Generic o1 (no preview/mini suffix) falls into the 200k branch
+        assert_eq!(get_model_context_window("o1"), Some(200_000));
+    }
+
+    #[test]
+    fn context_window_anthropic_models() {
+        assert_eq!(get_model_context_window("claude-3-5-sonnet-20240620"), Some(200_000));
+        assert_eq!(get_model_context_window("claude-3.5-sonnet"), Some(200_000));
+        assert_eq!(get_model_context_window("claude-3-haiku"), Some(200_000));
+        assert_eq!(get_model_context_window("claude-4.5-sonnet"), Some(200_000));
+    }
+
+    #[test]
+    fn context_window_gemini_models() {
+        assert_eq!(get_model_context_window("gemini-1.5-pro-latest"), Some(2_000_000));
+        assert_eq!(get_model_context_window("gemini-1.5-flash"), Some(1_000_000));
+        assert_eq!(get_model_context_window("gemini-2.0-flash"), Some(2_000_000));
+    }
+
+    #[test]
+    fn context_window_llama_models() {
+        assert_eq!(get_model_context_window("llama-3.1-70b"), Some(128_000));
+        assert_eq!(get_model_context_window("llama3.2"), Some(128_000));
+        assert_eq!(get_model_context_window("llama3-8b"), Some(8_192));
+    }
+
+    #[test]
+    fn context_window_is_case_insensitive() {
+        assert_eq!(get_model_context_window("GPT-4O"), Some(128_000));
+        assert_eq!(get_model_context_window("Claude-3-Opus"), Some(200_000));
+    }
+
+    #[test]
+    fn context_window_unknown_models_return_none() {
+        assert_eq!(get_model_context_window("totally-unknown-model"), None);
+        assert_eq!(get_model_context_window(""), None);
+    }
+
+    #[test]
+    fn reasoning_effort_only_for_o_series() {
+        assert!(supports_reasoning_effort("o1-preview"));
+        assert!(supports_reasoning_effort("o1-mini"));
+        assert!(supports_reasoning_effort("o3-mini"));
+        assert!(supports_reasoning_effort("o1"));
+        assert!(supports_reasoning_effort("O3-Mini"));
+        assert!(!supports_reasoning_effort("gpt-4o"));
+        assert!(!supports_reasoning_effort("claude-3-5-sonnet"));
+    }
+
+    #[test]
+    fn thinking_mode_for_deepseek_reasoners() {
+        assert!(supports_thinking_mode("deepseek-r1"));
+        assert!(supports_thinking_mode("DeepSeek-Reasoner"));
+        assert!(supports_thinking_mode("deepseek-v3.1"));
+        assert!(supports_thinking_mode("deepseek-thinking"));
+        assert!(!supports_thinking_mode("deepseek-v3"));
+        assert!(!supports_thinking_mode("gpt-4o"));
+    }
+
+    #[test]
+    fn extended_thinking_for_claude_4_family() {
+        assert!(supports_extended_thinking("claude-4"));
+        assert!(supports_extended_thinking("claude-opus-4"));
+        assert!(supports_extended_thinking("claude-sonnet-4-20251022"));
+        assert!(supports_extended_thinking("claude-4.5-sonnet"));
+        assert!(!supports_extended_thinking("claude-3-5-sonnet"));
+        assert!(!supports_extended_thinking("gpt-4"));
+    }
 }
