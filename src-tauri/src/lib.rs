@@ -582,7 +582,7 @@ async fn send_message(
                     // When regenerating, messages already have IDs and shouldn't be saved again
                     if last.id.is_none() {
                         if last.role == "user" {
-                            if let Err(e) = lib.save_full_message_returning_id(
+                            match lib.save_full_message_returning_id(
                                 conv_id,
                                 &last.role,
                                 last.content.as_deref(),
@@ -591,38 +591,33 @@ async fn send_message(
                                 None, // reasoning_content (users don't have reasoning)
                                 last.attachments.as_deref(),
                             ) {
-                                tracing::error!("Failed to save user message for facts: {}", e);
-                            } else if let Ok(msg_id) = lib.save_full_message_returning_id(
-                                conv_id,
-                                &last.role,
-                                last.content.as_deref(),
-                                tool_calls_json.as_deref(),
-                                last.tool_call_id.as_deref(),
-                                None,
-                                last.attachments.as_deref(),
-                            ) {
-                                // Trigger Background Fact Extraction
-                                let app_handle_bg = app_handle.clone();
-                                let lib_clone = state.librarian.clone();
-                                let content_clone = last.content.clone().unwrap_or_default();
-                                let msg_id_clone = msg_id.clone();
-                                
-                                tokio::spawn(async move {
-                                     let config_dir = app_handle_bg.path().app_config_dir().unwrap_or_default();
-                                     let settings_path = config_dir.join("settings.json");
-                                     let settings = Settings::load_migrated(&settings_path);
+                                Err(e) => {
+                                    tracing::error!("Failed to save user message: {}", e);
+                                }
+                                Ok(msg_id) => {
+                                    // Trigger Background Fact Extraction
+                                    let app_handle_bg = app_handle.clone();
+                                    let lib_clone = state.librarian.clone();
+                                    let content_clone = last.content.clone().unwrap_or_default();
+                                    let msg_id_clone = msg_id.clone();
 
-                                    if let Some(model_id) = &settings.context_model {
-                                        let parts: Vec<&str> = model_id.split("::").collect();
-                                        if parts.len() == 2 {
-                                            if let Ok(provider) = crate::memory::StrategistMemoryOrchestrator::create_provider(parts[0], parts[1], &settings) {
-                                                if let Err(e) = FactExtractor::extract(lib_clone, provider.as_ref(), "user", &content_clone, &msg_id_clone).await {
-                                                    tracing::warn!("Fact extraction failed: {}", e);
+                                    tokio::spawn(async move {
+                                         let config_dir = app_handle_bg.path().app_config_dir().unwrap_or_default();
+                                         let settings_path = config_dir.join("settings.json");
+                                         let settings = Settings::load_migrated(&settings_path);
+
+                                        if let Some(model_id) = &settings.context_model {
+                                            let parts: Vec<&str> = model_id.split("::").collect();
+                                            if parts.len() == 2 {
+                                                if let Ok(provider) = crate::memory::StrategistMemoryOrchestrator::create_provider(parts[0], parts[1], &settings) {
+                                                    if let Err(e) = FactExtractor::extract(lib_clone, provider.as_ref(), "user", &content_clone, &msg_id_clone).await {
+                                                        tracing::warn!("Fact extraction failed: {}", e);
+                                                    }
                                                 }
                                             }
                                         }
-                                    }
-                                });
+                                    });
+                                }
                             }
                         } else {
                             let _ = lib.save_full_message(
