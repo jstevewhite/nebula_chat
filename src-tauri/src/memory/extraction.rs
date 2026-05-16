@@ -212,3 +212,111 @@ struct ExtractedFact {
     kind: String,
     confidence: f32,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_key_lowercases_and_snake_cases() {
+        assert_eq!(FactExtractor::normalize_key("Main Editor"), "main_editor");
+        assert_eq!(FactExtractor::normalize_key("USER"), "user");
+        assert_eq!(FactExtractor::normalize_key("owns device"), "owns_device");
+    }
+
+    #[test]
+    fn normalize_key_collapses_runs_of_whitespace() {
+        // split_whitespace handles tabs, newlines, repeated spaces.
+        assert_eq!(FactExtractor::normalize_key("a   b\tc\nd"), "a_b_c_d");
+        assert_eq!(FactExtractor::normalize_key("  leading and trailing  "), "leading_and_trailing");
+    }
+
+    #[test]
+    fn normalize_key_empty_string() {
+        assert_eq!(FactExtractor::normalize_key(""), "");
+        assert_eq!(FactExtractor::normalize_key("   "), "");
+    }
+
+    #[test]
+    fn parse_json_handles_envelope_form() {
+        let raw = r#"{"facts":[{"subject":"user","predicate":"likes","object":"rust","object_kind":"literal","confidence":0.9}]}"#;
+        let parsed = FactExtractor::extract_and_parse_json(raw);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].subject, "user");
+        assert_eq!(parsed[0].predicate, "likes");
+        assert_eq!(parsed[0].object, "rust");
+        assert_eq!(parsed[0].object_kind.as_deref(), Some("literal"));
+        assert_eq!(parsed[0].confidence, Some(0.9));
+    }
+
+    #[test]
+    fn parse_json_bare_array_of_objects_is_not_recovered() {
+        // The parser searches for the first `{` before the first `[`, so a bare array
+        // of objects collapses to one of its inner objects, fails envelope parsing,
+        // and returns empty. This documents (rather than endorses) the current
+        // limitation — the "bare array" fallback only matches arrays of literals.
+        let raw = r#"[{"subject":"user","predicate":"uses","object":"vim"}]"#;
+        let parsed = FactExtractor::extract_and_parse_json(raw);
+        assert!(parsed.is_empty(), "bare array form is currently unsupported for object elements");
+    }
+
+    #[test]
+    fn parse_json_strips_markdown_fence_with_language_tag() {
+        let raw = "```json\n{\"facts\":[{\"subject\":\"user\",\"predicate\":\"likes\",\"object\":\"rust\"}]}\n```";
+        let parsed = FactExtractor::extract_and_parse_json(raw);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].object, "rust");
+    }
+
+    #[test]
+    fn parse_json_strips_markdown_fence_without_language_tag() {
+        let raw = "```\n{\"facts\":[{\"subject\":\"a\",\"predicate\":\"b\",\"object\":\"c\"}]}\n```";
+        let parsed = FactExtractor::extract_and_parse_json(raw);
+        assert_eq!(parsed.len(), 1);
+    }
+
+    #[test]
+    fn parse_json_extracts_envelope_from_chatty_prose() {
+        let raw = r#"Sure! Here are the facts I extracted:
+
+{"facts": [{"subject": "user", "predicate": "lives_in", "object": "Berlin"}]}
+
+Let me know if you need more."#;
+        let parsed = FactExtractor::extract_and_parse_json(raw);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].object, "Berlin");
+    }
+
+    #[test]
+    fn parse_json_empty_envelope_returns_empty() {
+        let parsed = FactExtractor::extract_and_parse_json(r#"{"facts":[]}"#);
+        assert!(parsed.is_empty());
+    }
+
+    #[test]
+    fn parse_json_garbage_returns_empty() {
+        assert!(FactExtractor::extract_and_parse_json("not json at all").is_empty());
+        assert!(FactExtractor::extract_and_parse_json("").is_empty());
+        // Schema mismatch (missing required fields) also yields empty
+        assert!(FactExtractor::extract_and_parse_json(r#"{"foo":"bar"}"#).is_empty());
+    }
+
+    #[test]
+    fn parse_json_envelope_preferred_over_array_when_both_could_parse() {
+        let raw = r#"{"facts":[{"subject":"s","predicate":"p","object":"o"}]}"#;
+        let parsed = FactExtractor::extract_and_parse_json(raw);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].subject, "s");
+    }
+
+    #[test]
+    fn parse_json_accepts_multiple_facts_in_envelope() {
+        let raw = r#"{"facts":[
+            {"subject":"user","predicate":"owns","object":"laptop","object_kind":"entity","confidence":1.0},
+            {"subject":"user","predicate":"likes","object":"coffee","object_kind":"literal","confidence":0.7}
+        ]}"#;
+        let parsed = FactExtractor::extract_and_parse_json(raw);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[1].object, "coffee");
+    }
+}

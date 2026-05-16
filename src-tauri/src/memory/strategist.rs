@@ -681,3 +681,109 @@ OUTPUT:"#,
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn q(text: &str, limit: Option<usize>) -> SearchQuery {
+        SearchQuery {
+            q: text.to_string(),
+            limit,
+            scope: None,
+            roles: None,
+            max_age_days: None,
+        }
+    }
+
+    #[test]
+    fn clamp_truncates_excess_queries() {
+        let mut plan = SearchPlan {
+            queries: (0..10).map(|i| q(&format!("q{}", i), None)).collect(),
+            notes: None,
+        };
+        plan.validate_and_clamp();
+        assert_eq!(plan.queries.len(), MAX_QUERIES_PER_ROUND);
+        // The first MAX_QUERIES_PER_ROUND queries are kept in order.
+        assert_eq!(plan.queries[0].q, "q0");
+        assert_eq!(plan.queries.last().unwrap().q, format!("q{}", MAX_QUERIES_PER_ROUND - 1));
+    }
+
+    #[test]
+    fn clamp_preserves_short_plans() {
+        let mut plan = SearchPlan {
+            queries: vec![q("only one", Some(5))],
+            notes: Some("hi".to_string()),
+        };
+        plan.validate_and_clamp();
+        assert_eq!(plan.queries.len(), 1);
+        assert_eq!(plan.queries[0].limit, Some(5));
+        assert_eq!(plan.notes.as_deref(), Some("hi"));
+    }
+
+    #[test]
+    fn clamp_caps_per_query_limit_to_max_total_hits() {
+        let mut plan = SearchPlan {
+            queries: vec![q("big", Some(9999))],
+            notes: None,
+        };
+        plan.validate_and_clamp();
+        assert_eq!(plan.queries[0].limit, Some(MAX_TOTAL_HITS));
+    }
+
+    #[test]
+    fn clamp_leaves_within_range_limits_alone() {
+        let mut plan = SearchPlan {
+            queries: vec![q("small", Some(3))],
+            notes: None,
+        };
+        plan.validate_and_clamp();
+        assert_eq!(plan.queries[0].limit, Some(3));
+    }
+
+    #[test]
+    fn clamp_leaves_unset_limits_as_none() {
+        let mut plan = SearchPlan {
+            queries: vec![q("no limit", None)],
+            notes: None,
+        };
+        plan.validate_and_clamp();
+        assert!(plan.queries[0].limit.is_none());
+    }
+
+    #[test]
+    fn clamp_empty_plan_is_noop() {
+        let mut plan = SearchPlan {
+            queries: vec![],
+            notes: None,
+        };
+        plan.validate_and_clamp();
+        assert!(plan.queries.is_empty());
+    }
+
+    #[test]
+    fn search_plan_deserializes_from_json_with_defaults() {
+        let raw = r#"{"queries":[{"q":"hello"}]}"#;
+        let plan: SearchPlan = serde_json::from_str(raw).unwrap();
+        assert_eq!(plan.queries.len(), 1);
+        assert_eq!(plan.queries[0].q, "hello");
+        assert!(plan.queries[0].limit.is_none());
+        assert!(plan.queries[0].roles.is_none());
+        assert!(plan.notes.is_none());
+    }
+
+    #[test]
+    fn search_plan_deserializes_with_all_fields() {
+        let raw = r#"{
+            "queries":[{"q":"x","limit":7,"scope":"conv-1","roles":["user","assistant"],"max_age_days":30}],
+            "notes":"context"
+        }"#;
+        let plan: SearchPlan = serde_json::from_str(raw).unwrap();
+        let only = &plan.queries[0];
+        assert_eq!(only.limit, Some(7));
+        assert_eq!(only.scope.as_deref(), Some("conv-1"));
+        assert_eq!(only.roles.as_ref().unwrap().len(), 2);
+        assert_eq!(only.max_age_days, Some(30));
+        assert_eq!(plan.notes.as_deref(), Some("context"));
+    }
+}

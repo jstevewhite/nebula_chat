@@ -930,3 +930,108 @@ impl LlmProvider for OpenAiProvider {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn sanitize_base_url_uses_default_when_none() {
+        assert_eq!(
+            sanitize_base_url(None, "https://api.openai.com"),
+            "https://api.openai.com"
+        );
+    }
+
+    #[test]
+    fn sanitize_base_url_trims_trailing_slashes() {
+        assert_eq!(
+            sanitize_base_url(Some("https://api.openai.com/".to_string()), "default"),
+            "https://api.openai.com"
+        );
+        assert_eq!(
+            sanitize_base_url(Some("https://api.openai.com///".to_string()), "default"),
+            "https://api.openai.com"
+        );
+    }
+
+    #[test]
+    fn sanitize_base_url_strips_trailing_v1() {
+        assert_eq!(
+            sanitize_base_url(Some("https://api.openai.com/v1".to_string()), "default"),
+            "https://api.openai.com"
+        );
+    }
+
+    #[test]
+    fn sanitize_base_url_strips_v1_after_trimming_slashes() {
+        assert_eq!(
+            sanitize_base_url(Some("https://api.openai.com/v1/".to_string()), "default"),
+            "https://api.openai.com"
+        );
+    }
+
+    #[test]
+    fn sanitize_base_url_leaves_v1_in_middle_alone() {
+        // Only trailing /v1 is stripped; an embedded /v1/ path should survive.
+        assert_eq!(
+            sanitize_base_url(Some("https://proxy.example/v1/openai".to_string()), "default"),
+            "https://proxy.example/v1/openai"
+        );
+    }
+
+    #[test]
+    fn sanitize_base_url_empty_string_input() {
+        // An explicit empty string is preserved (not replaced with default).
+        assert_eq!(sanitize_base_url(Some(String::new()), "default"), "");
+    }
+
+    #[test]
+    fn extract_text_from_string_content() {
+        assert_eq!(extract_text_from_content(&json!("hello world")), "hello world");
+        assert_eq!(extract_text_from_content(&json!("")), "");
+    }
+
+    #[test]
+    fn extract_text_from_array_concatenates_text_parts() {
+        let content = json!([
+            {"type": "text", "text": "Hello, "},
+            {"type": "text", "text": "world!"}
+        ]);
+        assert_eq!(extract_text_from_content(&content), "Hello, world!");
+    }
+
+    #[test]
+    fn extract_text_from_array_skips_non_text_parts() {
+        let content = json!([
+            {"type": "text", "text": "see "},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}},
+            {"type": "text", "text": "this"}
+        ]);
+        assert_eq!(extract_text_from_content(&content), "see this");
+    }
+
+    #[test]
+    fn extract_text_from_empty_array_is_empty() {
+        assert_eq!(extract_text_from_content(&json!([])), "");
+    }
+
+    #[test]
+    fn extract_text_from_other_value_kinds_is_empty() {
+        assert_eq!(extract_text_from_content(&json!(null)), "");
+        assert_eq!(extract_text_from_content(&json!(42)), "");
+        // Object form (not string, not array) returns empty.
+        assert_eq!(extract_text_from_content(&json!({"type": "text", "text": "no"})), "");
+    }
+
+    #[test]
+    fn extract_text_handles_part_with_missing_text_field() {
+        // type:text but no text key — should contribute nothing, not panic.
+        let content = json!([
+            {"type": "text"},
+            {"type": "text", "text": "ok"}
+        ]);
+        assert_eq!(extract_text_from_content(&content), "ok");
+    }
+}
