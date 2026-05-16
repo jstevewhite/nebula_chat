@@ -1759,26 +1759,30 @@ async fn delete_mcp_server(
 
 #[tauri::command]
 async fn rebuild_memory_index(state: State<'_, AppState>) -> Result<(), String> {
-    let lib = state.librarian.lock().await;
+    // Release the librarian mutex between conversations so other commands (sends,
+    // searches, deletes) aren't blocked for the entire rebuild — this can otherwise
+    // stall the UI for minutes on large histories.
 
-    // 1. Clear Tantivy
-    lib.clear_search_index().map_err(|e| e.to_string())?;
+    {
+        let lib = state.librarian.lock().await;
+        lib.clear_search_index().map_err(|e| e.to_string())?;
+    }
 
-    // 2. Read all messages from SQLite
-    // We need a method to iterate all messages, or just list convs and get messages for each
-    let conversations = lib.list_conversations().map_err(|e| e.to_string())?;
+    let conversations = {
+        let lib = state.librarian.lock().await;
+        lib.list_conversations().map_err(|e| e.to_string())?
+    };
 
     for (conv_id, _, _, _) in conversations {
-        let messages = lib
-            .get_complete_history(&conv_id)
-            .map_err(|e| e.to_string())?;
-
+        let lib = state.librarian.lock().await;
+        let messages = lib.get_complete_history(&conv_id).map_err(|e| e.to_string())?;
         for (msg_id, role, content, _, _, _, created_at, _) in messages {
             if let Some(text) = content {
                 lib.index_existing_message(&conv_id, &role, &text, &msg_id, &created_at)
                     .map_err(|e| e.to_string())?;
             }
         }
+        drop(lib);
     }
 
     Ok(())
@@ -1812,19 +1816,22 @@ async fn export_conversation(
         conversation_id,
         format
     );
-    let lib = state.librarian.lock().await;
 
-    // Get metadata
-    let convs = lib.list_conversations().map_err(|e| e.to_string())?;
-    let (_, title, _, created_at) = convs
-        .into_iter()
-        .find(|(id, _, _, _)| id == &conversation_id)
-        .ok_or("Conversation not found")?;
-
-    // Get messages
-    let raw_msgs = lib
-        .get_complete_history(&conversation_id)
-        .map_err(|e| e.to_string())?;
+    // Snapshot DB rows under the lock, then release it before doing the (potentially
+    // large) serialization work — exports of long conversations used to block every
+    // other librarian-bound command for the duration of the JSON/MD build.
+    let (title, created_at, raw_msgs) = {
+        let lib = state.librarian.lock().await;
+        let convs = lib.list_conversations().map_err(|e| e.to_string())?;
+        let (_, title, _, created_at) = convs
+            .into_iter()
+            .find(|(id, _, _, _)| id == &conversation_id)
+            .ok_or("Conversation not found")?;
+        let raw_msgs = lib
+            .get_complete_history(&conversation_id)
+            .map_err(|e| e.to_string())?;
+        (title, created_at, raw_msgs)
+    };
 
     let mut messages = Vec::new();
     for (

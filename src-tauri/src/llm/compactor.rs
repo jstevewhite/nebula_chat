@@ -184,7 +184,6 @@ impl Compactor {
         // Filter messages that are already covered by the previous summary
         // Usage: if last_id is present, skip messages up to and including that ID.
         let mut new_chunk_msgs = Vec::new();
-        let mut found_last = last_id.is_none(); // If no last_id, we start from beginning
 
         // Safety validation: If last_id is provided but not found in to_compact,
         // reset it to None to process all messages from the beginning.
@@ -209,6 +208,14 @@ impl Compactor {
                 );
             }
         }
+
+        // Initialize found_last from effective_last_id (post-safety-check). If
+        // effective_last_id is None — either because no last_id was supplied OR
+        // because the safety check above reset it — we begin processing from the
+        // first message. Previously this used `last_id.is_none()` which left
+        // found_last=false when the safety check fired, defeating the recovery
+        // and silently emitting an unchanged old summary.
+        let mut found_last = effective_last_id.is_none();
 
         // If we have a last_id, we need to find where it is in `to_compact`.
         // If it's not found in `to_compact`, it might be that our 'last_id' is actually *older*
@@ -523,6 +530,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_last_id_not_in_range_safety() {
+        // Scenario: a stored summary references last_id="100" but the actual messages
+        // being compacted have ids 1..=15 (the marker was pruned away). The safety
+        // recovery must reset to "compact from the start" — previously, a bug in
+        // found_last initialization left it false even after the safety reset,
+        // causing the loop to skip every message and silently emit the stale old
+        // summary. Here we use an invalid model id so the compactor falls through
+        // to pass-through after the (now-correctly) recognized need to re-compact.
         let librarian: Arc<Mutex<Librarian>> = create_test_librarian().await;
 
         let mut settings = Settings::default();
@@ -546,10 +560,16 @@ mod tests {
 
         let result = Compactor::compact(messages.clone(), &settings, Some(&conv_id), librarian).await;
 
-        assert!(result.is_ok(), "Compaction should succeed");
+        assert!(result.is_ok(), "Compaction should not error when last_id is unfindable");
         let (summary, msgs) = result.unwrap();
-        assert!(summary.is_some(), "Should return a summary after compaction");
-        assert_eq!(msgs.len(), 6, "Should have 1 summary + 5 raw messages");
+        // With the safety recovery in effect AND an invalid model id, the function
+        // proceeds past the empty-chunk fallback (proving new_chunk_msgs was NOT
+        // empty) and falls through to the invalid-model pass-through, returning the
+        // original messages with no new summary. The pre-fix behaviour incorrectly
+        // returned (Some(stale_summary), keep_raw) — exactly the silent data loss
+        // remediation.md flagged.
+        assert!(summary.is_none(), "Invalid model id should skip compaction, not emit a stale summary");
+        assert_eq!(msgs.len(), 15, "Pass-through must return all original messages");
     }
 
     #[tokio::test]
