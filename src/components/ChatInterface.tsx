@@ -46,6 +46,14 @@ interface StreamChunkEvent {
     chunk_type?: "text" | "reasoning";
 }
 
+interface StreamStatsEvent {
+    request_id?: string | null;
+    conversation_id?: string | null;
+    tokens_per_second: number;
+    total_tokens: number;
+    duration_ms: number;
+}
+
 interface ChatInterfaceProps {
     conversationId: string | null;
 }
@@ -152,6 +160,8 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     }, []);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const [copiedCodeVal, setCopiedCodeVal] = useState<string | null>(null); // To show 'Check' icon momentarily
+    const [messageStats, setMessageStats] = useState<Record<string, StreamStatsEvent>>({});
+    const pendingStatsRef = useRef<StreamStatsEvent | null>(null);
 
     const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -863,7 +873,19 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         }, THROTTLE_MS - timeSinceLastUpdate);
                     }
                 });
-                unlistenTransform = unlisten;
+
+                pendingStatsRef.current = null;
+                const unlistenStats = await listen<StreamStatsEvent>("stream-stats", (event) => {
+                    const payload = event.payload;
+                    if (payload.request_id && payload.request_id !== requestId) return;
+                    pendingStatsRef.current = payload;
+                });
+
+                const origUnlisten = unlisten;
+                unlistenTransform = () => {
+                    origUnlisten();
+                    unlistenStats();
+                };
             }
 
             // Don't await immediately - let event loop process stream events
@@ -955,6 +977,14 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                     }
                     return [...prev, response];
                 });
+
+                // Store generation stats for this message
+                if (pendingStatsRef.current) {
+                    const statsKey = response.id || tempMsgId;
+                    const stats = pendingStatsRef.current;
+                    pendingStatsRef.current = null;
+                    setMessageStats(prev => ({ ...prev, [statsKey]: stats }));
+                }
 
                 // Auto-Title Trigger (If this was the first exchange)
                 if (currentHistory.length === 1 && conversationId) {
@@ -1502,6 +1532,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         onDelete={handleDelete}
                         onRegenerate={handleRegenerate}
                         showTimestamp={showMessageTimestamps}
+                        genStats={m.id ? messageStats[m.id] : undefined}
                     />
                 ))}
             </div>
@@ -1731,7 +1762,7 @@ const ThinkingBlock = memo(({ content }: { content: string }) => {
     );
 });
 
-const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRegenerate, showTimestamp }: { message: Message, index: number, onCopy: any, onEdit: any, onDelete: any, onRegenerate: any, showTimestamp: boolean }) => {
+const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRegenerate, showTimestamp, genStats }: { message: Message, index: number, onCopy: any, onEdit: any, onDelete: any, onRegenerate: any, showTimestamp: boolean, genStats?: StreamStatsEvent }) => {
     const [isExpanded, setIsExpanded] = useState(m.role !== "tool");
     const [showRaw, setShowRaw] = useState(false);
     const [showToolArgs, setShowToolArgs] = useState(false);
@@ -1988,6 +2019,14 @@ const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRe
                         {showTimestamp && timestampText && (
                             <span className="text-[var(--color-text-tertiary)] text-[11px] font-mono mr-1">
                                 {timestampText}
+                            </span>
+                        )}
+                        {m.role === "assistant" && genStats && (
+                            <span
+                                className="text-[var(--color-text-tertiary)] text-[11px] font-mono mr-1"
+                                title={`${genStats.total_tokens} tokens in ${(genStats.duration_ms / 1000).toFixed(1)}s`}
+                            >
+                                {genStats.tokens_per_second.toFixed(1)} tok/s
                             </span>
                         )}
                         <button
