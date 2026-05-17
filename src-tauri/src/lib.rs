@@ -627,7 +627,7 @@ async fn send_message(
         // --- CONTEXT COMPACTION ---
         // Compact messages before generating context.
         // We do this if compaction is enabled (count > 0).
-        let (compacted_summary, effective_messages) = if settings.context_uncompressed_msg_count > 0
+        let (_compacted_summary, effective_messages) = if settings.context_uncompressed_msg_count > 0
         {
             match crate::llm::compactor::Compactor::compact(
                 messages.clone(),
