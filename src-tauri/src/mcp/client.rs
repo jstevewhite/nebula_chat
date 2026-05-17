@@ -412,6 +412,10 @@ impl McpClient {
                 cmd.stdin(Stdio::piped());
                 cmd.stdout(Stdio::piped());
                 cmd.stderr(Stdio::piped()); // Capture stderr
+                // Ensure the child is reaped if we drop the Child handle before
+                // wait() completes (e.g. an error path between spawn() and the
+                // stdin/stdout takes below would otherwise leak a zombie).
+                cmd.kill_on_drop(true);
 
                 let mut child = cmd
                     .spawn()

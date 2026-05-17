@@ -256,6 +256,13 @@ impl McpManager {
         if parts.len() == 2 {
             Some(parts[0].to_string())
         } else {
+            // Tools are advertised as "<server>__<tool>"; a bare name means we
+            // can't route it. Log so misconfigured tools don't silently vanish
+            // from the routing layer.
+            tracing::warn!(
+                "get_server_for_tool: cannot route tool '{}' — expected '<server>__<tool>' format",
+                tool_name
+            );
             None
         }
     }
