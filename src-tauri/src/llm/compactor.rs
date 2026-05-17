@@ -491,7 +491,14 @@ mod tests {
     }
 
     async fn create_test_librarian() -> Arc<Mutex<Librarian>> {
-        let librarian = Librarian::new(std::path::Path::new(":memory:")).unwrap();
+        // Use a process-unique temp dir; passing ":memory:" as a Path historically
+        // caused Librarian to create a real ":memory:" directory in the working
+        // directory (which then got committed to git).
+        let tmp = tempfile::tempdir().unwrap();
+        let librarian = Librarian::new(tmp.path()).unwrap();
+        // Intentionally leak the TempDir so it survives for the lifetime of the
+        // test; cleanup happens when the test process exits.
+        std::mem::forget(tmp);
         Arc::new(Mutex::new(librarian))
     }
 

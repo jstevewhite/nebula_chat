@@ -23,15 +23,6 @@ pub mod mcp;
 pub mod memory;
 pub mod security;
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_tool_call_validation_integration() {
-        // This is a placeholder for integration tests
-        // The actual database validation is tested in the sqlite_manager tests
-    }
-}
-
 #[derive(Clone)]
 pub struct AppState {
     mcp_manager: Arc<McpManager>,
@@ -153,18 +144,6 @@ async fn update_conversation_icon(
     let _ = app.emit("conversations-updated", ());
 
     Ok(())
-}
-
-#[tauri::command]
-async fn regenerate_title_and_icon(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    conversation_id: String,
-    provider_id: String,
-    model: String,
-) -> Result<String, String> {
-    // This is essentially the same as generate_title, but we can make it explicit
-    generate_title(app, state, conversation_id, provider_id, model).await
 }
 
 #[tauri::command]
@@ -2548,7 +2527,6 @@ pub fn run() {
             delete_conversation,
             rename_conversation,
             update_conversation_icon,
-            regenerate_title_and_icon,
             delete_message,
             delete_messages,
             generate_title,
