@@ -63,6 +63,15 @@ struct StreamChunkEvent {
     chunk_type: String, // "text" or "reasoning"
 }
 
+#[derive(Clone, Serialize)]
+struct StreamStatsEvent {
+    request_id: Option<String>,
+    conversation_id: Option<String>,
+    tokens_per_second: f64,
+    total_tokens: usize,
+    duration_ms: u64,
+}
+
 #[derive(serde::Serialize)]
 struct Conversation {
     id: String,
@@ -1012,6 +1021,8 @@ async fn send_message(
 
         let mut on_token_opt = Some(on_token);
 
+        let gen_start = std::time::Instant::now();
+
         let response_result = match provider_config.provider_type {
             ProviderType::OpenAI | ProviderType::OpenAICompatible => {
                 let api_key = provider_config.api_key.clone().unwrap_or_default();
@@ -1076,6 +1087,31 @@ async fn send_message(
         // Ensure all tokens are emitted by the aggregator before continuing
         drop(on_token_opt); // Explicitly drop sender if it wasn't used to close the channel
         let _ = aggregator_handle.await;
+
+        if effective_stream {
+            if let Ok(ref resp) = response_result {
+                let duration_ms = gen_start.elapsed().as_millis() as u64;
+                let content = resp.content.as_deref().unwrap_or("");
+                let token_count = crate::llm::tokenizer::count_tokens(content)
+                    .unwrap_or_else(|_| content.len() / 4);
+                let tokens_per_second = if duration_ms > 0 {
+                    token_count as f64 * 1000.0 / duration_ms as f64
+                } else {
+                    0.0
+                };
+                use tauri::Emitter;
+                let _ = app_handle.emit(
+                    "stream-stats",
+                    StreamStatsEvent {
+                        request_id: request_id.clone(),
+                        conversation_id: conversation_id.clone(),
+                        tokens_per_second,
+                        total_tokens: token_count,
+                        duration_ms,
+                    },
+                );
+            }
+        }
 
         let mut response = response_result.map_err(|e| e.to_string())?;
 
