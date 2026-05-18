@@ -385,6 +385,12 @@ impl LlmProvider for OpenAiProvider {
                                 .insert("tool_calls".to_string(), json!(tool_calls));
                         }
 
+                        if let Some(reasoning) = &msg.reasoning_content {
+                            obj.as_object_mut()
+                                .unwrap()
+                                .insert("reasoning_content".to_string(), json!(reasoning));
+                        }
+
                         return obj;
                     }
                 }
@@ -414,6 +420,12 @@ impl LlmProvider for OpenAiProvider {
                     obj.as_object_mut()
                         .unwrap()
                         .insert("tool_calls".to_string(), json!(tool_calls));
+                }
+
+                if let Some(reasoning) = &msg.reasoning_content {
+                    obj.as_object_mut()
+                        .unwrap()
+                        .insert("reasoning_content".to_string(), json!(reasoning));
                 }
 
                 obj
@@ -643,6 +655,12 @@ impl LlmProvider for OpenAiProvider {
                                 .insert("tool_calls".to_string(), json!(tool_calls));
                         }
 
+                        if let Some(reasoning) = &msg.reasoning_content {
+                            obj.as_object_mut()
+                                .unwrap()
+                                .insert("reasoning_content".to_string(), json!(reasoning));
+                        }
+
                         return obj;
                     }
                 }
@@ -674,13 +692,17 @@ impl LlmProvider for OpenAiProvider {
                         .insert("tool_calls".to_string(), json!(tool_calls));
                 }
 
+                if let Some(reasoning) = &msg.reasoning_content {
+                    obj.as_object_mut()
+                        .unwrap()
+                        .insert("reasoning_content".to_string(), json!(reasoning));
+                }
+
                 obj
             })
             .collect();
 
         let mut body = json!({
-            "model": self.model,
-            "messages": formatted_messages,
             "model": self.model,
             "messages": formatted_messages,
             "stream": true,

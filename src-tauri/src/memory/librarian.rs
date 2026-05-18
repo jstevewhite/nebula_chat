@@ -135,7 +135,7 @@ impl Librarian {
         // Find tool messages that correspond to assistant tool_call_ids
         let mut child_tool_message_ids: Vec<String> = Vec::new();
         if !tool_call_ids_from_assistants.is_empty() {
-            let mut placeholders = std::iter::repeat("?")
+            let placeholders = std::iter::repeat("?")
                 .take(tool_call_ids_from_assistants.len())
                 .collect::<Vec<_>>()
                 .join(",");
@@ -143,7 +143,7 @@ impl Librarian {
                 "SELECT id FROM messages WHERE role = 'tool' AND tool_call_id IN ({})",
                 placeholders
             );
-            let mut params: Vec<&dyn ToSql> = tool_call_ids_from_assistants
+            let params: Vec<&dyn ToSql> = tool_call_ids_from_assistants
                 .iter()
                 .map(|s| s as &dyn ToSql)
                 .collect();

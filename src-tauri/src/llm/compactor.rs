@@ -3,7 +3,7 @@ use crate::llm::ollama::OllamaProvider;
 use crate::llm::openai::OpenAiProvider;
 use crate::llm::provider::{LlmProvider, Message};
 use crate::mcp::config::{ProviderType, Settings};
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -11,6 +11,7 @@ pub struct Compactor;
 
 pub struct CompactionState {
     conversation_id: String,
+    #[allow(dead_code)]
     phase: String,
     messages_before: Vec<Message>,
     original_summary: Option<(String, String)>,
@@ -108,7 +109,7 @@ impl Compactor {
 
         // 1. Get existing summary
         let existing = lib.sqlite.get_conversation_summary(conversation_id)?;
-        let (mut last_summary, mut last_id) = if let Some((msg_id, summary)) = existing {
+        let (last_summary, last_id) = if let Some((msg_id, summary)) = existing {
             (summary, Some(msg_id))
         } else {
             (String::new(), None)
@@ -279,7 +280,7 @@ impl Compactor {
             .as_deref()
             .or(settings.default_model.as_deref());
 
-        let (provider, model_name) = if let Some(mid) = model_id {
+        let (provider, _model_name) = if let Some(mid) = model_id {
             if let Some((p, m)) = Self::parse_model_id(mid) {
                 (Self::create_provider(p, m, settings)?, m)
             } else {
