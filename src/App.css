@@ -119,3 +119,50 @@ button {
     background-color: #0f0f0f69;
   }
 }
+
+.tasks-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 280px;
+  max-width: 360px;
+  border-left: 1px solid var(--border-color, #ddd);
+  background: var(--panel-bg, #fafafa);
+  overflow-y: auto;
+}
+.tasks-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border-color, #ddd);
+}
+.tasks-empty {
+  padding: 16px;
+  color: var(--muted-fg, #888);
+  font-size: 0.9em;
+}
+.tasks-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.task-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-color-subtle, #eee);
+}
+.task-marker {
+  font-family: var(--mono-font, monospace);
+  width: 1.2em;
+  text-align: center;
+}
+.task-completed .task-text {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+.task-in_progress {
+  font-weight: 600;
+}
