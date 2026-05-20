@@ -1450,6 +1450,15 @@ async fn get_tool_execution(
 }
 
 #[tauri::command]
+async fn get_conversation_tasks(
+    state: State<'_, AppState>,
+    conversation_id: String,
+) -> Result<Vec<crate::memory::sqlite_manager::PersistedTask>, String> {
+    let lib = state.librarian.lock().await;
+    lib.get_tasks(&conversation_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn get_settings(app: tauri::AppHandle) -> Result<Settings, String> {
     let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     let settings_path = config_dir.join("settings.json");
@@ -2639,6 +2648,7 @@ pub fn run() {
             fetch_models,
             execute_tool,
             get_tool_execution,
+            get_conversation_tasks,
             add_mcp_server,
             edit_mcp_server,
             delete_mcp_server,
