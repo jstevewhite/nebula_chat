@@ -22,6 +22,7 @@ pub use llm::capabilities;
 pub mod mcp;
 pub mod memory;
 pub mod security;
+pub mod tasks;
 
 #[derive(Clone)]
 pub struct AppState {
