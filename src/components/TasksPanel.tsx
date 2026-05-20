@@ -54,16 +54,16 @@ export default function TasksPanel({ conversationId, onClose }: TasksPanelProps)
     }, [conversationId]);
 
     return (
-        <div className="w-80 h-full border-l border-gray-800 bg-gray-900 flex flex-col shadow-xl shrink-0 animate-in slide-in-from-right duration-200">
-            <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-900/50 backdrop-blur">
-                <h3 className="text-sm font-semibold text-gray-200 flex items-center gap-2">
+        <div className="w-80 h-full border-l border-[var(--color-border-primary)] bg-[var(--color-bg-secondary)] flex flex-col shadow-xl shrink-0 animate-in slide-in-from-right duration-200">
+            <div className="p-4 border-b border-[var(--color-border-primary)] flex justify-between items-center bg-[var(--color-bg-secondary)]/50 backdrop-blur">
+                <h3 className="text-sm font-semibold text-[var(--color-text-primary)] flex items-center gap-2">
                     <ListChecks size={16} className="text-blue-400" />
                     Tasks
                 </h3>
                 <button
                     onClick={onClose}
                     aria-label="Close tasks panel"
-                    className="text-gray-500 hover:text-white transition-colors p-1 hover:bg-gray-800 rounded"
+                    className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors p-1 hover:bg-[var(--color-bg-tertiary)] rounded"
                 >
                     <X size={16} />
                 </button>
@@ -71,7 +71,7 @@ export default function TasksPanel({ conversationId, onClose }: TasksPanelProps)
 
             <div className="flex-1 overflow-y-auto p-4 space-y-2">
                 {tasks.length === 0 ? (
-                    <div className="text-center text-gray-500 mt-10 text-sm italic">
+                    <div className="text-center text-[var(--color-text-secondary)] mt-10 text-sm italic">
                         No tasks yet for this conversation.
                     </div>
                 ) : (
@@ -85,17 +85,17 @@ export default function TasksPanel({ conversationId, onClose }: TasksPanelProps)
                             ) : isActive ? (
                                 <CircleDot size={14} className="text-blue-400" />
                             ) : (
-                                <Circle size={14} className="text-gray-500" />
+                                <Circle size={14} className="text-[var(--color-text-tertiary)]" />
                             );
                             return (
                                 <li
                                     key={t.id}
-                                    className={`bg-gray-800/50 border p-3 rounded-lg text-sm shadow-sm transition-colors flex items-start gap-2 ${
+                                    className={`bg-[var(--color-bg-tertiary)]/50 border p-3 rounded-lg text-sm shadow-sm transition-colors flex items-start gap-2 ${
                                         isActive
-                                            ? "border-blue-500/40 text-gray-100"
+                                            ? "border-blue-500/40 text-[var(--color-text-primary)]"
                                             : isDone
-                                              ? "border-gray-700/50 text-gray-500 line-through"
-                                              : "border-gray-700/50 text-gray-300"
+                                              ? "border-[var(--color-border-secondary)] text-[var(--color-text-secondary)] line-through"
+                                              : "border-[var(--color-border-secondary)] text-[var(--color-text-primary)]"
                                     }`}
                                 >
                                     <span className="mt-0.5 shrink-0">{icon}</span>

@@ -64,10 +64,10 @@ export default function MemoryPanel({ memories, onClose }: MemoryPanelProps) {
     };
 
     return (
-        <div className="w-80 h-full border-l border-gray-800 bg-gray-900 flex flex-col shadow-xl absolute right-0 top-0 z-20 animate-in slide-in-from-right duration-200">
-            <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-900/50 backdrop-blur">
+        <div className="w-80 h-full border-l border-[var(--color-border-primary)] bg-[var(--color-bg-secondary)] flex flex-col shadow-xl shrink-0 animate-in slide-in-from-right duration-200">
+            <div className="p-4 border-b border-[var(--color-border-primary)] flex justify-between items-center bg-[var(--color-bg-secondary)]/50 backdrop-blur">
                 <div className="flex flex-col gap-1">
-                    <h3 className="text-sm font-semibold text-gray-200 flex items-center gap-2">
+                    <h3 className="text-sm font-semibold text-[var(--color-text-primary)] flex items-center gap-2">
                         <Brain size={16} className="text-purple-400" />
                         Memory
                     </h3>
@@ -76,7 +76,7 @@ export default function MemoryPanel({ memories, onClose }: MemoryPanelProps) {
                             className={`px-2 py-0.5 rounded-full border ${
                                 activeTab === "context"
                                     ? "bg-purple-600/40 border-purple-400 text-purple-50"
-                                    : "bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700"
+                                    : "bg-[var(--color-bg-tertiary)] border-[var(--color-border-secondary)] text-[var(--color-text-secondary)] hover:bg-[var(--color-hover-bg)]"
                             }`}
                             onClick={() => setActiveTab("context")}
                         >
@@ -86,7 +86,7 @@ export default function MemoryPanel({ memories, onClose }: MemoryPanelProps) {
                             className={`px-2 py-0.5 rounded-full border ${
                                 activeTab === "facts"
                                     ? "bg-purple-600/40 border-purple-400 text-purple-50"
-                                    : "bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700"
+                                    : "bg-[var(--color-bg-tertiary)] border-[var(--color-border-secondary)] text-[var(--color-text-secondary)] hover:bg-[var(--color-hover-bg)]"
                             }`}
                             onClick={() => setActiveTab("facts")}
                         >
@@ -96,7 +96,7 @@ export default function MemoryPanel({ memories, onClose }: MemoryPanelProps) {
                 </div>
                 <button
                     onClick={onClose}
-                    className="text-gray-500 hover:text-white transition-colors p-1 hover:bg-gray-800 rounded"
+                    className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors p-1 hover:bg-[var(--color-bg-tertiary)] rounded"
                 >
                     <X size={16} />
                 </button>
@@ -105,14 +105,14 @@ export default function MemoryPanel({ memories, onClose }: MemoryPanelProps) {
             {activeTab === "context" ? (
                 <div className="flex-1 overflow-y-auto p-4 space-y-3">
                     {memories.length === 0 ? (
-                        <div className="text-center text-gray-500 mt-10 text-sm italic">
+                        <div className="text-center text-[var(--color-text-secondary)] mt-10 text-sm italic">
                             No active memories found for this interaction.
                         </div>
                     ) : (
                         memories.map((mem, i) => (
                             <div
                                 key={i}
-                                className="bg-gray-800/50 border border-gray-700/50 p-3 rounded-lg text-sm text-gray-300 shadow-sm hover:border-purple-500/30 transition-colors"
+                                className="bg-[var(--color-bg-tertiary)]/50 border border-[var(--color-border-secondary)] p-3 rounded-lg text-sm text-[var(--color-text-primary)] shadow-sm hover:border-purple-500/30 transition-colors"
                             >
                                 <div className="text-xs text-purple-400 mb-1 font-mono opacity-75">
                                     MEMORY FRAGMENT {i + 1}
@@ -123,7 +123,7 @@ export default function MemoryPanel({ memories, onClose }: MemoryPanelProps) {
                     )}
                 </div>
             ) : (
-                <div className="flex-1 overflow-y-auto p-4 space-y-3 text-xs text-gray-200">
+                <div className="flex-1 overflow-y-auto p-4 space-y-3 text-xs text-[var(--color-text-primary)]">
                     {factsError && (
                         <div className="text-red-300 bg-red-900/40 border border-red-700/60 rounded p-2">
                             {factsError}
@@ -133,9 +133,9 @@ export default function MemoryPanel({ memories, onClose }: MemoryPanelProps) {
                     <div>
                         <h4 className="text-[11px] font-semibold text-purple-300 mb-1">User Profile Facts</h4>
                         {factsLoading && userFacts.length === 0 ? (
-                            <div className="text-gray-400 italic">Loading facts...</div>
+                            <div className="text-[var(--color-text-secondary)] italic">Loading facts...</div>
                         ) : userFacts.length === 0 ? (
-                            <div className="text-gray-500 italic">
+                            <div className="text-[var(--color-text-secondary)] italic">
                                 No user profile facts stored yet.
                             </div>
                         ) : (
@@ -143,16 +143,16 @@ export default function MemoryPanel({ memories, onClose }: MemoryPanelProps) {
                                 {userFacts.map((f) => (
                                     <li
                                         key={f.id}
-                                        className="border border-gray-700 rounded px-2 py-1 bg-gray-800/60"
+                                        className="border border-[var(--color-border-secondary)] rounded px-2 py-1 bg-[var(--color-bg-tertiary)]/60"
                                     >
-                                        <div className="font-mono text-[10px] text-gray-500 truncate mb-0.5">
+                                        <div className="font-mono text-[10px] text-[var(--color-text-tertiary)] truncate mb-0.5">
                                             {f.id}
                                         </div>
                                         <div>
-                                            <span className="font-semibold text-gray-100">{f.subject}</span>{" "}
-                                            <span className="text-gray-400">{f.predicate}</span>{" "}
-                                            <span className="text-gray-100">{f.object}</span>{" "}
-                                            <span className="text-gray-500">
+                                            <span className="font-semibold text-[var(--color-text-primary)]">{f.subject}</span>{" "}
+                                            <span className="text-[var(--color-text-secondary)]">{f.predicate}</span>{" "}
+                                            <span className="text-[var(--color-text-primary)]">{f.object}</span>{" "}
+                                            <span className="text-[var(--color-text-tertiary)]">
                                                 ({f.object_kind}, conf={f.confidence.toFixed(2)})
                                             </span>
                                         </div>
@@ -162,15 +162,15 @@ export default function MemoryPanel({ memories, onClose }: MemoryPanelProps) {
                         )}
                     </div>
 
-                    <div className="pt-2 border-t border-gray-800">
+                    <div className="pt-2 border-t border-[var(--color-border-primary)]">
                         <h4 className="text-[11px] font-semibold text-purple-300 mb-1">Facts About Entity</h4>
-                        <p className="text-[11px] text-gray-400 mb-2">
+                        <p className="text-[11px] text-[var(--color-text-secondary)] mb-2">
                             Enter an entity key (e.g. <code className="font-mono">nebula_chat</code>,
                             <code className="font-mono">tauri</code>) to inspect related facts.
                         </p>
                         <div className="flex gap-2 mb-2">
                             <input
-                                className="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-[11px] text-gray-100"
+                                className="flex-1 bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded px-2 py-1 text-[11px] text-[var(--color-text-primary)]"
                                 placeholder="entity key (subject/object)"
                                 value={entityKey}
                                 onChange={(e) => setEntityKey(e.target.value)}
@@ -184,10 +184,10 @@ export default function MemoryPanel({ memories, onClose }: MemoryPanelProps) {
                             </button>
                         </div>
                         {factsLoading && entityFacts.length === 0 && entityKey.trim() && (
-                            <div className="text-gray-400 italic mb-1">Loading entity facts...</div>
+                            <div className="text-[var(--color-text-secondary)] italic mb-1">Loading entity facts...</div>
                         )}
                         {entityKey.trim() && entityFacts.length === 0 && !factsLoading ? (
-                            <div className="text-gray-500 italic">
+                            <div className="text-[var(--color-text-secondary)] italic">
                                 No facts found for <span className="font-mono">{entityKey.trim()}</span>.
                             </div>
                         ) : null}
@@ -196,16 +196,16 @@ export default function MemoryPanel({ memories, onClose }: MemoryPanelProps) {
                                 {entityFacts.map((f) => (
                                     <li
                                         key={f.id}
-                                        className="border border-gray-700 rounded px-2 py-1 bg-gray-800/60"
+                                        className="border border-[var(--color-border-secondary)] rounded px-2 py-1 bg-[var(--color-bg-tertiary)]/60"
                                     >
-                                        <div className="font-mono text-[10px] text-gray-500 truncate mb-0.5">
+                                        <div className="font-mono text-[10px] text-[var(--color-text-tertiary)] truncate mb-0.5">
                                             {f.id}
                                         </div>
                                         <div>
-                                            <span className="font-semibold text-gray-100">{f.subject}</span>{" "}
-                                            <span className="text-gray-400">{f.predicate}</span>{" "}
-                                            <span className="text-gray-100">{f.object}</span>{" "}
-                                            <span className="text-gray-500">
+                                            <span className="font-semibold text-[var(--color-text-primary)]">{f.subject}</span>{" "}
+                                            <span className="text-[var(--color-text-secondary)]">{f.predicate}</span>{" "}
+                                            <span className="text-[var(--color-text-primary)]">{f.object}</span>{" "}
+                                            <span className="text-[var(--color-text-tertiary)]">
                                                 ({f.object_kind}, conf={f.confidence.toFixed(2)})
                                             </span>
                                         </div>

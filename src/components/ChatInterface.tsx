@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, memo, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check, Pin, FileText, Book, Paperclip, X, Brain, Square, Sliders, Download, Eye, EyeOff, ChevronRight, ChevronDown } from "lucide-react";
+import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check, Pin, FileText, Book, Paperclip, X, Brain, Square, Sliders, Download, Eye, EyeOff, ChevronRight, ChevronDown, ListChecks } from "lucide-react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile, readFile, readTextFile } from "@tauri-apps/plugin-fs";
 import ReactMarkdown from "react-markdown";
@@ -1507,7 +1507,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         title={activeSidePanel === 'tasks' ? "Hide tasks" : "Show tasks"}
                         aria-pressed={activeSidePanel === 'tasks'}
                     >
-                        ☑ Tasks
+                        <ListChecks size={18} />
                     </button>
 
                     <button
@@ -1528,15 +1528,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 </div>
             </div>
 
-            {/* Memory panel overlays the chat (absolute positioned in MemoryPanel.tsx) */}
-            {activeSidePanel === 'memory' && (
-                <MemoryPanel
-                    memories={recentMemories}
-                    onClose={() => setActiveSidePanel('none')}
-                />
-            )}
-
-            {/* Chat area + Tasks panel share horizontal space — Tasks shrinks the chat */}
+            {/* Chat area + side panels share horizontal space — panels shrink the chat */}
             <div className="flex-1 flex flex-row min-h-0">
             <div
                 className="flex-1 overflow-y-auto p-4 space-y-6 min-h-0 min-w-0 font-chat"
@@ -1557,6 +1549,12 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                     />
                 ))}
             </div>
+            {activeSidePanel === 'memory' && (
+                <MemoryPanel
+                    memories={recentMemories}
+                    onClose={() => setActiveSidePanel('none')}
+                />
+            )}
             {activeSidePanel === 'tasks' && (
                 <TasksPanel
                     conversationId={conversationId}
