@@ -54,7 +54,7 @@ export default function TasksPanel({ conversationId, onClose }: TasksPanelProps)
     }, [conversationId]);
 
     return (
-        <div className="w-80 h-full border-l border-gray-800 bg-gray-900 flex flex-col shadow-xl absolute right-0 top-0 z-20 animate-in slide-in-from-right duration-200">
+        <div className="w-80 h-full border-l border-gray-800 bg-gray-900 flex flex-col shadow-xl shrink-0 animate-in slide-in-from-right duration-200">
             <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-900/50 backdrop-blur">
                 <h3 className="text-sm font-semibold text-gray-200 flex items-center gap-2">
                     <ListChecks size={16} className="text-blue-400" />

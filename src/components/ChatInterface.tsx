@@ -1528,24 +1528,18 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 </div>
             </div>
 
-            {/* Side Panels */}
-            {
-                activeSidePanel === 'memory' && (
-                    <MemoryPanel
-                        memories={recentMemories}
-                        onClose={() => setActiveSidePanel('none')}
-                    />
-                )
-            }
-            {activeSidePanel === 'tasks' && (
-                <TasksPanel
-                    conversationId={conversationId}
+            {/* Memory panel overlays the chat (absolute positioned in MemoryPanel.tsx) */}
+            {activeSidePanel === 'memory' && (
+                <MemoryPanel
+                    memories={recentMemories}
                     onClose={() => setActiveSidePanel('none')}
                 />
             )}
 
+            {/* Chat area + Tasks panel share horizontal space — Tasks shrinks the chat */}
+            <div className="flex-1 flex flex-row min-h-0">
             <div
-                className="flex-1 overflow-y-auto p-4 space-y-6 min-h-0 font-chat"
+                className="flex-1 overflow-y-auto p-4 space-y-6 min-h-0 min-w-0 font-chat"
                 ref={scrollRef}
                 onScroll={handleScroll}
             >
@@ -1562,6 +1556,13 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         genStats={m.id ? messageStats[m.id] : undefined}
                     />
                 ))}
+            </div>
+            {activeSidePanel === 'tasks' && (
+                <TasksPanel
+                    conversationId={conversationId}
+                    onClose={() => setActiveSidePanel('none')}
+                />
+            )}
             </div>
 
             {
