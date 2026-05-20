@@ -61,7 +61,7 @@ impl SafeInClauseBuilder {
 }
 
 /// Plain input row for replacing a conversation's task list.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct TaskRow {
     pub content: String,
     pub active_form: String,
@@ -858,25 +858,20 @@ impl SqliteManager {
         tasks: &[TaskRow],
     ) -> Result<Vec<PersistedTask>> {
         let now = chrono::Utc::now().to_rfc3339();
+        let tx = self.conn.unchecked_transaction()?;
 
-        self.conn.execute("BEGIN", [])?;
-
-        let delete_result = self.conn.execute(
+        tx.execute(
             "DELETE FROM tasks WHERE conversation_id = ?1",
-            rusqlite::params![conversation_id],
-        );
-        if let Err(e) = delete_result {
-            let _ = self.conn.execute("ROLLBACK", []);
-            return Err(e.into());
-        }
+            params![conversation_id],
+        )?;
 
         let mut out = Vec::with_capacity(tasks.len());
         for (i, t) in tasks.iter().enumerate() {
             let id = uuid::Uuid::new_v4().to_string();
-            let insert_result = self.conn.execute(
+            tx.execute(
                 "INSERT INTO tasks (id, conversation_id, position, content, active_form, status, updated_at) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                rusqlite::params![
+                params![
                     id,
                     conversation_id,
                     i as i32,
@@ -885,11 +880,7 @@ impl SqliteManager {
                     t.status,
                     now,
                 ],
-            );
-            if let Err(e) = insert_result {
-                let _ = self.conn.execute("ROLLBACK", []);
-                return Err(e.into());
-            }
+            )?;
             out.push(PersistedTask {
                 id,
                 conversation_id: conversation_id.to_string(),
@@ -901,7 +892,7 @@ impl SqliteManager {
             });
         }
 
-        self.conn.execute("COMMIT", [])?;
+        tx.commit()?;
         Ok(out)
     }
 
@@ -910,7 +901,7 @@ impl SqliteManager {
             "SELECT id, conversation_id, position, content, active_form, status, updated_at \
              FROM tasks WHERE conversation_id = ?1 ORDER BY position ASC",
         )?;
-        let rows = stmt.query_map(rusqlite::params![conversation_id], |r| {
+        let rows = stmt.query_map(params![conversation_id], |r| {
             Ok(PersistedTask {
                 id: r.get(0)?,
                 conversation_id: r.get(1)?,
