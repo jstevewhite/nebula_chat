@@ -12,6 +12,7 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import MemoryPanel from "./MemoryPanel";
+import TasksPanel from "./TasksPanel";
 import { getProviderIcon } from "../utils/providerIcons";
 import { CustomSelect } from "./ui/CustomSelect";
 
@@ -121,7 +122,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     const [selectedPromptId, setSelectedPromptId] = useState<string>("");
 
     // Side Panels
-    const [activeSidePanel, setActiveSidePanel] = useState<'none' | 'memory'>('none');
+    const [activeSidePanel, setActiveSidePanel] = useState<'none' | 'memory' | 'tasks'>('none');
     const [recentMemories, setRecentMemories] = useState<string[]>([]);
 
     // Settings-driven toggles
@@ -1500,6 +1501,16 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                     </button>
 
                     <button
+                        type="button"
+                        onClick={() => setActiveSidePanel(activeSidePanel === 'tasks' ? 'none' : 'tasks')}
+                        className={`p-2 rounded-lg transition-colors ${activeSidePanel === 'tasks' ? 'bg-blue-500/20 text-blue-400' : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)]'}`}
+                        title={activeSidePanel === 'tasks' ? "Hide tasks" : "Show tasks"}
+                        aria-pressed={activeSidePanel === 'tasks'}
+                    >
+                        ☑ Tasks
+                    </button>
+
+                    <button
                         onClick={toggleMemoryEnabled}
                         className={`p-2 rounded-lg transition-colors ${memoryEnabled ? 'bg-emerald-500/20 text-emerald-400' : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)]'}`}
                         title={`Memory: ${memoryEnabled ? 'ON - Use long-term memory and facts' : 'OFF - No long-term memory or fact extraction'}`}
@@ -1526,6 +1537,12 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                     />
                 )
             }
+            {activeSidePanel === 'tasks' && (
+                <TasksPanel
+                    conversationId={conversationId}
+                    onClose={() => setActiveSidePanel('none')}
+                />
+            )}
 
             <div
                 className="flex-1 overflow-y-auto p-4 space-y-6 min-h-0 font-chat"
