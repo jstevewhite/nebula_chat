@@ -795,11 +795,11 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             })) : null;
 
             let unlistenTransform: (() => void) | null = null;
-            const tempMsgId = "streaming-" + Math.random().toString(36);
-            const requestId = (typeof crypto !== "undefined" && "randomUUID" in crypto)
-                // @ts-ignore
-                ? crypto.randomUUID()
-                : "req-" + Math.random().toString(36).slice(2);
+            const hasRandomUUID = typeof crypto !== "undefined" && "randomUUID" in crypto;
+            // @ts-ignore
+            const tempMsgId = hasRandomUUID ? `streaming-${crypto.randomUUID()}` : "streaming-" + Math.random().toString(36).slice(2);
+            // @ts-ignore
+            const requestId = hasRandomUUID ? crypto.randomUUID() : "req-" + Math.random().toString(36).slice(2);
 
             activeStreamRef.current = { requestId, tempMsgId, conversationId };
 
@@ -937,6 +937,11 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 requestId
             }).then(response => {
                 console.log("✅ Invoke completed at", new Date().toISOString());
+                // If maybeRecoverCompletedGeneration ran (on focus/visibility while we were
+                // in flight), it nulls activeStreamRef and rebuilds messages from the DB
+                // including any pending-tool reconstruction. Skip the rest of this handler
+                // to avoid duplicating the assistant bubble or re-triggering tool flow.
+                const handledByRecovery = activeStreamRef.current === null;
                 activeStreamRef.current = null;
 
                 // Ensure created_at exists so timestamps render immediately
@@ -949,6 +954,11 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 if (streamAccumulatorRef.current.pendingFlush) {
                     clearTimeout(streamAccumulatorRef.current.pendingFlush);
                     streamAccumulatorRef.current.pendingFlush = null;
+                }
+
+                if (handledByRecovery) {
+                    setLoading(false);
+                    return;
                 }
 
                 // Normalize tool_call IDs in response by removing "functions." prefix
@@ -1524,7 +1534,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             >
                 {messages.map((m, i) => (
                     <ChatMessage
-                        key={m.id || `msg-${i}`}
+                        key={m.id || `${m.role}-${m.created_at ?? "?"}-${i}`}
                         message={m}
                         index={i}
                         onCopy={handleCopy}

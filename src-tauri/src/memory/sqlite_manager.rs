@@ -769,6 +769,12 @@ impl SqliteManager {
                 created_at
             ],
         )?;
+        // A newly-saved assistant message can introduce tool_call_ids that were
+        // previously cached as "not found". Drop the cache so the next
+        // tool_call_id_exists lookup re-queries the DB. We invalidate
+        // unconditionally to also catch a tool_result row whose presence might
+        // matter to callers; the cache is a perf optimization, not a hot path.
+        self.invalidate_tool_call_cache();
         Ok((id, created_at))
     }
 

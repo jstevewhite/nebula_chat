@@ -23,15 +23,6 @@ pub mod mcp;
 pub mod memory;
 pub mod security;
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_tool_call_validation_integration() {
-        // This is a placeholder for integration tests
-        // The actual database validation is tested in the sqlite_manager tests
-    }
-}
-
 #[derive(Clone)]
 pub struct AppState {
     mcp_manager: Arc<McpManager>,
@@ -162,18 +153,6 @@ async fn update_conversation_icon(
     let _ = app.emit("conversations-updated", ());
 
     Ok(())
-}
-
-#[tauri::command]
-async fn regenerate_title_and_icon(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    conversation_id: String,
-    provider_id: String,
-    model: String,
-) -> Result<String, String> {
-    // This is essentially the same as generate_title, but we can make it explicit
-    generate_title(app, state, conversation_id, provider_id, model).await
 }
 
 #[tauri::command]
@@ -591,7 +570,7 @@ async fn send_message(
                     // When regenerating, messages already have IDs and shouldn't be saved again
                     if last.id.is_none() {
                         if last.role == "user" {
-                            if let Err(e) = lib.save_full_message_returning_id(
+                            match lib.save_full_message_returning_id(
                                 conv_id,
                                 &last.role,
                                 last.content.as_deref(),
@@ -600,38 +579,33 @@ async fn send_message(
                                 None, // reasoning_content (users don't have reasoning)
                                 last.attachments.as_deref(),
                             ) {
-                                tracing::error!("Failed to save user message for facts: {}", e);
-                            } else if let Ok(msg_id) = lib.save_full_message_returning_id(
-                                conv_id,
-                                &last.role,
-                                last.content.as_deref(),
-                                tool_calls_json.as_deref(),
-                                last.tool_call_id.as_deref(),
-                                None,
-                                last.attachments.as_deref(),
-                            ) {
-                                // Trigger Background Fact Extraction
-                                let app_handle_bg = app_handle.clone();
-                                let lib_clone = state.librarian.clone();
-                                let content_clone = last.content.clone().unwrap_or_default();
-                                let msg_id_clone = msg_id.clone();
-                                
-                                tokio::spawn(async move {
-                                     let config_dir = app_handle_bg.path().app_config_dir().unwrap_or_default();
-                                     let settings_path = config_dir.join("settings.json");
-                                     let settings = Settings::load_migrated(&settings_path);
+                                Err(e) => {
+                                    tracing::error!("Failed to save user message: {}", e);
+                                }
+                                Ok(msg_id) => {
+                                    // Trigger Background Fact Extraction
+                                    let app_handle_bg = app_handle.clone();
+                                    let lib_clone = state.librarian.clone();
+                                    let content_clone = last.content.clone().unwrap_or_default();
+                                    let msg_id_clone = msg_id.clone();
 
-                                    if let Some(model_id) = &settings.context_model {
-                                        let parts: Vec<&str> = model_id.split("::").collect();
-                                        if parts.len() == 2 {
-                                            if let Ok(provider) = crate::memory::StrategistMemoryOrchestrator::create_provider(parts[0], parts[1], &settings) {
-                                                if let Err(e) = FactExtractor::extract(lib_clone, provider.as_ref(), "user", &content_clone, &msg_id_clone).await {
-                                                    tracing::warn!("Fact extraction failed: {}", e);
+                                    tokio::spawn(async move {
+                                         let config_dir = app_handle_bg.path().app_config_dir().unwrap_or_default();
+                                         let settings_path = config_dir.join("settings.json");
+                                         let settings = Settings::load_migrated(&settings_path);
+
+                                        if let Some(model_id) = &settings.context_model {
+                                            let parts: Vec<&str> = model_id.split("::").collect();
+                                            if parts.len() == 2 {
+                                                if let Ok(provider) = crate::memory::StrategistMemoryOrchestrator::create_provider(parts[0], parts[1], &settings) {
+                                                    if let Err(e) = FactExtractor::extract(lib_clone, provider.as_ref(), "user", &content_clone, &msg_id_clone).await {
+                                                        tracing::warn!("Fact extraction failed: {}", e);
+                                                    }
                                                 }
                                             }
                                         }
-                                    }
-                                });
+                                    });
+                                }
                             }
                         } else {
                             let _ = lib.save_full_message(
@@ -1800,26 +1774,30 @@ async fn delete_mcp_server(
 
 #[tauri::command]
 async fn rebuild_memory_index(state: State<'_, AppState>) -> Result<(), String> {
-    let lib = state.librarian.lock().await;
+    // Release the librarian mutex between conversations so other commands (sends,
+    // searches, deletes) aren't blocked for the entire rebuild — this can otherwise
+    // stall the UI for minutes on large histories.
 
-    // 1. Clear Tantivy
-    lib.clear_search_index().map_err(|e| e.to_string())?;
+    {
+        let lib = state.librarian.lock().await;
+        lib.clear_search_index().map_err(|e| e.to_string())?;
+    }
 
-    // 2. Read all messages from SQLite
-    // We need a method to iterate all messages, or just list convs and get messages for each
-    let conversations = lib.list_conversations().map_err(|e| e.to_string())?;
+    let conversations = {
+        let lib = state.librarian.lock().await;
+        lib.list_conversations().map_err(|e| e.to_string())?
+    };
 
     for (conv_id, _, _, _) in conversations {
-        let messages = lib
-            .get_complete_history(&conv_id)
-            .map_err(|e| e.to_string())?;
-
+        let lib = state.librarian.lock().await;
+        let messages = lib.get_complete_history(&conv_id).map_err(|e| e.to_string())?;
         for (msg_id, role, content, _, _, _, created_at, _) in messages {
             if let Some(text) = content {
                 lib.index_existing_message(&conv_id, &role, &text, &msg_id, &created_at)
                     .map_err(|e| e.to_string())?;
             }
         }
+        drop(lib);
     }
 
     Ok(())
@@ -1853,19 +1831,22 @@ async fn export_conversation(
         conversation_id,
         format
     );
-    let lib = state.librarian.lock().await;
 
-    // Get metadata
-    let convs = lib.list_conversations().map_err(|e| e.to_string())?;
-    let (_, title, _, created_at) = convs
-        .into_iter()
-        .find(|(id, _, _, _)| id == &conversation_id)
-        .ok_or("Conversation not found")?;
-
-    // Get messages
-    let raw_msgs = lib
-        .get_complete_history(&conversation_id)
-        .map_err(|e| e.to_string())?;
+    // Snapshot DB rows under the lock, then release it before doing the (potentially
+    // large) serialization work — exports of long conversations used to block every
+    // other librarian-bound command for the duration of the JSON/MD build.
+    let (title, created_at, raw_msgs) = {
+        let lib = state.librarian.lock().await;
+        let convs = lib.list_conversations().map_err(|e| e.to_string())?;
+        let (_, title, _, created_at) = convs
+            .into_iter()
+            .find(|(id, _, _, _)| id == &conversation_id)
+            .ok_or("Conversation not found")?;
+        let raw_msgs = lib
+            .get_complete_history(&conversation_id)
+            .map_err(|e| e.to_string())?;
+        (title, created_at, raw_msgs)
+    };
 
     let mut messages = Vec::new();
     for (
@@ -2582,7 +2563,6 @@ pub fn run() {
             delete_conversation,
             rename_conversation,
             update_conversation_icon,
-            regenerate_title_and_icon,
             delete_message,
             delete_messages,
             generate_title,
