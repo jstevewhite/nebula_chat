@@ -243,6 +243,27 @@ impl SqliteManager {
         Ok(())
     }
 
+    pub fn migrate_v5(&self) -> Result<()> {
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS tasks (
+                id              TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                position        INTEGER NOT NULL,
+                content         TEXT NOT NULL,
+                active_form     TEXT NOT NULL,
+                status          TEXT NOT NULL CHECK(status IN ('pending','in_progress','completed')),
+                updated_at      TEXT NOT NULL,
+                FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_conv ON tasks(conversation_id, position)",
+            [],
+        )?;
+        Ok(())
+    }
+
     /// Initial migration for the structured facts table backing the knowledge graph.
     /// Uses IF NOT EXISTS to remain idempotent across app startups.
     pub fn migrate_facts_v1(&self) -> Result<()> {
@@ -1665,6 +1686,31 @@ mod tests {
         ).unwrap();
 
         let count = mgr.count_tool_call_integrity_issues(&conv_id).unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_migrate_v5_creates_tasks_table() {
+        let temp = std::env::temp_dir().join(format!("nebula_v5_{}.db", uuid::Uuid::new_v4()));
+        let mgr = SqliteManager::new(temp.to_str().unwrap()).unwrap();
+        mgr.migrate_v5().unwrap();
+
+        // Satisfy the FK: conversations must exist before tasks reference it.
+        mgr.conn.execute(
+            "INSERT INTO conversations (id, title, created_at) VALUES ('c1','test','2026-05-20T00:00:00Z')",
+            [],
+        ).unwrap();
+
+        // Insert a row and read it back to prove the schema is correct.
+        mgr.conn.execute(
+            "INSERT INTO tasks (id, conversation_id, position, content, active_form, status, updated_at) \
+             VALUES ('t1','c1',0,'do thing','doing thing','pending','2026-05-20T00:00:00Z')",
+            [],
+        ).unwrap();
+
+        let count: i64 = mgr.conn
+            .query_row("SELECT COUNT(*) FROM tasks WHERE conversation_id='c1'", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, 1);
     }
 }
