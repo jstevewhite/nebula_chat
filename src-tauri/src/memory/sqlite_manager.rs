@@ -60,6 +60,26 @@ impl SafeInClauseBuilder {
     }
 }
 
+/// Plain input row for replacing a conversation's task list.
+#[derive(Debug, Clone)]
+pub struct TaskRow {
+    pub content: String,
+    pub active_form: String,
+    pub status: String, // "pending" | "in_progress" | "completed"
+}
+
+/// Persisted task as returned to callers.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PersistedTask {
+    pub id: String,
+    pub conversation_id: String,
+    pub position: i32,
+    pub content: String,
+    pub active_form: String,
+    pub status: String,
+    pub updated_at: String,
+}
+
 pub struct SqliteManager {
     pub conn: Connection,
     tool_call_cache: Mutex<HashMap<(String, String), (bool, Instant)>>,
@@ -829,6 +849,83 @@ impl SqliteManager {
             params![id, conversation_id, role, content, timestamp],
         )?;
         Ok((id, timestamp.to_string()))
+    }
+
+    /// Replace the entire task list for a conversation in one transaction.
+    pub fn set_tasks_for_conversation(
+        &self,
+        conversation_id: &str,
+        tasks: &[TaskRow],
+    ) -> Result<Vec<PersistedTask>> {
+        let now = chrono::Utc::now().to_rfc3339();
+
+        self.conn.execute("BEGIN", [])?;
+
+        let delete_result = self.conn.execute(
+            "DELETE FROM tasks WHERE conversation_id = ?1",
+            rusqlite::params![conversation_id],
+        );
+        if let Err(e) = delete_result {
+            let _ = self.conn.execute("ROLLBACK", []);
+            return Err(e.into());
+        }
+
+        let mut out = Vec::with_capacity(tasks.len());
+        for (i, t) in tasks.iter().enumerate() {
+            let id = uuid::Uuid::new_v4().to_string();
+            let insert_result = self.conn.execute(
+                "INSERT INTO tasks (id, conversation_id, position, content, active_form, status, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    id,
+                    conversation_id,
+                    i as i32,
+                    t.content,
+                    t.active_form,
+                    t.status,
+                    now,
+                ],
+            );
+            if let Err(e) = insert_result {
+                let _ = self.conn.execute("ROLLBACK", []);
+                return Err(e.into());
+            }
+            out.push(PersistedTask {
+                id,
+                conversation_id: conversation_id.to_string(),
+                position: i as i32,
+                content: t.content.clone(),
+                active_form: t.active_form.clone(),
+                status: t.status.clone(),
+                updated_at: now.clone(),
+            });
+        }
+
+        self.conn.execute("COMMIT", [])?;
+        Ok(out)
+    }
+
+    pub fn get_tasks_for_conversation(&self, conversation_id: &str) -> Result<Vec<PersistedTask>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, conversation_id, position, content, active_form, status, updated_at \
+             FROM tasks WHERE conversation_id = ?1 ORDER BY position ASC",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![conversation_id], |r| {
+            Ok(PersistedTask {
+                id: r.get(0)?,
+                conversation_id: r.get(1)?,
+                position: r.get(2)?,
+                content: r.get(3)?,
+                active_form: r.get(4)?,
+                status: r.get(5)?,
+                updated_at: r.get(6)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 
     /// Check if a tool_call_id exists in assistant messages for a given conversation
@@ -1712,5 +1809,88 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM tasks WHERE conversation_id='c1'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    fn fresh_mgr() -> SqliteManager {
+        let temp = std::env::temp_dir().join(format!("nebula_tasks_{}.db", uuid::Uuid::new_v4()));
+        let mgr = SqliteManager::new(temp.to_str().unwrap()).unwrap();
+        mgr.migrate_v5().unwrap();
+        mgr.conn.execute(
+            "INSERT INTO conversations (id, title, created_at) VALUES ('c1','Conv 1','2026-05-20T00:00:00Z'),\
+             ('c2','Conv 2','2026-05-20T00:00:00Z')",
+            [],
+        ).unwrap();
+        mgr
+    }
+
+    #[test]
+    fn test_set_and_get_tasks_round_trip() {
+        let mgr = fresh_mgr();
+        let input = vec![
+            crate::memory::sqlite_manager::TaskRow {
+                content: "Look up data model".into(),
+                active_form: "Looking up data model".into(),
+                status: "completed".into(),
+            },
+            crate::memory::sqlite_manager::TaskRow {
+                content: "Build the parser".into(),
+                active_form: "Building the parser".into(),
+                status: "in_progress".into(),
+            },
+        ];
+        mgr.set_tasks_for_conversation("c1", &input).unwrap();
+
+        let got = mgr.get_tasks_for_conversation("c1").unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].content, "Look up data model");
+        assert_eq!(got[0].position, 0);
+        assert_eq!(got[1].status, "in_progress");
+        assert_eq!(got[1].position, 1);
+    }
+
+    #[test]
+    fn test_set_tasks_replaces_existing() {
+        let mgr = fresh_mgr();
+        let initial = vec![crate::memory::sqlite_manager::TaskRow {
+            content: "Old A".into(), active_form: "Doing old A".into(), status: "pending".into(),
+        }, crate::memory::sqlite_manager::TaskRow {
+            content: "Old B".into(), active_form: "Doing old B".into(), status: "pending".into(),
+        }];
+        mgr.set_tasks_for_conversation("c1", &initial).unwrap();
+
+        let replacement = vec![crate::memory::sqlite_manager::TaskRow {
+            content: "New only".into(), active_form: "Doing new".into(), status: "in_progress".into(),
+        }];
+        mgr.set_tasks_for_conversation("c1", &replacement).unwrap();
+
+        let got = mgr.get_tasks_for_conversation("c1").unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].content, "New only");
+    }
+
+    #[test]
+    fn test_set_tasks_conversation_isolation() {
+        let mgr = fresh_mgr();
+        mgr.set_tasks_for_conversation("c1", &vec![crate::memory::sqlite_manager::TaskRow {
+            content: "A".into(), active_form: "Doing A".into(), status: "pending".into(),
+        }]).unwrap();
+        mgr.set_tasks_for_conversation("c2", &vec![crate::memory::sqlite_manager::TaskRow {
+            content: "B".into(), active_form: "Doing B".into(), status: "pending".into(),
+        }, crate::memory::sqlite_manager::TaskRow {
+            content: "C".into(), active_form: "Doing C".into(), status: "pending".into(),
+        }]).unwrap();
+
+        assert_eq!(mgr.get_tasks_for_conversation("c1").unwrap().len(), 1);
+        assert_eq!(mgr.get_tasks_for_conversation("c2").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_set_tasks_empty_clears_list() {
+        let mgr = fresh_mgr();
+        mgr.set_tasks_for_conversation("c1", &vec![crate::memory::sqlite_manager::TaskRow {
+            content: "Item".into(), active_form: "Doing item".into(), status: "pending".into(),
+        }]).unwrap();
+        mgr.set_tasks_for_conversation("c1", &vec![]).unwrap();
+        assert!(mgr.get_tasks_for_conversation("c1").unwrap().is_empty());
     }
 }
