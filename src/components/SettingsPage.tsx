@@ -281,6 +281,7 @@ export default function SettingsPage() {
 
                 context_uncompressed_msg_count: fullSettings.context_uncompressed_msg_count ?? latest.context_uncompressed_msg_count,
                 show_message_timestamps: fullSettings.show_message_timestamps ?? latest.show_message_timestamps,
+                disable_builtin_task_tool: fullSettings.disable_builtin_task_tool ?? latest.disable_builtin_task_tool,
                 // Other settings this page may toggle in the future can be added here explicitly.
             };
 
@@ -956,6 +957,28 @@ export default function SettingsPage() {
                                 className="h-4 w-4 rounded border-[var(--color-border-secondary)] bg-[var(--color-bg-primary)]"
                             />
                             Enabled
+                        </label>
+                    </div>
+                </div>
+
+                <div className="mt-6 border-t border-[var(--color-border-secondary)] pt-4">
+                    <div className="flex items-center justify-between gap-4">
+                        <div>
+                            <label className="block text-sm font-bold text-[var(--color-text-secondary)]">
+                                Disable Built-in Task Checklist Tool
+                            </label>
+                            <p className="text-xs text-[var(--color-text-tertiary)]">
+                                Hides the <code>update_tasks</code> tool from the model. The TasksPanel keeps any tasks already saved.
+                            </p>
+                        </div>
+                        <label className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)] select-none">
+                            <input
+                                type="checkbox"
+                                checked={fullSettings.disable_builtin_task_tool ?? false}
+                                onChange={(e) => setFullSettings({ ...fullSettings, disable_builtin_task_tool: e.target.checked })}
+                                className="h-4 w-4 rounded border-[var(--color-border-secondary)] bg-[var(--color-bg-primary)]"
+                            />
+                            Disabled
                         </label>
                     </div>
                 </div>

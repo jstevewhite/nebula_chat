@@ -22,6 +22,7 @@ pub use llm::capabilities;
 pub mod mcp;
 pub mod memory;
 pub mod security;
+pub mod tasks;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -734,6 +735,28 @@ async fn send_message(
             final_messages.insert(0, context_msg);
         }
 
+        // Inject current task checklist (if any) so the model knows what's pending vs. done.
+        if let Some(conv_id) = &conversation_id {
+            let task_context = {
+                let lib = state.librarian.lock().await;
+                lib.format_tasks_for_context(conv_id)
+                    .unwrap_or(None)
+            };
+            if let Some(text) = task_context {
+                let task_msg = Message {
+                    id: None,
+                    role: "system".to_string(),
+                    content: Some(text),
+                    reasoning_content: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    attachments: None,
+                    created_at: None,
+                };
+                final_messages.insert(0, task_msg);
+            }
+        }
+
         // Inject System Prompt
         tracing::debug!("[DEBUG] Loading settings for system prompt...");
 
@@ -797,10 +820,16 @@ async fn send_message(
         tracing::debug!("[DEBUG] Getting tools from MCP Manager...");
         let all_tools = state.mcp_manager.get_all_tools().await;
 
-        let tools: Vec<_> = all_tools
+        let mut tools: Vec<_> = all_tools
             .into_iter()
             .filter(|t| !settings.disabled_tools.contains(&t.name))
             .collect();
+
+        // Inject the built-in update_tasks tool unless the user has disabled it.
+        if !settings.disable_builtin_task_tool {
+            tools.push(crate::tasks::build_update_tasks_tool());
+        }
+
         tracing::debug!("[DEBUG] Final tool count: {}", tools.len());
 
         // Phase 1.4: Streaming parity safety
@@ -1273,6 +1302,59 @@ async fn execute_tool(
     let settings_path = config_dir.join("settings.json");
     let settings = Settings::load_migrated(&settings_path);
 
+    // Short-circuit: the built-in `update_tasks` tool is handled in-process,
+    // bypasses MCP routing, and bypasses the per-tool approval flow because
+    // it has no external side effects — it only updates local UI state.
+    if name == "update_tasks" {
+        use tauri::Emitter;
+
+        // Parse arguments.
+        let tasks_arr = args
+            .get("tasks")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| "update_tasks: missing 'tasks' array".to_string())?;
+
+        let mut rows = Vec::with_capacity(tasks_arr.len());
+        for t in tasks_arr {
+            let content = t.get("content").and_then(|v| v.as_str())
+                .ok_or_else(|| "update_tasks: task missing 'content'".to_string())?
+                .to_string();
+            let active_form = t.get("active_form").and_then(|v| v.as_str())
+                .ok_or_else(|| "update_tasks: task missing 'active_form'".to_string())?
+                .to_string();
+            let status = t.get("status").and_then(|v| v.as_str())
+                .ok_or_else(|| "update_tasks: task missing 'status'".to_string())?
+                .to_string();
+            if !["pending", "in_progress", "completed"].contains(&status.as_str()) {
+                return Err(format!("update_tasks: invalid status '{}'", status));
+            }
+            rows.push(crate::memory::sqlite_manager::TaskRow { content, active_form, status });
+        }
+
+        // Require a conversation_id — tasks are scoped to a conversation.
+        let cid = conversation_id
+            .as_ref()
+            .ok_or_else(|| "update_tasks: conversation_id is required".to_string())?
+            .clone();
+
+        let saved = {
+            let lib = state.librarian.lock().await;
+            lib.set_tasks(&cid, &rows).map_err(|e| e.to_string())?
+        };
+
+        // Notify the frontend.
+        let _ = app.emit(
+            "tasks-updated",
+            serde_json::json!({ "conversation_id": cid, "tasks": saved }),
+        );
+
+        return Ok(serde_json::json!({
+            "ok": true,
+            "count": rows.len(),
+            "message": "Task list updated."
+        }));
+    }
+
     // 2. Identify Server
     let server_name = state
         .mcp_manager
@@ -1365,6 +1447,15 @@ async fn get_tool_execution(
     lib.audit
         .get_execution_by_tool_call_id(&tool_call_id)
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_conversation_tasks(
+    state: State<'_, AppState>,
+    conversation_id: String,
+) -> Result<Vec<crate::memory::sqlite_manager::PersistedTask>, String> {
+    let lib = state.librarian.lock().await;
+    lib.get_tasks(&conversation_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -2557,6 +2648,7 @@ pub fn run() {
             fetch_models,
             execute_tool,
             get_tool_execution,
+            get_conversation_tasks,
             add_mcp_server,
             edit_mcp_server,
             delete_mcp_server,

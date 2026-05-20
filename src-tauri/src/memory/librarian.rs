@@ -49,6 +49,7 @@ impl Librarian {
         let _ = sqlite.migrate_v2();
         let _ = sqlite.migrate_v3();
         let _ = sqlite.migrate_v4();
+        sqlite.migrate_v5()?;
         // Initialize facts schema; uses IF NOT EXISTS so this is safe to run repeatedly.
         sqlite.migrate_facts_v1()?;
 
@@ -421,5 +422,77 @@ impl Librarian {
             options.max_age_days,
             limit,
         )
+    }
+
+    /// Replace the entire task list for a conversation.
+    pub fn set_tasks(
+        &self,
+        conversation_id: &str,
+        tasks: &[crate::memory::sqlite_manager::TaskRow],
+    ) -> anyhow::Result<Vec<crate::memory::sqlite_manager::PersistedTask>> {
+        self.sqlite.set_tasks_for_conversation(conversation_id, tasks)
+    }
+
+    pub fn get_tasks(
+        &self,
+        conversation_id: &str,
+    ) -> anyhow::Result<Vec<crate::memory::sqlite_manager::PersistedTask>> {
+        self.sqlite.get_tasks_for_conversation(conversation_id)
+    }
+
+    /// Returns the markdown task list for context injection, or None if empty.
+    pub fn format_tasks_for_context(
+        &self,
+        conversation_id: &str,
+    ) -> anyhow::Result<Option<String>> {
+        let tasks = self.sqlite.get_tasks_for_conversation(conversation_id)?;
+        Ok(crate::tasks::format_task_list_for_context(&tasks))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::sqlite_manager::TaskRow;
+
+    fn fresh_lib() -> Librarian {
+        let dir = std::env::temp_dir().join(format!("nebula_lib_tasks_{}", uuid::Uuid::new_v4()));
+        let lib = Librarian::new(&dir).unwrap();
+        lib.sqlite.conn.execute(
+            "INSERT INTO conversations (id, title, created_at) VALUES ('c1','C','2026-05-20T00:00:00Z')",
+            [],
+        ).unwrap();
+        lib
+    }
+
+    #[tokio::test]
+    async fn librarian_set_and_get_tasks_round_trip() {
+        let lib = fresh_lib();
+        let saved = lib.set_tasks("c1", &[
+            TaskRow { content: "A".into(), active_form: "Doing A".into(), status: "pending".into() },
+            TaskRow { content: "B".into(), active_form: "Doing B".into(), status: "in_progress".into() },
+        ]).unwrap();
+        assert_eq!(saved.len(), 2);
+
+        let got = lib.get_tasks("c1").unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[1].status, "in_progress");
+    }
+
+    #[tokio::test]
+    async fn librarian_format_tasks_for_context_returns_none_when_empty() {
+        let lib = fresh_lib();
+        assert!(lib.format_tasks_for_context("c1").unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn librarian_format_tasks_for_context_returns_markdown() {
+        let lib = fresh_lib();
+        lib.set_tasks("c1", &[TaskRow {
+            content: "Ship it".into(), active_form: "Shipping it".into(), status: "completed".into(),
+        }]).unwrap();
+        let s = lib.format_tasks_for_context("c1").unwrap().unwrap();
+        assert!(s.contains("Ship it"));
+        assert!(s.contains("[\u{2713}]"));
     }
 }
