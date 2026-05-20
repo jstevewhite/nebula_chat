@@ -1092,7 +1092,7 @@ async fn send_message(
             if let Ok(ref resp) = response_result {
                 let duration_ms = gen_start.elapsed().as_millis() as u64;
                 let content = resp.content.as_deref().unwrap_or("");
-                let token_count = crate::llm::tokenizer::count_tokens(content)
+                let token_count = crate::llm::tokenizer::Tokenizer::count_tokens(content)
                     .unwrap_or_else(|_| content.len() / 4);
                 let tokens_per_second = if duration_ms > 0 {
                     token_count as f64 * 1000.0 / duration_ms as f64
