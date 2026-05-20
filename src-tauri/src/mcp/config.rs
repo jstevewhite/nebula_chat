@@ -138,6 +138,10 @@ pub struct Settings {
     // with Cancel/OK dialog for debugging and transparency.
     #[serde(default)]
     pub context_inspection_enabled: bool,
+
+    /// When true, the built-in `update_tasks` tool is hidden from the LLM.
+    #[serde(default = "default_false_bool")]
+    pub disable_builtin_task_tool: bool,
     // Show per-message timestamps in the chat UI.
     #[serde(default = "default_false_bool")]
     pub show_message_timestamps: bool,
@@ -415,5 +419,27 @@ impl Settings {
         let content = serde_json::to_string_pretty(&to_save)?;
         std::fs::write(path, content)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disable_builtin_task_tool_defaults_false() {
+        let s = Settings::default();
+        assert!(!s.disable_builtin_task_tool);
+    }
+
+    #[test]
+    fn disable_builtin_task_tool_round_trips_via_serde() {
+        let s = Settings {
+            disable_builtin_task_tool: true,
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert!(back.disable_builtin_task_tool);
     }
 }
