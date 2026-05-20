@@ -49,7 +49,7 @@ impl Librarian {
         let _ = sqlite.migrate_v2();
         let _ = sqlite.migrate_v3();
         let _ = sqlite.migrate_v4();
-        let _ = sqlite.migrate_v5();
+        sqlite.migrate_v5()?;
         // Initialize facts schema; uses IF NOT EXISTS so this is safe to run repeatedly.
         sqlite.migrate_facts_v1()?;
 
