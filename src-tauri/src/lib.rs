@@ -735,6 +735,28 @@ async fn send_message(
             final_messages.insert(0, context_msg);
         }
 
+        // Inject current task checklist (if any) so the model knows what's pending vs. done.
+        if let Some(conv_id) = &conversation_id {
+            let task_context = {
+                let lib = state.librarian.lock().await;
+                lib.format_tasks_for_context(conv_id)
+                    .unwrap_or(None)
+            };
+            if let Some(text) = task_context {
+                let task_msg = Message {
+                    id: None,
+                    role: "system".to_string(),
+                    content: Some(text),
+                    reasoning_content: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    attachments: None,
+                    created_at: None,
+                };
+                final_messages.insert(0, task_msg);
+            }
+        }
+
         // Inject System Prompt
         tracing::debug!("[DEBUG] Loading settings for system prompt...");
 
@@ -798,10 +820,16 @@ async fn send_message(
         tracing::debug!("[DEBUG] Getting tools from MCP Manager...");
         let all_tools = state.mcp_manager.get_all_tools().await;
 
-        let tools: Vec<_> = all_tools
+        let mut tools: Vec<_> = all_tools
             .into_iter()
             .filter(|t| !settings.disabled_tools.contains(&t.name))
             .collect();
+
+        // Inject the built-in update_tasks tool unless the user has disabled it.
+        if !settings.disable_builtin_task_tool {
+            tools.push(crate::tasks::build_update_tasks_tool());
+        }
+
         tracing::debug!("[DEBUG] Final tool count: {}", tools.len());
 
         // Phase 1.4: Streaming parity safety
