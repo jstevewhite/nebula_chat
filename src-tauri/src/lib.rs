@@ -1302,6 +1302,59 @@ async fn execute_tool(
     let settings_path = config_dir.join("settings.json");
     let settings = Settings::load_migrated(&settings_path);
 
+    // Short-circuit: the built-in `update_tasks` tool is handled in-process,
+    // bypasses MCP routing, and bypasses the per-tool approval flow because
+    // it has no external side effects — it only updates local UI state.
+    if name == "update_tasks" {
+        use tauri::Emitter;
+
+        // Parse arguments.
+        let tasks_arr = args
+            .get("tasks")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| "update_tasks: missing 'tasks' array".to_string())?;
+
+        let mut rows = Vec::with_capacity(tasks_arr.len());
+        for t in tasks_arr {
+            let content = t.get("content").and_then(|v| v.as_str())
+                .ok_or_else(|| "update_tasks: task missing 'content'".to_string())?
+                .to_string();
+            let active_form = t.get("active_form").and_then(|v| v.as_str())
+                .ok_or_else(|| "update_tasks: task missing 'active_form'".to_string())?
+                .to_string();
+            let status = t.get("status").and_then(|v| v.as_str())
+                .ok_or_else(|| "update_tasks: task missing 'status'".to_string())?
+                .to_string();
+            if !["pending", "in_progress", "completed"].contains(&status.as_str()) {
+                return Err(format!("update_tasks: invalid status '{}'", status));
+            }
+            rows.push(crate::memory::sqlite_manager::TaskRow { content, active_form, status });
+        }
+
+        // Require a conversation_id — tasks are scoped to a conversation.
+        let cid = conversation_id
+            .as_ref()
+            .ok_or_else(|| "update_tasks: conversation_id is required".to_string())?
+            .clone();
+
+        let saved = {
+            let lib = state.librarian.lock().await;
+            lib.set_tasks(&cid, &rows).map_err(|e| e.to_string())?
+        };
+
+        // Notify the frontend.
+        let _ = app.emit(
+            "tasks-updated",
+            serde_json::json!({ "conversation_id": cid, "tasks": saved }),
+        );
+
+        return Ok(serde_json::json!({
+            "ok": true,
+            "count": rows.len(),
+            "message": "Task list updated."
+        }));
+    }
+
     // 2. Identify Server
     let server_name = state
         .mcp_manager
