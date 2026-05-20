@@ -717,34 +717,6 @@ async fn send_message(
         // Inject Context
         let mut final_messages = messages_for_context; // Use compacted messages
 
-        // iterate over messages to inject timestamp, UNLESS it's the last message (current user query)
-        // or specifically, we want the LLM to know when previous messages were sent.
-        // The last message might not have a created_at yet if it's new (or it might be passed from frontend?)
-        // Actually, send_message receives `messages` which includes history.
-        let len = final_messages.len();
-        for (i, msg) in final_messages.iter_mut().enumerate() {
-            let ts = if let Some(t) = msg.created_at {
-                t
-            } else if i == len - 1 {
-                // Current message likely has no timestamp yet, use (now)
-                chrono::Utc::now().timestamp()
-            } else {
-                // Old message with missing timestamp - skip
-                0
-            };
-
-            if ts > 0 {
-                if let Some(utc_dt) = chrono::DateTime::from_timestamp(ts, 0) {
-                    let local_dt: chrono::DateTime<chrono::Local> = chrono::DateTime::from(utc_dt);
-                    let formatted = local_dt.format("%Y:%m:%d:%H:%M:%S").to_string();
-                    // Prefix content with timestamp
-                    if let Some(content) = &mut msg.content {
-                        *content = format!("<timestamp: {}>\n{}", formatted, content);
-                    }
-                }
-            }
-        }
-
         if !context_text.is_empty() {
             let context_msg = Message {
                 id: None,
@@ -785,13 +757,23 @@ async fn send_message(
         }
 
         // Inject Current Date/Time
+        // This replaces the per-message <timestamp: ...> prefix that was previously
+        // attached to each user message. The LLM uses this as the authoritative
+        // reference for "now" when answering time-relative questions.
         let now = chrono::Local::now();
+        let tz = now.format("%Z").to_string();
         let date_msg = Message {
             id: None,
             role: "system".to_string(),
             content: Some(format!(
-                "CURRENT DATE: {}",
-                now.format("%A, %B %d, %Y %H:%M")
+                "The current local date and time is {} ({}). \
+                 Treat this as the authoritative reference for \"now\" when the user \
+                 asks about today, yesterday, recent events, deadlines, or any other \
+                 time-relative question. Prior messages in this conversation may have \
+                 been sent at earlier times; if the exact timing of a previous message \
+                 matters, ask the user to confirm rather than assuming it is current.",
+                now.format("%A, %B %d, %Y %H:%M:%S"),
+                tz,
             )),
             reasoning_content: None,
             tool_calls: None,
