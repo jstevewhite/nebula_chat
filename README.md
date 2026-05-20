@@ -6,7 +6,7 @@ Nebula is the result of my dissatisfaction with the chat clients available, and 
 
 This code is mostly written by LLMs. See the HLD for the design I presented. I type some code in here or there, but as little as humanly possible. Clients that helped: Warp, Claude Code, Codex, Gemini, Antigravity, and Opencode. LLMS: Gemini Pro 2.5 and 3, Claude Opus, Sonnet, and Haiku; Deepseek 3.2, GLM 4.7, Devstral 3 small, and many others. 
 
-**Current version:** `v0.5.1`
+**Current version:** `v0.6.0`
 
 ### What's new in v0.5.1
 - **Context compaction**: automatically summarizes older turns while keeping the most recent messages raw; tool-call-aware splitting prevents broken chains and rolls back safely on errors. Tunable in *Settings → Intelligence → Context Compaction* with a dedicated support model.
