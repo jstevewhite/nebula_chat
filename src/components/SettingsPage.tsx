@@ -978,7 +978,7 @@ export default function SettingsPage() {
                                 onChange={(e) => setFullSettings({ ...fullSettings, disable_builtin_task_tool: e.target.checked })}
                                 className="h-4 w-4 rounded border-[var(--color-border-secondary)] bg-[var(--color-bg-primary)]"
                             />
-                            Enabled
+                            Disabled
                         </label>
                     </div>
                 </div>
