@@ -149,6 +149,21 @@ pub struct Settings {
     /// visible markdown docs, and prompting on every call drowns the UX.
     #[serde(default = "default_true_bool")]
     pub memory_tools_auto_approve: bool,
+
+    /// When true, every user turn prefixes the system context with the most
+    /// relevant memory doc + a few KG facts. When false, the LLM still has
+    /// the six memory_* tools and can fetch on demand, but nothing is pushed
+    /// up front. Default true.
+    #[serde(default = "default_true_bool")]
+    pub memory_auto_inject_docs: bool,
+
+    /// Hard token cap on the auto-injected memory block. Defaults to 4000.
+    #[serde(default = "default_auto_inject_budget")]
+    pub memory_auto_inject_token_budget: usize,
+
+    /// Minimum fusion score for a doc to be auto-injected. Defaults to 0.20.
+    #[serde(default = "default_recall_floor")]
+    pub memory_recall_score_floor: f32,
     // Show per-message timestamps in the chat UI.
     #[serde(default = "default_false_bool")]
     pub show_message_timestamps: bool,
@@ -179,6 +194,13 @@ pub struct Settings {
     // If messages exceed this count, older ones are summarized.
     #[serde(default = "default_uncompressed_count")]
     pub context_uncompressed_msg_count: usize,
+}
+
+fn default_auto_inject_budget() -> usize {
+    4000
+}
+fn default_recall_floor() -> f32 {
+    0.20
 }
 
 fn default_uncompressed_count() -> usize {
@@ -329,6 +351,21 @@ impl Settings {
             .and_then(|v| v.as_bool())
         {
             s.memory_tools_auto_approve = b;
+        }
+        if let Some(b) = val.get("memory_auto_inject_docs").and_then(|v| v.as_bool()) {
+            s.memory_auto_inject_docs = b;
+        }
+        if let Some(n) = val
+            .get("memory_auto_inject_token_budget")
+            .and_then(|v| v.as_u64())
+        {
+            s.memory_auto_inject_token_budget = n as usize;
+        }
+        if let Some(f) = val
+            .get("memory_recall_score_floor")
+            .and_then(|v| v.as_f64())
+        {
+            s.memory_recall_score_floor = f as f32;
         }
         if let Some(theme) = val.get("theme").and_then(|v| v.as_str()) {
             s.theme = theme.to_string();

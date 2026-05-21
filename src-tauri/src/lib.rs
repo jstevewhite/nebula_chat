@@ -617,7 +617,7 @@ async fn send_message(
                                         if let Some(model_id) = &settings.context_model {
                                             let parts: Vec<&str> = model_id.split("::").collect();
                                             if parts.len() == 2 {
-                                                if let Ok(provider) = crate::memory::StrategistMemoryOrchestrator::create_provider(parts[0], parts[1], &settings) {
+                                                if let Ok(provider) = crate::llm::factory::create_provider(parts[0], parts[1], &settings) {
                                                     if let Err(e) = FactExtractor::extract(lib_clone, provider.as_ref(), "user", &content_clone, &msg_id_clone).await {
                                                         tracing::warn!("Fact extraction failed: {}", e);
                                                     }
@@ -684,52 +684,51 @@ async fn send_message(
         // Use effective_messages for context retrieval and final generation
         let messages_for_context = effective_messages.clone();
 
-        // Retrieve Context (Long-term memory) via Strategist Orchestrator
+        // Retrieve Context (Long-term memory) via the DocStore auto-injection
+        // layer (memory3 Phase 2). Replaces the verbose strategist
+        // planner/synthesizer with a deterministic recall + KG-prose block.
         let mut context_text = String::new();
-        if memory_enabled && !query.is_empty() {
-            // Use strategist orchestrator for intelligent context assembly
-            match crate::memory::StrategistMemoryOrchestrator::assemble_context(
-                &query,
-                &messages_for_context, // Use compacted history
-                state.librarian.clone(),
-                settings.context_turns,
-                settings.context_model.as_deref(),
-                &settings,
-                conversation_id.as_deref(),
-            )
-            .await
-            {
-                Ok(result) => {
-                    if !result.context_text.is_empty() {
-                        context_text = format!("Refined Context:\n{}\n", result.context_text);
+        if memory_enabled
+            && settings.memory_auto_inject_docs
+            && !query.is_empty()
+        {
+            let store = {
+                let slot = state.doc_store.lock().await;
+                slot.clone()
+            };
+            if let Some(store) = store {
+                match store
+                    .auto_inject(
+                        &query,
+                        state.librarian.clone(),
+                        settings.memory_auto_inject_token_budget,
+                        settings.memory_recall_score_floor,
+                    )
+                    .await
+                {
+                    Ok(result) if !result.is_empty() => {
+                        context_text = result.text.clone();
 
-                        // Emit memory-context event for UI
                         use tauri::Emitter;
-                        if let Err(e) =
-                            app_handle.emit("memory-context", &vec![result.context_text.clone()])
+                        if let Err(e) = app_handle.emit("memory-context", &vec![context_text.clone()])
                         {
                             tracing::error!("Failed to emit memory-context: {}", e);
                         }
-
-                        // Emit memory-hits event with selected IDs (for debugging/UI)
                         if let Err(e) =
-                            app_handle.emit("memory-selected-ids", &result.selected_message_ids)
+                            app_handle.emit("memory-selected-doc", &result.doc_id)
                         {
-                            tracing::error!("Failed to emit memory-selected-ids: {}", e);
+                            tracing::error!("Failed to emit memory-selected-doc: {}", e);
                         }
-
-                        // Log search plan if present (for debugging)
-                        if let Some(plan) = &result.search_plan {
-                            tracing::debug!("Strategist plan: {} queries", plan.queries.len());
-                            if let Some(notes) = &plan.notes {
-                                tracing::debug!("Plan notes: {}", notes);
-                            }
+                        if let Err(e) =
+                            app_handle.emit("memory-selected-fact-ids", &result.fact_ids)
+                        {
+                            tracing::error!("Failed to emit memory-selected-fact-ids: {}", e);
                         }
                     }
-                }
-                Err(e) => {
-                    tracing::error!("Strategist memory assembly failed: {}", e);
-                    // Continue without memory context rather than failing the entire request
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!("DocStore auto-inject failed: {}", e);
+                    }
                 }
             }
         }
@@ -742,7 +741,7 @@ async fn send_message(
                 id: None,
                 role: "system".to_string(),
                 content: Some(format!(
-                    "You have access to the following long-term memories:\n{}",
+                    "Long-term memory for this turn:\n\n{}",
                     context_text
                 )),
                 reasoning_content: None,
@@ -1223,7 +1222,7 @@ async fn send_message(
 
                          let parts: Vec<&str> = context_model.split("::").collect();
                          if parts.len() == 2 {
-                             if let Ok(provider) = crate::memory::StrategistMemoryOrchestrator::create_provider(parts[0], parts[1], &settings) {
+                             if let Ok(provider) = crate::llm::factory::create_provider(parts[0], parts[1], &settings) {
                                  if let Err(e) = FactExtractor::extract(librarian_for_facts, provider.as_ref(), "assistant", &content, &msg_id).await {
                                      tracing::error!("Assistant fact extraction failed: {}", e);
                                  }

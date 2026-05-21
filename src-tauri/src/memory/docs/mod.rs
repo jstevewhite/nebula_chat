@@ -6,6 +6,7 @@
 pub mod api;
 pub mod chunker;
 pub mod embedding;
+pub mod inject;
 pub mod links;
 pub mod retrieval;
 pub mod store;

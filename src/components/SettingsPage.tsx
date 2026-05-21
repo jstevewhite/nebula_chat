@@ -278,6 +278,12 @@ export default function SettingsPage() {
                 memory_enabled: fullSettings.memory_enabled ?? latest.memory_enabled,
                 memory_tools_auto_approve:
                     fullSettings.memory_tools_auto_approve ?? latest.memory_tools_auto_approve,
+                memory_auto_inject_docs:
+                    fullSettings.memory_auto_inject_docs ?? latest.memory_auto_inject_docs,
+                memory_auto_inject_token_budget:
+                    fullSettings.memory_auto_inject_token_budget ?? latest.memory_auto_inject_token_budget,
+                memory_recall_score_floor:
+                    fullSettings.memory_recall_score_floor ?? latest.memory_recall_score_floor,
                 context_model: fullSettings.context_model ?? latest.context_model,
                 context_turns: fullSettings.context_turns ?? latest.context_turns,
 
@@ -689,6 +695,63 @@ export default function SettingsPage() {
                                     />
                                     Auto-approve
                                 </label>
+                            </div>
+
+                            <div className="flex items-center justify-between gap-4 mb-3">
+                                <div>
+                                    <label className="block text-sm font-bold text-[var(--color-text-secondary)]">
+                                        Auto-inject memory docs
+                                    </label>
+                                    <p className="text-xs text-[var(--color-text-tertiary)]">
+                                        Prefix every user turn with the most relevant memory doc and a prose summary of recent facts. Off-mode keeps the <code className="font-mono">memory_*</code> tools available so the LLM can still fetch on demand.
+                                    </p>
+                                </div>
+                                <label className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)] select-none">
+                                    <input
+                                        type="checkbox"
+                                        checked={fullSettings.memory_auto_inject_docs ?? true}
+                                        onChange={(e) => setFullSettings({ ...fullSettings, memory_auto_inject_docs: e.target.checked })}
+                                        className="h-4 w-4 rounded border-[var(--color-border-secondary)] bg-[var(--color-bg-primary)]"
+                                    />
+                                    Auto-inject
+                                </label>
+                            </div>
+
+                            <div className={`grid grid-cols-2 gap-4 mb-3 ${!(fullSettings.memory_auto_inject_docs ?? true) ? "opacity-50 pointer-events-none" : ""}`}>
+                                <div>
+                                    <label className="block text-sm font-bold text-[var(--color-text-secondary)] mb-1">
+                                        Auto-inject token budget
+                                    </label>
+                                    <p className="text-xs text-[var(--color-text-tertiary)] mb-2">
+                                        Hard cap on the auto-injected memory block (doc body + facts).
+                                    </p>
+                                    <input
+                                        type="number"
+                                        min={256}
+                                        max={32000}
+                                        step={256}
+                                        value={fullSettings.memory_auto_inject_token_budget ?? 4000}
+                                        onChange={(e) => setFullSettings({ ...fullSettings, memory_auto_inject_token_budget: parseInt(e.target.value, 10) || 4000 })}
+                                        className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded px-2 py-1 text-sm text-[var(--color-text-primary)]"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-bold text-[var(--color-text-secondary)] mb-1">
+                                        Recall score floor
+                                    </label>
+                                    <p className="text-xs text-[var(--color-text-tertiary)] mb-2">
+                                        Below this fused score, no doc is auto-injected.
+                                    </p>
+                                    <input
+                                        type="number"
+                                        min={0}
+                                        max={1}
+                                        step={0.05}
+                                        value={fullSettings.memory_recall_score_floor ?? 0.20}
+                                        onChange={(e) => setFullSettings({ ...fullSettings, memory_recall_score_floor: parseFloat(e.target.value) || 0.20 })}
+                                        className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded px-2 py-1 text-sm text-[var(--color-text-primary)]"
+                                    />
+                                </div>
                             </div>
 
                             <div className={`ml-1 pl-4 border-l-2 border-[var(--color-border-secondary)]/30 transition-opacity duration-200 ${!(fullSettings.memory_enabled ?? true) ? "opacity-50 pointer-events-none" : ""}`}>
