@@ -203,15 +203,17 @@ CREATE TABLE doc_links (
 );
 CREATE INDEX idx_doc_links_dst ON doc_links(dst_doc_id);
 
--- sqlite-vec virtual table; dim is fixed at creation per the configured model.
--- A migration recreates this table when the embedding model changes.
-CREATE VIRTUAL TABLE doc_chunk_vecs USING vec0(
-  chunk_id INTEGER PRIMARY KEY,
-  embedding FLOAT[<DIM>]
+-- Embedding storage as raw packed f32 bytes. dim is recorded in memory_meta;
+-- on embedding-model change, this table is truncated and re-populated.
+-- v1 deliberately avoids sqlite-vec to dodge cross-platform extension builds;
+-- queries happen against an in-memory cache (see §8).
+CREATE TABLE doc_chunk_vecs (
+  chunk_id  INTEGER PRIMARY KEY REFERENCES doc_chunks(chunk_id) ON DELETE CASCADE,
+  embedding BLOB NOT NULL          -- packed little-endian f32, length = dim * 4
 );
 ```
 
-`<DIM>` is captured in a `memory_meta` key/value row:
+The embedding `dim` is captured in a `memory_meta` key/value row:
 
 ```sql
 CREATE TABLE memory_meta (
@@ -222,7 +224,7 @@ CREATE TABLE memory_meta (
 ```
 
 On embedding-model change, startup detects mismatch and triggers a full reindex
-(drop and recreate `doc_chunk_vecs`).
+(truncate `doc_chunk_vecs`, re-embed all chunks, repopulate the in-memory cache).
 
 ### Tantivy
 
@@ -290,6 +292,10 @@ provided.
     "required": ["id"],
     "properties": {
       "id": {"type": "string"},
+      "expected_updated_at": {
+        "type": "string",
+        "description": "Optimistic concurrency token. The updated_at value returned by the most recent memory_fetch. If the document has changed since then, the edit fails with a CONFLICT error and the LLM must re-fetch."
+      },
       "replace": {
         "type": "object",
         "required": ["find", "with"],
@@ -305,7 +311,13 @@ provided.
 ```
 
 `replace.find` must match exactly once in the body (botmem's convention; avoids
-ambiguous edits). Returns the new body length and updated_at.
+ambiguous edits). Returns the new body length and `updated_at`.
+
+`expected_updated_at` is optional but recommended. When supplied, the store
+compares it to the current `updated_at` under the per-doc lock and rejects the
+edit if it has changed (user edited the file, watcher reindexed, another tool
+call landed first). The error returns the current `updated_at` so the LLM can
+re-fetch and retry. Omitting it is "force write" — accepted but discouraged.
 
 ### `memory_forget`
 
@@ -414,9 +426,9 @@ Two impls:
   HashMap from `Settings`.
 
 Selection lives in settings (§11). Switching providers triggers a full reindex
-because `sqlite-vec` table dim is fixed at creation; the startup check compares
-the configured model to `memory_meta.embedding_model` and rebuilds when they
-differ.
+because vector dimension is fixed per model (and is recorded in
+`memory_meta.embedding_dim`); the startup check compares the configured model
+to `memory_meta.embedding_model` and rebuilds when they differ.
 
 Batch size and timeouts are provider-specific; both impls accept up to ~64
 chunks per call.
@@ -426,11 +438,13 @@ chunks per call.
 `memory_recall(query, k)`:
 
 1. **Embed the query** via the configured `EmbeddingProvider`.
-2. **Vector recall**: `SELECT chunk_id, distance FROM doc_chunk_vecs WHERE
-   embedding MATCH :q ORDER BY distance LIMIT :k_vec` (k_vec = `k * 5`,
-   capped at 30).
-3. **BM25 recall** over the Tantivy index, filtered to `doc_type = "doc_chunk"`,
-   same k_vec cap.
+2. **Vector recall**: brute-force cosine against the in-memory `VectorCache`
+   (a `Vec<(chunk_id, [f32; DIM])>` loaded from `doc_chunk_vecs` at startup,
+   parallelized with `rayon`). Take top `k_vec = min(k * 5, 30)`. At expected
+   scales (≤ 50k chunks × 384 dims ≈ 75 MB RAM, sub-10ms scans) this beats
+   the cross-platform pain of bundling a SQLite extension.
+3. **BM25 recall** over the docs Tantivy index (separate from the message
+   index; see §15.1). Same `k_vec` cap.
 4. **Fusion rerank**: union the two candidate sets, normalize each score to
    [0, 1] within its own list, blend with `score = 0.6 * cosine + 0.4 * bm25`.
    Drop chunks below a configurable floor (default 0.15). Tie-break by
@@ -439,6 +453,11 @@ chunks per call.
    returned top-K (cheap MMR-lite).
 6. Return top-K (default 3) with `doc_id`, `chunk_id`, `ord`, `text`, blended
    `score`, and raw `score_components`.
+
+The `VectorCache` is the single source of truth for vector search at runtime;
+SQLite is the durability layer. All chunk writes update both, under a write
+lock on the cache. Cache rebuild cost on app start is bounded by disk I/O
+(reading `BLOB`s) and is fast enough to do eagerly before the watcher arms.
 
 Chunking strategy (write-side):
 - Split on paragraph boundaries; pack into ~500-char windows with ~80-char
@@ -540,21 +559,50 @@ specifically gates Tantivy message retrieval; docs are gated separately by
 A settings migration in `Settings::load_migrated` populates the new section
 with defaults on first read.
 
-## 12. File watcher
+## 12. Startup reconciliation + file watcher
+
+The watcher only catches changes that happen while the app is running.
+Anything that happens while Nebula is closed — `git pull`, manual `vim` edits,
+external scripts, full directory restores — must be reconciled at startup
+before the watcher arms. Otherwise the SQLite index drifts from disk.
+
+### Startup reconciliation (runs once, before the watcher starts)
+
+1. Scan `~/.config/nebula/memory/docs/` recursively for `*.md`. Build a map
+   `disk_files: {path → mtime_ns}`.
+2. Load all rows from `docs` into `db_docs: {id → (path, mtime_ns)}`.
+3. **Deleted on disk**: rows in `db_docs` whose `path` is not in `disk_files`
+   → cascade-delete from `docs` (FKs remove `doc_chunks`, `doc_links`,
+   `doc_chunk_vecs`).
+4. **New on disk**: paths in `disk_files` with no row in `db_docs` → parse
+   frontmatter, chunk, embed, insert.
+5. **Modified on disk**: paths whose `disk_files[path].mtime_ns >
+   db_docs[id].mtime_ns` → re-parse, re-chunk, re-embed the chunks whose
+   `text` hash changed, update `doc_links`, refresh the docs Tantivy entries.
+6. Rebuild the in-memory `VectorCache` from `doc_chunk_vecs` after step 5.
+7. Emit a single `memory:reconciled` Tauri event with counts for the UI.
+8. Arm the `notify` watcher.
+
+Reconciliation is bounded by disk I/O plus re-embedding cost for changed
+files. For users who don't edit docs externally, it's a cheap mtime scan.
+For a `git pull` that replaced many docs, it does the work that the watcher
+would have done if it had been running.
+
+### Watcher (runtime)
 
 `memory/docs/watcher.rs` uses the `notify` crate to watch `docs/`. On any FS
 event for `*.md`:
-1. Debounce 250ms.
+
+1. Debounce 250 ms.
 2. Compare current `mtime_ns` against `docs.mtime_ns`. Skip if unchanged.
-3. Re-parse frontmatter, re-chunk, re-embed (only the chunks whose text
-   changed — chunk hashes stored alongside `text`), upsert vectors, rebuild
+3. Re-parse frontmatter, re-chunk, re-embed (only the chunks whose text hash
+   changed), upsert vectors in both the DB and the `VectorCache`, rebuild
    that doc's `doc_links` rows, refresh its Tantivy entries.
 4. Emit a `memory:doc_changed` Tauri event so `MemoryPanel.tsx` can refresh.
 
-External edits — including `git pull`, manual `vim`, or another tool — are
-handled by the same path. The watcher is the single ingestion point; tool
-writes go to disk first, then the watcher picks them up (or the tool can
-invalidate proactively to avoid the debounce).
+Tool writes (`memory_remember`, `memory_edit`, `memory_forget`) call the same
+ingestion path directly under the per-doc lock and bump `mtime_ns`, so the
+watcher's debounced re-read for the same file is a no-op.
 
 ## 13. Module layout
 
@@ -617,23 +665,28 @@ worst case.
 
 **Schema migrations**
 - `migrate_v4_docs.rs` creates `docs`, `doc_chunks`, `doc_links`,
-  `doc_chunk_vecs`, `memory_meta`.
+  `doc_chunk_vecs` (regular table, BLOB embeddings), and `memory_meta`.
 - No data migration required; the docs subsystem starts empty.
 
 ## 15. Open questions / risks
 
-1. **Tantivy schema change.** Adding a `doc_type` field to the existing schema
-   requires a Tantivy index rebuild (Tantivy schemas are immutable). The
-   pragmatic choice is a **second Tantivy index** dedicated to doc chunks,
-   stored next to the message index. Keeps the message index untouched and
-   removes the migration. Decision: go with second index, revisit if memory
-   overhead is meaningful.
+1. **Tantivy schema change — resolved.** Tantivy schemas are immutable, so
+   adding a `doc_type` field to the message index would force a destructive
+   rebuild of every user's chat history index. **Decision: second Tantivy
+   index** at `~/.config/nebula/memory/docs_index/`, dedicated to doc
+   chunks. The message index is untouched; the docs index can be blown away
+   and rebuilt at any time (e.g. on chunking-strategy changes) without
+   touching chat history.
 
-2. **`sqlite-vec` availability.** It's a loadable extension that must be linked
-   into the bundled SQLite or loaded at runtime. `rusqlite` supports
-   `load_extension`. We need to verify the build works across macOS, Linux,
-   and Windows for Tauri's bundled binary. Fallback: brute-force cosine in
-   pure Rust over chunk count ≤ ~50k (fine for personal use).
+2. **`sqlite-vec` cross-platform builds — resolved.** Bundling a loadable C
+   extension for macOS (Intel + ARM), Windows, and Linux through Tauri's
+   build pipeline is a real cross-compilation headache, and at the scale of
+   a single user's memory the payoff is small. **Decision: skip `sqlite-vec`
+   for v1.** Store embeddings as packed `f32` BLOBs in the regular
+   `doc_chunk_vecs` table; load them all into an in-memory `VectorCache` at
+   startup; do brute-force cosine parallelized with `rayon` (§8). At ≤ 50k
+   chunks × 384 dims (≈ 75 MB) this is sub-10ms on commodity hardware. We
+   revisit only if real users hit scale that hurts.
 
 3. **fastembed model download UX.** First-run download is ~90–130MB and
    blocking. We should:
@@ -659,9 +712,16 @@ worst case.
    "where did this come from" trail later, we can add a `created_by:
    message_id` frontmatter field, but it's not in v1.
 
-8. **Concurrency on `memory_edit`.** Two tool calls editing the same doc could
-   race. v1 takes a per-doc `Mutex` keyed by doc ID inside the `DocStore`.
-   Acceptable because all writes go through one process.
+8. **Concurrency on `memory_edit` — two layers.**
+   - *Physical*: per-doc `Mutex` keyed by doc ID inside `DocStore` prevents
+     interleaved disk writes / partial files.
+   - *Logical*: optimistic concurrency via `expected_updated_at` on
+     `memory_edit` (§6). A mutex alone doesn't stop a stale-read overwrite —
+     the LLM could `fetch`, the user could `vim`-edit (or another tool call
+     could land), then the LLM's `edit` would silently clobber both. With
+     `expected_updated_at` present, the store compares under the lock and
+     returns a `CONFLICT` error with the current `updated_at`; the LLM
+     re-fetches and retries. Omitting the field is "force write".
 
 9. **Security: malicious docs.** A doc body is injected into system context.
    In a single-user desktop app this is low-risk, but worth flagging:
@@ -669,16 +729,29 @@ worst case.
    prompts. The user can audit docs on disk at any time. The audit log
    (`memory/audit_logger.rs`) should be extended to log all doc writes.
 
+10. **Slug vs. title split — intentional.** `id` is strict kebab-case
+    (`[a-z0-9-]+`) for filesystem safety and unambiguous `[[wikilinks]]`;
+    `title` lives in YAML frontmatter with no character restrictions. Users
+    get readable titles in the UI and search results, while filenames and
+    cross-doc references stay machine-stable. Renaming a slug remains a
+    user-driven, manual action in v1 (no auto-rewrite of inbound links).
+
 ## 16. Phased rollout
 
 **Phase 0 — design freeze (this doc).**
 
 **Phase 1 — storage + tools, no auto-inject.**
-- New schema, `DocStore`, `EmbeddingProvider` trait, `FastembedProvider`.
-- Six tools registered, available to the LLM. No auto-injection yet.
-- File watcher functional.
+- New schema (incl. `doc_chunk_vecs` BLOB table, `memory_meta`), `DocStore`,
+  `EmbeddingProvider` trait, `FastembedProvider`.
+- In-memory `VectorCache` with `rayon`-parallel cosine.
+- Second Tantivy index at `~/.config/nebula/memory/docs_index/`.
+- Startup reconciliation pass (§12) runs before the watcher arms.
+- `notify`-based file watcher functional.
+- Six tools registered, available to the LLM, including
+  `expected_updated_at` optimistic concurrency on `memory_edit`.
+- Per-doc `Mutex` map inside `DocStore`.
+- No auto-injection yet. Old strategist still in place; nothing existing breaks.
 - `MemoryPanel.tsx` gets a Docs tab (read-only list + fetch).
-- Old strategist still in place; nothing existing breaks.
 
 **Phase 2 — auto-inject + strategist removal.**
 - Implement `DocStore::auto_inject`; wire into `send_message`.
