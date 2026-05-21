@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { Plus, Trash2, Save, Sparkles, Lock } from "lucide-react";
 
 interface SkillSummary {
@@ -36,6 +37,15 @@ export default function SkillsSettings() {
 
     useEffect(() => {
         loadSkills();
+        // The backend FS watcher emits `skills-updated` whenever a file under
+        // skills/ changes (debounced). Refresh the list so vim/git-pull edits
+        // surface here without a manual reload.
+        const unlisten = listen("skills-updated", () => {
+            loadSkills();
+        });
+        return () => {
+            unlisten.then((fn) => fn());
+        };
     }, []);
 
     const handleSelect = async (sum: SkillSummary) => {

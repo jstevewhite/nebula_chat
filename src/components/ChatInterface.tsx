@@ -32,6 +32,7 @@ const MEMORY_TOOL_NAMES = new Set([
     "memory_doc_recall",
     "memory_doc_link_context",
     "use_skill",
+    "list_skills",
 ]);
 
 interface ToolCall {

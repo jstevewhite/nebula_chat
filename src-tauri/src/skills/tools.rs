@@ -7,13 +7,31 @@ use crate::llm::provider::ToolDefinition;
 use serde_json::json;
 
 pub const TOOL_USE_SKILL: &str = "use_skill";
+pub const TOOL_LIST_SKILLS: &str = "list_skills";
 
 pub fn is_skill_tool(name: &str) -> bool {
-    name == TOOL_USE_SKILL
+    matches!(name, TOOL_USE_SKILL | TOOL_LIST_SKILLS)
 }
 
 pub fn build_all() -> Vec<ToolDefinition> {
-    vec![use_skill_tool()]
+    vec![use_skill_tool(), list_skills_tool()]
+}
+
+fn list_skills_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: TOOL_LIST_SKILLS.to_string(),
+        description:
+            "Return the slug, name, and description of every skill currently installed. \
+             Usually unnecessary — the same list is already in the system prompt under \
+             \"Available skills\" — but useful when you want a fresh view (e.g. the user just \
+             added a new skill mid-conversation via the file watcher) or want to enumerate \
+             skills programmatically before deciding which to call with `use_skill`."
+                .to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {}
+        }),
+    }
 }
 
 fn use_skill_tool() -> ToolDefinition {

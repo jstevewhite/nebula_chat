@@ -1928,22 +1928,32 @@ async fn execute_tool(
     // the tool result. Audit-logged like memory tools so the user can see
     // which skills the model has pulled into context.
     if crate::skills::tools::is_skill_tool(&name) {
-        let slug = args
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "use_skill: missing name".to_string())?
-            .trim()
-            .to_string();
-        let result: Result<serde_json::Value, String> = match state.skills.get(&slug).await {
-            Some(skill) => Ok(serde_json::json!({
-                "slug": skill.slug,
-                "name": skill.name,
-                "description": skill.description,
-                "body": skill.body,
-            })),
-            None => Err(format!(
-                "use_skill: no such skill '{slug}'. See the available-skills list in the system prompt."
-            )),
+        use crate::skills::tools::{TOOL_LIST_SKILLS, TOOL_USE_SKILL};
+        let result: Result<serde_json::Value, String> = match name.as_str() {
+            n if n == TOOL_USE_SKILL => {
+                let slug = args
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| "use_skill: missing name".to_string())?
+                    .trim()
+                    .to_string();
+                match state.skills.get(&slug).await {
+                    Some(skill) => Ok(serde_json::json!({
+                        "slug": skill.slug,
+                        "name": skill.name,
+                        "description": skill.description,
+                        "body": skill.body,
+                    })),
+                    None => Err(format!(
+                        "use_skill: no such skill '{slug}'. Call list_skills to see what's available."
+                    )),
+                }
+            }
+            n if n == TOOL_LIST_SKILLS => {
+                let summaries = state.skills.list().await;
+                Ok(serde_json::json!({ "skills": summaries }))
+            }
+            other => Err(format!("skills dispatch: unknown tool '{other}'")),
         };
         if let Some(cid) = conversation_id.as_deref() {
             let (status, preview, full) = match &result {
@@ -1957,7 +1967,7 @@ async fn execute_tool(
             let lib = state.librarian.lock().await;
             let _ = lib.audit.log_execution(
                 cid,
-                tool_call_id.as_deref().unwrap_or("use-skill"),
+                tool_call_id.as_deref().unwrap_or(&name),
                 &name,
                 "skills",
                 &args.to_string(),
@@ -3220,6 +3230,19 @@ pub fn run() {
                 let skills_store = crate::skills::SkillStore::new(skills_dir)
                     .await
                     .expect("SkillStore init failed");
+
+                // Arm the FS watcher so external edits (vim, git pull) live-
+                // update without a manual reload. After each watcher-driven
+                // reload we emit `skills-updated` so SettingsPage refreshes.
+                {
+                    let app_for_event = app_handle.clone();
+                    if let Err(e) = skills_store.start_watcher(move || {
+                        use tauri::Emitter;
+                        let _ = app_for_event.emit("skills-updated", ());
+                    }) {
+                        tracing::warn!("skills watcher failed to start: {e}");
+                    }
+                }
 
                 // 4. AppState
                 let state = AppState {

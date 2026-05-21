@@ -14,10 +14,11 @@ pub mod api;
 pub mod builtins;
 pub mod store;
 pub mod tools;
+pub mod watcher;
 
 use anyhow::Result;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::RwLock;
 
 pub use api::{Skill, SkillSummary};
@@ -25,6 +26,7 @@ pub use api::{Skill, SkillSummary};
 pub struct SkillStore {
     skills_dir: PathBuf,
     cache: Arc<RwLock<Vec<Skill>>>,
+    watcher: StdMutex<Option<watcher::SkillsWatcher>>,
 }
 
 impl SkillStore {
@@ -48,6 +50,7 @@ impl SkillStore {
         let me = Arc::new(Self {
             skills_dir,
             cache: Arc::new(RwLock::new(Vec::new())),
+            watcher: StdMutex::new(None),
         });
         me.reload().await?;
         Ok(me)
@@ -55,6 +58,31 @@ impl SkillStore {
 
     pub fn skills_dir(&self) -> &PathBuf {
         &self.skills_dir
+    }
+
+    /// Arm the FS watcher. Any change to a `.md` file under the skills dir
+    /// (or its `built-ins/` subdir) triggers a debounced reload. `on_reload`
+    /// is invoked after each successful reload so the caller (lib.rs) can
+    /// emit a Tauri event for the UI.
+    pub fn start_watcher<F>(self: &Arc<Self>, on_reload: F) -> Result<()>
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        let me = self.clone();
+        let on_reload = Arc::new(on_reload);
+        let handle = watcher::start_watching(self.skills_dir.clone(), move || {
+            let me = me.clone();
+            let on_reload = on_reload.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = me.reload().await {
+                    tracing::warn!("skills reload (watcher) failed: {e}");
+                } else {
+                    on_reload();
+                }
+            });
+        })?;
+        *self.watcher.lock().expect("skills watcher slot poisoned") = Some(handle);
+        Ok(())
     }
 
     /// Re-scan the skills dir from disk. Called at startup and after any UI
