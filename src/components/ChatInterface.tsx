@@ -16,16 +16,20 @@ import TasksPanel from "./TasksPanel";
 import { getProviderIcon } from "../utils/providerIcons";
 import { CustomSelect } from "./ui/CustomSelect";
 
-// Built-in memory tool names (memory3 Phases 1 & 3). Kept in sync with
-// src-tauri/src/memory/docs/tools.rs::ALL_NAMES.
+// Built-in memory tool names. Kept in sync with
+// src-tauri/src/memory/docs/tools.rs::ALL_NAMES. Two namespaces:
+//   memory_doc_*  — markdown documents on disk
+//   memory_fact_* — atomic (s, p, o) triples in the KG
 const MEMORY_TOOL_NAMES = new Set([
-    "memory_remember",
-    "memory_fetch",
-    "memory_edit",
-    "memory_forget",
-    "memory_recall",
-    "memory_link_context",
-    "memory_remember_fact",
+    "memory_fact_remember",
+    "memory_fact_recall",
+    "memory_fact_forget",
+    "memory_doc_remember",
+    "memory_doc_fetch",
+    "memory_doc_edit",
+    "memory_doc_forget",
+    "memory_doc_recall",
+    "memory_doc_link_context",
 ]);
 
 interface ToolCall {

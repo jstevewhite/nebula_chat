@@ -991,6 +991,67 @@ impl SqliteManager {
         Ok(facts)
     }
 
+    /// LIKE-based substring search across subject/predicate/object. Any of
+    /// the three filters may be omitted (None = match anything). Used by the
+    /// LLM-facing `memory_fact_recall` tool so the model can browse the KG
+    /// symmetrically with how it browses docs.
+    pub fn search_facts_like(
+        &self,
+        subject_like: Option<&str>,
+        predicate_like: Option<&str>,
+        object_like: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<Fact>> {
+        let mut sql = String::from(
+            "SELECT id, subject, predicate, object, object_kind,
+                    confidence, source_message_id, created_at, updated_at
+             FROM facts",
+        );
+        let mut conditions: Vec<String> = Vec::new();
+        let mut params: Vec<String> = Vec::new();
+        if let Some(s) = subject_like {
+            conditions.push("subject LIKE ?".into());
+            params.push(format!("%{s}%"));
+        }
+        if let Some(p) = predicate_like {
+            conditions.push("predicate LIKE ?".into());
+            params.push(format!("%{p}%"));
+        }
+        if let Some(o) = object_like {
+            conditions.push("object LIKE ?".into());
+            params.push(format!("%{o}%"));
+        }
+        if !conditions.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&conditions.join(" AND "));
+        }
+        sql.push_str(" ORDER BY updated_at DESC LIMIT ?");
+        params.push(limit.to_string());
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row| {
+            let object_kind_str: String = row.get(4)?;
+            let object_kind = ObjectKind::from_str(&object_kind_str).unwrap_or(ObjectKind::Literal);
+            let confidence_f64: f64 = row.get(5)?;
+            Ok(Fact {
+                id: row.get(0)?,
+                subject: row.get(1)?,
+                predicate: row.get(2)?,
+                object: row.get(3)?,
+                object_kind,
+                confidence: confidence_f64 as f32,
+                source_message_id: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
     /// Get facts about a given entity, including inbound edges where the
     /// object is that entity and is itself typed as an ENTITY.
     pub fn get_facts_about_entity(&self, entity: &str, limit: usize) -> Result<Vec<Fact>> {

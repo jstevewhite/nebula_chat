@@ -459,7 +459,7 @@ impl DocStore {
             if exists {
                 return Err(DocsError::new(
                     "ALREADY_EXISTS",
-                    format!("doc '{}' already exists; use memory_edit", input.id),
+                    format!("doc '{}' already exists; use memory_doc_edit", input.id),
                 ));
             }
         }

@@ -1291,72 +1291,72 @@ async fn dispatch_memory_tool(
     }
 
     match name {
-        n if n == TOOL_REMEMBER => {
+        n if n == TOOL_DOC_REMEMBER => {
             let input: RememberInput = serde_json::from_value(args)
-                .map_err(|e| format!("memory_remember: invalid args: {e}"))?;
+                .map_err(|e| format!("memory_doc_remember: invalid args: {e}"))?;
             match store.remember(input).await {
                 Ok(out) => Ok(serde_json::to_value(out).unwrap()),
                 Err(e) => Ok(err_value(&e)),
             }
         }
-        n if n == TOOL_FETCH => {
+        n if n == TOOL_DOC_FETCH => {
             let id = args
                 .get("id")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| "memory_fetch: missing id".to_string())?;
+                .ok_or_else(|| "memory_doc_fetch: missing id".to_string())?;
             match store.fetch(id).await.map_err(|e| e.to_string())? {
                 Some(doc) => Ok(serde_json::to_value(doc).unwrap()),
                 None => Ok(err_value(&DocsError::new("NOT_FOUND", "no such doc"))),
             }
         }
-        n if n == TOOL_EDIT => {
+        n if n == TOOL_DOC_EDIT => {
             let input: EditInput = serde_json::from_value(args)
-                .map_err(|e| format!("memory_edit: invalid args: {e}"))?;
+                .map_err(|e| format!("memory_doc_edit: invalid args: {e}"))?;
             match store.edit(input).await {
                 Ok(out) => Ok(serde_json::to_value(out).unwrap()),
                 Err(e) => Ok(err_value(&e)),
             }
         }
-        n if n == TOOL_FORGET => {
+        n if n == TOOL_DOC_FORGET => {
             let id = args
                 .get("id")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| "memory_forget: missing id".to_string())?;
+                .ok_or_else(|| "memory_doc_forget: missing id".to_string())?;
             match store.forget(id).await {
                 Ok(()) => Ok(serde_json::json!({"ok": true, "id": id})),
                 Err(e) => Ok(err_value(&e)),
             }
         }
-        n if n == TOOL_RECALL => {
+        n if n == TOOL_DOC_RECALL => {
             let input: RecallInput = serde_json::from_value(args)
-                .map_err(|e| format!("memory_recall: invalid args: {e}"))?;
+                .map_err(|e| format!("memory_doc_recall: invalid args: {e}"))?;
             let out = store.recall(input).await.map_err(|e| e.to_string())?;
             Ok(serde_json::to_value(out).unwrap())
         }
-        n if n == TOOL_LINK_CONTEXT => {
+        n if n == TOOL_DOC_LINK_CONTEXT => {
             let input: LinkContextInput = serde_json::from_value(args)
-                .map_err(|e| format!("memory_link_context: invalid args: {e}"))?;
+                .map_err(|e| format!("memory_doc_link_context: invalid args: {e}"))?;
             let out = store.link_context(input).await.map_err(|e| e.to_string())?;
             Ok(serde_json::to_value(out).unwrap())
         }
-        n if n == TOOL_REMEMBER_FACT => {
+        n if n == TOOL_FACT_REMEMBER => {
             let subject = args
                 .get("subject")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| "memory_remember_fact: missing subject".to_string())?
+                .ok_or_else(|| "memory_fact_remember: missing subject".to_string())?
                 .trim();
             let predicate = args
                 .get("predicate")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| "memory_remember_fact: missing predicate".to_string())?
+                .ok_or_else(|| "memory_fact_remember: missing predicate".to_string())?
                 .trim();
             let object = args
                 .get("object")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| "memory_remember_fact: missing object".to_string())?
+                .ok_or_else(|| "memory_fact_remember: missing object".to_string())?
                 .trim();
             if subject.is_empty() || predicate.is_empty() || object.is_empty() {
-                return Err("memory_remember_fact: subject/predicate/object must be non-empty".into());
+                return Err("memory_fact_remember: subject/predicate/object must be non-empty".into());
             }
             let object_kind = match args
                 .get("object_kind")
@@ -1385,8 +1385,34 @@ async fn dispatch_memory_tool(
             let lib = librarian.lock().await;
             let id = lib
                 .upsert_fact(new_fact)
-                .map_err(|e| format!("memory_remember_fact: {e}"))?;
+                .map_err(|e| format!("memory_fact_remember: {e}"))?;
             Ok(serde_json::json!({ "id": id, "ok": true }))
+        }
+        n if n == TOOL_FACT_RECALL => {
+            let subject = args.get("subject").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty());
+            let predicate = args.get("predicate").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty());
+            let object = args.get("object").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty());
+            let limit = args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize)
+                .unwrap_or(20)
+                .clamp(1, 100);
+            let lib = librarian.lock().await;
+            let facts = lib
+                .sqlite
+                .search_facts_like(subject, predicate, object, limit)
+                .map_err(|e| format!("memory_fact_recall: {e}"))?;
+            Ok(serde_json::json!({ "facts": facts }))
+        }
+        n if n == TOOL_FACT_FORGET => {
+            let id = args
+                .get("id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "memory_fact_forget: missing id".to_string())?;
+            let lib = librarian.lock().await;
+            lib.delete_fact(id).map_err(|e| format!("memory_fact_forget: {e}"))?;
+            Ok(serde_json::json!({ "ok": true, "id": id }))
         }
         _ => Err(format!("memory dispatch: unknown tool '{name}'")),
     }

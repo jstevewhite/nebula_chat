@@ -143,10 +143,10 @@ pub struct Settings {
     #[serde(default = "default_false_bool")]
     pub disable_builtin_task_tool: bool,
 
-    /// When true, the six memory_* tools (memory_remember / fetch / edit /
-    /// forget / recall / link_context) skip the per-call approval popup and
-    /// execute immediately. Default true: tool calls only touch local audit-
-    /// visible markdown docs, and prompting on every call drowns the UX.
+    /// When true, all `memory_doc_*` and `memory_fact_*` tools skip the
+    /// per-call approval popup and execute immediately. Default true: tool
+    /// calls only touch local audit-visible markdown docs and the KG, and
+    /// prompting on every call drowns the UX.
     #[serde(default = "default_true_bool")]
     pub memory_tools_auto_approve: bool,
 
@@ -168,7 +168,7 @@ pub struct Settings {
     /// Trigger policy for KG fact extraction. One of:
     /// - `"explicit"` (default): only via the `/remember` chat command, the
     ///   "Save as fact" message action, or the LLM-callable
-    ///   `memory_remember_fact` tool. No implicit per-turn extraction.
+    ///   `memory_fact_remember` tool. No implicit per-turn extraction.
     /// - `"session_end"`: in addition to explicit triggers, run a one-shot
     ///   extraction pass on the messages added since the last checkpoint when
     ///   the user switches conversations.

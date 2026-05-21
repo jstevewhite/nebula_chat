@@ -1,124 +1,200 @@
-//! Tool definitions for the six `memory_*` LLM-facing tools. The descriptors
-//! returned here are appended to the tool list passed to the model, alongside
-//! MCP tools and the existing built-in `update_tasks`. Execution lives in
-//! `lib.rs::execute_tool`.
+//! Tool definitions for the LLM-facing memory subsystem.
+//!
+//! There are two clearly-separated subsystems, named consistently:
+//!
+//! - `memory_doc_*`  — markdown documents on disk (user-editable, narrative).
+//! - `memory_fact_*` — atomic (subject, predicate, object) triples in the KG.
+//!
+//! The model should never need to choose between "remember as doc" vs
+//! "remember as fact" by name alone — pick the prefix that matches the
+//! information's shape, then the verb.
 
 use crate::llm::provider::ToolDefinition;
 use serde_json::json;
 
-pub const TOOL_REMEMBER: &str = "memory_remember";
-pub const TOOL_FETCH: &str = "memory_fetch";
-pub const TOOL_EDIT: &str = "memory_edit";
-pub const TOOL_FORGET: &str = "memory_forget";
-pub const TOOL_RECALL: &str = "memory_recall";
-pub const TOOL_LINK_CONTEXT: &str = "memory_link_context";
-pub const TOOL_REMEMBER_FACT: &str = "memory_remember_fact";
+// Doc subsystem.
+pub const TOOL_DOC_REMEMBER: &str = "memory_doc_remember";
+pub const TOOL_DOC_FETCH: &str = "memory_doc_fetch";
+pub const TOOL_DOC_EDIT: &str = "memory_doc_edit";
+pub const TOOL_DOC_FORGET: &str = "memory_doc_forget";
+pub const TOOL_DOC_RECALL: &str = "memory_doc_recall";
+pub const TOOL_DOC_LINK_CONTEXT: &str = "memory_doc_link_context";
+
+// Fact subsystem.
+pub const TOOL_FACT_REMEMBER: &str = "memory_fact_remember";
+pub const TOOL_FACT_RECALL: &str = "memory_fact_recall";
+pub const TOOL_FACT_FORGET: &str = "memory_fact_forget";
 
 pub const ALL_NAMES: &[&str] = &[
-    TOOL_REMEMBER,
-    TOOL_FETCH,
-    TOOL_EDIT,
-    TOOL_FORGET,
-    TOOL_RECALL,
-    TOOL_LINK_CONTEXT,
-    TOOL_REMEMBER_FACT,
+    TOOL_FACT_REMEMBER,
+    TOOL_FACT_RECALL,
+    TOOL_FACT_FORGET,
+    TOOL_DOC_REMEMBER,
+    TOOL_DOC_FETCH,
+    TOOL_DOC_EDIT,
+    TOOL_DOC_FORGET,
+    TOOL_DOC_RECALL,
+    TOOL_DOC_LINK_CONTEXT,
 ];
 
 pub fn is_memory_tool(name: &str) -> bool {
     ALL_NAMES.contains(&name)
 }
 
-/// Build the full set of tool definitions exposed to the LLM.
+/// Build the full set of tool definitions exposed to the LLM. Facts are listed
+/// first so the model considers the atomic path before the narrative path when
+/// a statement could plausibly go either way.
 pub fn build_all() -> Vec<ToolDefinition> {
-    // memory_remember_fact is intentionally listed *before* memory_remember so
-    // the model considers the atomic-fact path first when the user mentions a
-    // preference / identity / environment detail. The doc tools follow for
-    // narrative content.
     vec![
-        remember_fact_tool(),
-        remember_tool(),
-        edit_tool(),
-        fetch_tool(),
-        forget_tool(),
-        recall_tool(),
-        link_context_tool(),
+        fact_remember_tool(),
+        fact_recall_tool(),
+        fact_forget_tool(),
+        doc_remember_tool(),
+        doc_fetch_tool(),
+        doc_edit_tool(),
+        doc_forget_tool(),
+        doc_recall_tool(),
+        doc_link_context_tool(),
     ]
 }
 
-fn remember_tool() -> ToolDefinition {
+// ---------- FACT tools (knowledge graph) ----------
+
+fn fact_remember_tool() -> ToolDefinition {
     ToolDefinition {
-        name: TOOL_REMEMBER.to_string(),
+        name: TOOL_FACT_REMEMBER.to_string(),
         description:
-            "Create a new long-form memory DOCUMENT (markdown file on disk). \
-             Use this ONLY for narrative, multi-paragraph content that needs prose to make sense — \
-             project briefs, architecture decision records, workflow notes, README-style overviews, \
-             working agreements with multiple clauses. \
-             \n\nDO NOT use this tool for atomic facts about the user or an entity \
-             (name, role, preferences, OS, editor, language choice, tool choice, environment details). \
-             Those belong in the knowledge graph — use `memory_remember_fact` instead. \
-             A doc with title \"User Profile\" containing a bulleted list of preferences is the WRONG shape; \
-             each bullet should be a separate `memory_remember_fact` call. \
-             \n\nGood examples for memory_remember:\n\
-             - id: \"project-nebula\", title: \"Nebula architecture notes\" — multi-section overview of the system.\n\
-             - id: \"adr-2026-05-tantivy\", title: \"ADR: use Tantivy for BM25\" — decision record with context and tradeoffs.\n\
-             - id: \"workflow-release\", title: \"Release workflow\" — step-by-step checklist with prose.\n\n\
-             BAD examples (use memory_remember_fact instead):\n\
-             - id: \"user-profile\" with a list of preferences.\n\
-             - id: \"environment\" with OS / editor / shell facts.\n\
-             - any single-line factual statement about the user.\n\n\
-             Errors if a doc with this id already exists; use memory_edit to update."
+            "FACT WRITE — store a single atomic (subject, predicate, object) triple in the \
+             knowledge graph. PREFER this over memory_doc_remember for any short, durable \
+             factual statement about the user or an entity.\n\n\
+             Use for: identity (name, role, employer), preferences, environment details, \
+             tech-stack and tool choices, decisions, project metadata.\n\n\
+             Call ONCE PER FACT — three preferences = three calls. Re-calling with the same \
+             (subject, predicate, object, object_kind) upserts in place, so this doubles as \
+             the update path.\n\n\
+             Examples:\n\
+             - \"I prefer dark mode\" → subject=\"user\" predicate=\"prefers\" object=\"dark mode\"\n\
+             - \"I run Arch Linux\" → subject=\"user\" predicate=\"runs_os\" object=\"arch linux\"\n\
+             - \"nebula_chat uses Tauri\" → subject=\"nebula_chat\" predicate=\"built_with\" object=\"tauri\" object_kind=\"entity\""
                 .to_string(),
         input_schema: json!({
             "type": "object",
-            "required": ["id", "title", "content"],
+            "required": ["subject", "predicate", "object"],
             "properties": {
-                "id": {
-                    "type": "string",
-                    "description": "Human-readable slug, [a-z0-9][a-z0-9-]{0,63}. Used as the filename and for [[wikilinks]]."
-                },
-                "title": {"type": "string", "description": "Human-readable title (any characters)."},
-                "content": {"type": "string", "description": "Markdown body. Use [[other-id]] to link to other docs."},
-                "tags": {"type": "array", "items": {"type": "string"}, "description": "Free-form tags."},
-                "links": {"type": "array", "items": {"type": "string"}, "description": "Other doc IDs this doc links to."}
+                "subject":     {"type": "string", "description": "lowercase snake_case key; use \"user\" for facts about the human."},
+                "predicate":   {"type": "string", "description": "lowercase snake_case key (e.g. \"prefers\", \"runs_os\")."},
+                "object":      {"type": "string", "description": "Free-form literal value, or snake_case entity key when object_kind=\"entity\"."},
+                "object_kind": {"type": "string", "enum": ["literal", "entity"], "description": "Defaults to \"literal\"."},
+                "confidence":  {"type": "number", "minimum": 0, "maximum": 1, "description": "Default 0.9."}
             }
         }),
     }
 }
 
-fn fetch_tool() -> ToolDefinition {
+fn fact_recall_tool() -> ToolDefinition {
     ToolDefinition {
-        name: TOOL_FETCH.to_string(),
+        name: TOOL_FACT_RECALL.to_string(),
         description:
-            "Retrieve a memory document by id. Returns the full body, tags, and outbound links. \
-             Use the returned `updated_at` as the `expected_updated_at` token for a subsequent memory_edit."
+            "FACT READ — search the knowledge graph by subject / predicate / object substring. \
+             Any combination of filters; an omitted filter matches anything. Returns up to \
+             `limit` facts (default 20) including their stable `id`s for follow-up calls to \
+             memory_fact_forget.\n\n\
+             Use this — NOT memory_doc_recall — when you want to look up structured facts \
+             you previously stored. Examples:\n\
+             - All facts about the user → subject=\"user\".\n\
+             - Everything stored about a project → subject=\"nebula_chat\".\n\
+             - What the user prefers → subject=\"user\" predicate=\"prefer\" (LIKE match)."
+                .to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "subject":   {"type": "string", "description": "Substring match against subject."},
+                "predicate": {"type": "string", "description": "Substring match against predicate."},
+                "object":    {"type": "string", "description": "Substring match against object."},
+                "limit":     {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}
+            }
+        }),
+    }
+}
+
+fn fact_forget_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: TOOL_FACT_FORGET.to_string(),
+        description:
+            "FACT DELETE — remove a single fact from the knowledge graph by id. Pair with \
+             memory_fact_recall to find the id first. Destructive; prefer memory_fact_remember \
+             to overwrite (it upserts on the (subject, predicate, object, object_kind) key)."
                 .to_string(),
         input_schema: json!({
             "type": "object",
             "required": ["id"],
             "properties": {
-                "id": {"type": "string"}
+                "id": {"type": "string", "description": "Fact id from memory_fact_recall."}
             }
         }),
     }
 }
 
-fn edit_tool() -> ToolDefinition {
+// ---------- DOC tools (markdown documents) ----------
+
+fn doc_remember_tool() -> ToolDefinition {
     ToolDefinition {
-        name: TOOL_EDIT.to_string(),
+        name: TOOL_DOC_REMEMBER.to_string(),
         description:
-            "Edit an existing memory document. Exactly one of `replace` or `append` must be provided. \
-             `replace.find` must match exactly once in the body. Pass `expected_updated_at` (from a recent memory_fetch) \
-             to fail loudly if the doc changed since you read it."
+            "DOCUMENT WRITE — create a new markdown memory document on disk. Use ONLY for \
+             narrative, multi-paragraph content that needs prose to make sense — project briefs, \
+             architecture decision records, workflow notes, README-style overviews.\n\n\
+             DO NOT use for atomic facts (name, preferences, OS, editor, tech-stack choice). \
+             Those belong in the knowledge graph via memory_fact_remember. A \"user-profile.md\" \
+             with a bulleted list of preferences is the WRONG shape; each bullet should be a \
+             memory_fact_remember call.\n\n\
+             Errors if a doc with this id already exists; use memory_doc_edit to update."
+                .to_string(),
+        input_schema: json!({
+            "type": "object",
+            "required": ["id", "title", "content"],
+            "properties": {
+                "id":      {"type": "string", "description": "Slug, [a-z0-9][a-z0-9-]{0,63}. Used as the filename and for [[wikilinks]]."},
+                "title":   {"type": "string", "description": "Human-readable title (any characters)."},
+                "content": {"type": "string", "description": "Markdown body. Use [[other-id]] to link to other docs."},
+                "tags":    {"type": "array", "items": {"type": "string"}, "description": "Free-form tags."},
+                "links":   {"type": "array", "items": {"type": "string"}, "description": "Other doc IDs this doc links to."}
+            }
+        }),
+    }
+}
+
+fn doc_fetch_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: TOOL_DOC_FETCH.to_string(),
+        description:
+            "DOCUMENT READ — retrieve a memory document by id. Returns the full body, tags, and \
+             outbound links. Use the returned `updated_at` as `expected_updated_at` for a \
+             subsequent memory_doc_edit to fail loudly on stale-read overwrites."
+                .to_string(),
+        input_schema: json!({
+            "type": "object",
+            "required": ["id"],
+            "properties": {"id": {"type": "string"}}
+        }),
+    }
+}
+
+fn doc_edit_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: TOOL_DOC_EDIT.to_string(),
+        description:
+            "DOCUMENT UPDATE — modify an existing memory document. Exactly one of `replace` or \
+             `append` must be provided. `replace.find` must match exactly once in the body. \
+             Pass `expected_updated_at` (from a recent memory_doc_fetch) to fail loudly if the \
+             doc changed since you read it."
                 .to_string(),
         input_schema: json!({
             "type": "object",
             "required": ["id"],
             "properties": {
                 "id": {"type": "string"},
-                "expected_updated_at": {
-                    "type": "string",
-                    "description": "Optimistic concurrency token. The updated_at returned by the last memory_fetch."
-                },
+                "expected_updated_at": {"type": "string"},
                 "replace": {
                     "type": "object",
                     "required": ["find", "with"],
@@ -133,114 +209,56 @@ fn edit_tool() -> ToolDefinition {
     }
 }
 
-fn forget_tool() -> ToolDefinition {
+fn doc_forget_tool() -> ToolDefinition {
     ToolDefinition {
-        name: TOOL_FORGET.to_string(),
+        name: TOOL_DOC_FORGET.to_string(),
         description:
-            "Delete a memory document and all its chunks. This is a destructive action; \
-             prefer memory_edit for narrowing or correcting a doc."
+            "DOCUMENT DELETE — remove a memory document and all its chunks. Destructive; prefer \
+             memory_doc_edit to narrow or correct rather than delete."
                 .to_string(),
         input_schema: json!({
             "type": "object",
             "required": ["id"],
-            "properties": {
-                "id": {"type": "string"}
-            }
+            "properties": {"id": {"type": "string"}}
         }),
     }
 }
 
-fn recall_tool() -> ToolDefinition {
+fn doc_recall_tool() -> ToolDefinition {
     ToolDefinition {
-        name: TOOL_RECALL.to_string(),
+        name: TOOL_DOC_RECALL.to_string(),
         description:
-            "Semantically search the memory documents. Returns up to k chunks (default 3), \
-             each tagged with its parent doc_id. Use memory_fetch to read the full doc for any chunk."
+            "DOCUMENT SEARCH — semantic + lexical search across memory document chunks. Returns \
+             up to k chunks (default 3), each tagged with its parent doc_id. Use memory_doc_fetch \
+             to read the full doc for any chunk. For finding atomic facts, use \
+             memory_fact_recall instead."
                 .to_string(),
         input_schema: json!({
             "type": "object",
             "required": ["query"],
             "properties": {
                 "query": {"type": "string"},
-                "k": {"type": "integer", "minimum": 1, "maximum": 10, "default": 3},
-                "tags": {"type": "array", "items": {"type": "string"}}
+                "k":     {"type": "integer", "minimum": 1, "maximum": 10, "default": 3},
+                "tags":  {"type": "array", "items": {"type": "string"}}
             }
         }),
     }
 }
 
-fn remember_fact_tool() -> ToolDefinition {
+fn doc_link_context_tool() -> ToolDefinition {
     ToolDefinition {
-        name: TOOL_REMEMBER_FACT.to_string(),
+        name: TOOL_DOC_LINK_CONTEXT.to_string(),
         description:
-            "PREFERRED tool for atomic facts about the user or any entity. Writes a single \
-             (subject, predicate, object) triple into the structured knowledge graph. \
-             \n\nALWAYS use this — NOT `memory_remember` — for any short, durable factual statement, \
-             including but not limited to:\n\
-             - The user's name, role, location, pronouns, employer.\n\
-             - Stable preferences (\"user prefers dark mode\", \"user uses vim\").\n\
-             - Environment details (\"user runs Linux\", \"user has an RTX 4090\", \"user uses zsh\").\n\
-             - Tech stack and tool choices (\"user writes Rust\", \"project uses Postgres\").\n\
-             - Concrete decisions (\"we picked Tantivy over Meilisearch\").\n\
-             - Project metadata (\"nebula_chat is built with Tauri\").\n\n\
-             Call this tool ONCE PER FACT. If the user tells you three preferences, make three calls. \
-             Do not batch facts into a markdown doc. Do not create a \"user-profile\" doc — \
-             user-profile-shaped knowledge lives in the KG and is rendered automatically into \
-             every system prompt.\n\n\
-             Examples:\n\
-             - User: \"I prefer dark mode\" → memory_remember_fact(subject=\"user\", predicate=\"prefers\", object=\"dark mode\")\n\
-             - User: \"I'm on Arch Linux\" → memory_remember_fact(subject=\"user\", predicate=\"runs_os\", object=\"arch linux\")\n\
-             - User: \"My main editor is helix\" → memory_remember_fact(subject=\"user\", predicate=\"main_editor\", object=\"helix\")\n\
-             - User: \"nebula_chat uses Tauri\" → memory_remember_fact(subject=\"nebula_chat\", predicate=\"built_with\", object=\"tauri\", object_kind=\"entity\")\n\n\
-             Use `memory_remember` only for genuinely narrative content (project briefs, ADRs, \
-             multi-section notes) that needs prose to make sense."
-                .to_string(),
-        input_schema: json!({
-            "type": "object",
-            "required": ["subject", "predicate", "object"],
-            "properties": {
-                "subject": {
-                    "type": "string",
-                    "description": "Normalised subject key, lowercase snake_case. Use \"user\" for facts about the human."
-                },
-                "predicate": {
-                    "type": "string",
-                    "description": "Normalised predicate key, lowercase snake_case (e.g. \"prefers\", \"uses\", \"main_editor\")."
-                },
-                "object": {
-                    "type": "string",
-                    "description": "Free-form literal value, or a snake_case entity key when object_kind=\"entity\"."
-                },
-                "object_kind": {
-                    "type": "string",
-                    "enum": ["literal", "entity"],
-                    "description": "\"entity\" if the object is itself a graph node you'd traverse to; \"literal\" otherwise. Defaults to \"literal\"."
-                },
-                "confidence": {
-                    "type": "number",
-                    "minimum": 0,
-                    "maximum": 1,
-                    "description": "Subjective confidence in the fact (default 0.9)."
-                }
-            }
-        }),
-    }
-}
-
-fn link_context_tool() -> ToolDefinition {
-    ToolDefinition {
-        name: TOOL_LINK_CONTEXT.to_string(),
-        description:
-            "Breadth-first traversal of the doc link graph starting at the given id. \
-             Returns a list of reachable doc ids with their depth. Full bodies are not included; \
-             use memory_fetch to retrieve any doc."
+            "DOCUMENT GRAPH — breadth-first traversal of the doc link graph starting at the given \
+             id. Returns reachable doc ids with their depth. Full bodies are not included; use \
+             memory_doc_fetch for any doc you want to read in full."
                 .to_string(),
         input_schema: json!({
             "type": "object",
             "required": ["id"],
             "properties": {
-                "id": {"type": "string"},
-                "depth": {"type": "integer", "minimum": 1, "maximum": 3, "default": 2},
+                "id":       {"type": "string"},
+                "depth":    {"type": "integer", "minimum": 1, "maximum": 3, "default": 2},
                 "max_docs": {"type": "integer", "minimum": 1, "maximum": 20, "default": 10}
             }
         }),

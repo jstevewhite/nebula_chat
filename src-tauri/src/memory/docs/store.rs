@@ -145,7 +145,7 @@ pub fn scan_dir(docs_dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-/// Read the body of a doc by id, with no frontmatter, for `memory_fetch`.
+/// Read the body of a doc by id, with no frontmatter, for `memory_doc_fetch`.
 pub fn read_id(docs_dir: &Path, id: &str) -> Result<Option<ParsedDoc>> {
     let p = path_for(docs_dir, id);
     if !p.exists() {
