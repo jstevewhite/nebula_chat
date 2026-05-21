@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Server, Plus, Edit2, Book, Trash2, Palette, Brain, RefreshCw } from "lucide-react";
+import { openPath } from "@tauri-apps/plugin-opener";
+import { Server, Plus, Edit2, Book, Trash2, Palette, Brain, RefreshCw, Folder, Copy } from "lucide-react";
 import ProvidersSettings, { ProviderConfig } from "./ProvidersSettings";
 import PromptsSettings from "./PromptsSettings";
 import { ThemeSelector } from "./ThemeSelector";
@@ -693,7 +694,7 @@ export default function SettingsPage() {
                                         Auto-approve memory tools
                                     </label>
                                     <p className="text-xs text-[var(--color-text-tertiary)]">
-                                        Skip the per-call approval popup for <code className="font-mono">memory_remember</code> / <code className="font-mono">fetch</code> / <code className="font-mono">edit</code> / <code className="font-mono">forget</code> / <code className="font-mono">recall</code> / <code className="font-mono">link_context</code>. Memory tools only touch local markdown docs that you can audit on disk.
+                                        Skip the per-call approval popup for all <code className="font-mono">memory_doc_*</code> and <code className="font-mono">memory_fact_*</code> tools. They only touch local markdown docs and the SQLite knowledge graph, both of which you can audit on disk.
                                     </p>
                                 </div>
                                 <label className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)] select-none">
@@ -874,6 +875,17 @@ export default function SettingsPage() {
                                     }))}
                                 />
                             </div>
+                        </div>
+
+                        {/* Storage paths — diagnostic, read-only */}
+                        <div className="mt-4 border-t border-[var(--color-border-secondary)]/50 pt-4">
+                            <label className="block text-sm font-bold text-[var(--color-text-secondary)] mb-1">
+                                Storage locations
+                            </label>
+                            <p className="text-xs text-[var(--color-text-tertiary)] mb-2">
+                                Where Nebula writes data on this machine. Markdown docs under <code className="font-mono">memory/docs/</code> are user-editable — others are managed by the app.
+                            </p>
+                            <PathsPanel />
                         </div>
 
                     </div>
@@ -1476,5 +1488,109 @@ export default function SettingsPage() {
                 )
             }
         </div >
+    );
+}
+
+interface MemoryPaths {
+    config_dir: string;
+    settings_path: string;
+    sqlite_db: string;
+    message_index: string;
+    docs_dir: string;
+    docs_index: string;
+}
+
+/// Read-only display of the resolved storage paths. Each row has a copy and
+/// (where it makes sense) an "open folder" button that uses the opener plugin.
+function PathsPanel() {
+    const [paths, setPaths] = useState<MemoryPaths | null>(null);
+    const [err, setErr] = useState<string | null>(null);
+    const [copied, setCopied] = useState<string | null>(null);
+
+    useEffect(() => {
+        (async () => {
+            try {
+                const p = await invoke<MemoryPaths>("get_memory_paths");
+                setPaths(p);
+                setErr(null);
+            } catch (e) {
+                setErr(String(e));
+            }
+        })();
+    }, []);
+
+    const copyPath = async (key: string, value: string) => {
+        try {
+            await navigator.clipboard.writeText(value);
+            setCopied(key);
+            setTimeout(() => setCopied((c) => (c === key ? null : c)), 1500);
+        } catch (e) {
+            console.warn("clipboard write failed", e);
+        }
+    };
+
+    const openDir = async (value: string) => {
+        try {
+            await openPath(value);
+        } catch (e) {
+            console.warn("openPath failed", e);
+        }
+    };
+
+    if (err) {
+        return (
+            <div className="text-xs text-red-300 bg-red-900/30 border border-red-700/50 rounded p-2">
+                Failed to load paths: {err}
+            </div>
+        );
+    }
+    if (!paths) {
+        return <div className="text-xs italic text-[var(--color-text-tertiary)]">Loading…</div>;
+    }
+
+    const rows: { key: keyof MemoryPaths; label: string; openable: boolean }[] = [
+        { key: "config_dir", label: "Config directory", openable: true },
+        { key: "settings_path", label: "Settings file", openable: false },
+        { key: "sqlite_db", label: "SQLite database", openable: false },
+        { key: "message_index", label: "Message search index", openable: true },
+        { key: "docs_dir", label: "Memory documents", openable: true },
+        { key: "docs_index", label: "Docs search index", openable: true },
+    ];
+
+    return (
+        <div className="space-y-1">
+            {rows.map((r) => (
+                <div
+                    key={r.key}
+                    className="flex items-center gap-2 text-[11px] bg-[var(--color-bg-tertiary)]/50 border border-[var(--color-border-secondary)] rounded px-2 py-1"
+                >
+                    <div className="min-w-[150px] text-[var(--color-text-secondary)] font-semibold">
+                        {r.label}
+                    </div>
+                    <code
+                        className="flex-1 font-mono text-[var(--color-text-primary)] truncate"
+                        title={paths[r.key]}
+                    >
+                        {paths[r.key]}
+                    </code>
+                    <button
+                        onClick={() => copyPath(r.key, paths[r.key])}
+                        className="p-1 text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]"
+                        title={copied === r.key ? "Copied" : "Copy path"}
+                    >
+                        <Copy size={12} />
+                    </button>
+                    {r.openable && (
+                        <button
+                            onClick={() => openDir(paths[r.key])}
+                            className="p-1 text-[var(--color-text-tertiary)] hover:text-purple-400"
+                            title="Open in system file manager"
+                        >
+                            <Folder size={12} />
+                        </button>
+                    )}
+                </div>
+            ))}
+        </div>
     );
 }

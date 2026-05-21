@@ -1444,6 +1444,36 @@ async fn fetch_memory_doc(
 }
 
 #[derive(Clone, Serialize)]
+struct MemoryPaths {
+    config_dir: String,
+    settings_path: String,
+    sqlite_db: String,
+    message_index: String,
+    docs_dir: String,
+    docs_index: String,
+}
+
+/// Return the resolved filesystem paths for every place the memory subsystem
+/// writes data. Used by Settings → Long-term Memory to surface where the
+/// user's data actually lives on this machine.
+#[tauri::command]
+async fn get_memory_paths(app: tauri::AppHandle) -> Result<MemoryPaths, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let memory = config_dir.join("memory");
+    Ok(MemoryPaths {
+        config_dir: config_dir.to_string_lossy().into_owned(),
+        settings_path: config_dir.join("settings.json").to_string_lossy().into_owned(),
+        sqlite_db: config_dir.join("nebula.db").to_string_lossy().into_owned(),
+        message_index: config_dir
+            .join("fulltext_index")
+            .to_string_lossy()
+            .into_owned(),
+        docs_dir: memory.join("docs").to_string_lossy().into_owned(),
+        docs_index: memory.join("docs_index").to_string_lossy().into_owned(),
+    })
+}
+
+#[derive(Clone, Serialize)]
 struct ExtractionResult {
     extracted: usize,
     message: String,
@@ -3199,6 +3229,7 @@ pub fn run() {
             cleanup_invalid_tool_messages,
             list_memory_docs,
             fetch_memory_doc,
+            get_memory_paths,
             extract_facts_from_text,
             extract_facts_for_message,
             extract_session_end
