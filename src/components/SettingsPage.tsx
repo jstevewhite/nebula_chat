@@ -894,7 +894,7 @@ export default function SettingsPage() {
                                 Storage locations
                             </label>
                             <p className="text-xs text-[var(--color-text-tertiary)] mb-2">
-                                Where Nebula writes data on this machine. Markdown docs under <code className="font-mono">memory/docs/</code> are user-editable — others are managed by the app.
+                                Where Nebula writes data on this machine. Markdown files under <code className="font-mono">memory/docs/</code> and <code className="font-mono">skills/</code> are user-editable — others are managed by the app.
                             </p>
                             <PathsPanel />
                         </div>
@@ -1502,19 +1502,20 @@ export default function SettingsPage() {
     );
 }
 
-interface MemoryPaths {
+interface StoragePaths {
     config_dir: string;
     settings_path: string;
     sqlite_db: string;
     message_index: string;
     docs_dir: string;
     docs_index: string;
+    skills_dir: string;
 }
 
 /// Read-only display of the resolved storage paths. Each row has a copy and
 /// (where it makes sense) an "open folder" button that uses the opener plugin.
 function PathsPanel() {
-    const [paths, setPaths] = useState<MemoryPaths | null>(null);
+    const [paths, setPaths] = useState<StoragePaths | null>(null);
     const [err, setErr] = useState<string | null>(null);
     const [copied, setCopied] = useState<string | null>(null);
     const [openErr, setOpenErr] = useState<string | null>(null);
@@ -1522,7 +1523,7 @@ function PathsPanel() {
     useEffect(() => {
         (async () => {
             try {
-                const p = await invoke<MemoryPaths>("get_memory_paths");
+                const p = await invoke<StoragePaths>("get_storage_paths");
                 setPaths(p);
                 setErr(null);
             } catch (e) {
@@ -1575,13 +1576,14 @@ function PathsPanel() {
         return <div className="text-xs italic text-[var(--color-text-tertiary)]">Loading…</div>;
     }
 
-    const rows: { key: keyof MemoryPaths; label: string; openable: boolean }[] = [
+    const rows: { key: keyof StoragePaths; label: string; openable: boolean }[] = [
         { key: "config_dir", label: "Config directory", openable: true },
         { key: "settings_path", label: "Settings file", openable: false },
         { key: "sqlite_db", label: "SQLite database", openable: false },
         { key: "message_index", label: "Message search index", openable: true },
         { key: "docs_dir", label: "Memory documents", openable: true },
         { key: "docs_index", label: "Docs search index", openable: true },
+        { key: "skills_dir", label: "Skills", openable: true },
     ];
 
     return (
