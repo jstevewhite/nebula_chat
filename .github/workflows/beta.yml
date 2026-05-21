@@ -1,12 +1,24 @@
 # Manual beta release.
 #
 # Trigger from the Actions tab (Run workflow). Provide a version label like
-# `v0.5.2-beta.1`. Builds Linux (deb/rpm/AppImage), macOS (universal dmg),
-# and Windows (msi + nsis exe), and publishes them as a *prerelease* on GitHub.
+# `v0.5.2-beta.1`. Builds Linux x86_64 + arm64 (deb/rpm/AppImage), macOS
+# (universal dmg, signed + notarized when secrets are present), and Windows
+# (msi + nsis exe). Publishes them as a *prerelease* on GitHub.
 #
 # Note: Tauri uses tauri.conf.json's `version` to name the bundles. The tag
 # you enter here is only used for the GitHub release/tag — bundles will still
 # be named with whatever version is currently in tauri.conf.json.
+#
+# macOS signing & notarization are opt-in via these repo secrets:
+#   APPLE_CERTIFICATE              base64 of a Developer ID Application .p12
+#   APPLE_CERTIFICATE_PASSWORD     password for the .p12
+#   APPLE_SIGNING_IDENTITY         "Developer ID Application: Name (TEAMID)"
+#   APPLE_ID                       Apple ID email
+#   APPLE_PASSWORD                 app-specific password from appleid.apple.com
+#   APPLE_TEAM_ID                  10-char team id
+#   KEYCHAIN_PASSWORD              any string; only used inside the runner
+# When any of those are missing, the macOS job still builds — it just produces
+# an unsigned bundle that triggers Gatekeeper warnings on end-user machines.
 
 name: beta
 
@@ -36,6 +48,9 @@ jobs:
           - platform: ubuntu-22.04
             args: ''
             rust-targets: ''
+          - platform: ubuntu-22.04-arm
+            args: ''
+            rust-targets: ''
           - platform: macos-latest
             args: '--target universal-apple-darwin'
             rust-targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
@@ -49,7 +64,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Linux build deps
-        if: matrix.platform == 'ubuntu-22.04'
+        if: startsWith(matrix.platform, 'ubuntu-')
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -88,10 +103,30 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      # Import the Developer ID Application certificate into a temporary
+      # keychain so codesign can find it during the Tauri build. Skipped when
+      # APPLE_CERTIFICATE isn't set — the build still produces an unsigned
+      # bundle in that case.
+      - name: Import macOS signing certificate
+        if: matrix.platform == 'macos-latest' && env.APPLE_CERTIFICATE != ''
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          keychain-password: ${{ secrets.KEYCHAIN_PASSWORD }}
+
       - name: Build and upload to draft prerelease
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # tauri-action picks these up automatically for sign + notarize +
+          # staple. Empty values are treated as "skip" by the action.
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ inputs.version }}
           releaseName: 'Nebula ${{ inputs.version }} (beta)'
