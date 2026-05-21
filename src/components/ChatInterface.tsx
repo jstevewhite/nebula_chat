@@ -16,10 +16,11 @@ import TasksPanel from "./TasksPanel";
 import { getProviderIcon } from "../utils/providerIcons";
 import { CustomSelect } from "./ui/CustomSelect";
 
-// Built-in memory tool names. Kept in sync with
-// src-tauri/src/memory/docs/tools.rs::ALL_NAMES. Two namespaces:
-//   memory_doc_*  — markdown documents on disk
-//   memory_fact_* — atomic (s, p, o) triples in the KG
+// Built-in, in-process tool names. Auto-approved by default since they only
+// touch local audit-visible content the user can inspect on disk. Kept in
+// sync with the matching Rust constants:
+//   - memory_doc_*  / memory_fact_*  (src-tauri/src/memory/docs/tools.rs)
+//   - use_skill                       (src-tauri/src/skills/tools.rs)
 const MEMORY_TOOL_NAMES = new Set([
     "memory_fact_remember",
     "memory_fact_recall",
@@ -30,6 +31,7 @@ const MEMORY_TOOL_NAMES = new Set([
     "memory_doc_forget",
     "memory_doc_recall",
     "memory_doc_link_context",
+    "use_skill",
 ]);
 
 interface ToolCall {

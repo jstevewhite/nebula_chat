@@ -5,6 +5,7 @@ import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Server, Plus, Edit2, Book, Trash2, Palette, Brain, RefreshCw, Folder, Copy } from "lucide-react";
 import ProvidersSettings, { ProviderConfig } from "./ProvidersSettings";
 import PromptsSettings from "./PromptsSettings";
+import SkillsSettings from "./SkillsSettings";
 import { ThemeSelector } from "./ThemeSelector";
 import { CustomSelect } from "./ui/CustomSelect";
 import { useTheme } from "../contexts/ThemeContext";
@@ -628,6 +629,16 @@ export default function SettingsPage() {
             </h2>
             <div className="mb-10">
                 <PromptsSettings />
+            </div>
+
+            <h2 className="text-2xl font-bold mb-2 flex items-center gap-2 text-[var(--color-text-primary)]">
+                <Book className="text-purple-400" /> Skills
+            </h2>
+            <p className="text-xs text-[var(--color-text-tertiary)] mb-4">
+                Skills are reusable bundles of instructions the model can pull into context via the <code className="font-mono">use_skill</code> tool. Stored as markdown files in the skills folder; the slug + description shows up in every chat's system prompt so the model knows what's available.
+            </p>
+            <div className="mb-10">
+                <SkillsSettings />
             </div>
 
             <div className="bg-[var(--color-bg-secondary)] p-6 rounded-xl border border-[var(--color-border-primary)] shadow-xl mb-8">

@@ -22,12 +22,14 @@ pub use llm::capabilities;
 pub mod mcp;
 pub mod memory;
 pub mod security;
+pub mod skills;
 pub mod tasks;
 
 #[derive(Clone)]
 pub struct AppState {
     mcp_manager: Arc<McpManager>,
     librarian: Arc<Mutex<crate::memory::librarian::Librarian>>,
+    skills: Arc<crate::skills::SkillStore>,
     /// memory3 Phase 1: botmem-style doc store. None when docs are disabled or
     /// initialization failed (the rest of the app should keep working).
     doc_store: Arc<Mutex<Option<Arc<crate::memory::docs::DocStore>>>>,
@@ -803,6 +805,23 @@ async fn send_message(
             }
         }
 
+        // Inject the list of available skills so the model knows what `use_skill`
+        // can be called with. Only injected when skills exist (and only the slug
+        // + description per skill — bodies are pulled on demand by the tool).
+        if let Some(skills_block) = state.skills.render_for_system_prompt().await {
+            let skills_msg = Message {
+                id: None,
+                role: "system".to_string(),
+                content: Some(skills_block),
+                reasoning_content: None,
+                tool_calls: None,
+                tool_call_id: None,
+                attachments: None,
+                created_at: None,
+            };
+            final_messages.insert(0, skills_msg);
+        }
+
         // Inject System Prompt
         tracing::debug!("[DEBUG] Loading settings for system prompt...");
 
@@ -884,6 +903,17 @@ async fn send_message(
         };
         if doc_store_ready {
             for t in crate::memory::docs::tools::build_all() {
+                if !settings.disabled_tools.contains(&t.name) {
+                    tools.push(t);
+                }
+            }
+        }
+
+        // Inject the `use_skill` built-in tool. Only exposed when at least one
+        // skill exists on disk — otherwise it would just be a noisy entry.
+        let skill_summaries = state.skills.list().await;
+        if !skill_summaries.is_empty() {
+            for t in crate::skills::tools::build_all() {
                 if !settings.disabled_tools.contains(&t.name) {
                     tools.push(t);
                 }
@@ -1473,6 +1503,63 @@ async fn get_memory_paths(app: tauri::AppHandle) -> Result<MemoryPaths, String> 
     })
 }
 
+// ---------- Skills commands ----------
+
+#[tauri::command]
+async fn list_skills(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::skills::SkillSummary>, String> {
+    Ok(state.skills.list().await)
+}
+
+#[tauri::command]
+async fn get_skill(
+    state: State<'_, AppState>,
+    slug: String,
+) -> Result<Option<crate::skills::Skill>, String> {
+    Ok(state.skills.get(&slug).await)
+}
+
+#[tauri::command]
+async fn create_skill(
+    state: State<'_, AppState>,
+    slug: String,
+    name: String,
+    description: String,
+    body: String,
+) -> Result<(), String> {
+    state
+        .skills
+        .create(&slug, &name, &description, &body)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn update_skill(
+    state: State<'_, AppState>,
+    slug: String,
+    name: String,
+    description: String,
+    body: String,
+) -> Result<(), String> {
+    state
+        .skills
+        .update(&slug, &name, &description, &body)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_skill(state: State<'_, AppState>, slug: String) -> Result<(), String> {
+    state.skills.delete(&slug).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn reload_skills(state: State<'_, AppState>) -> Result<(), String> {
+    state.skills.reload().await.map_err(|e| e.to_string())
+}
+
 #[derive(Clone, Serialize)]
 struct ExtractionResult {
     extracted: usize,
@@ -1833,6 +1920,51 @@ async fn execute_tool(
             );
         }
 
+        return result;
+    }
+
+    // The `use_skill` tool is in-process: load the skill body and return it as
+    // the tool result. Audit-logged like memory tools so the user can see
+    // which skills the model has pulled into context.
+    if crate::skills::tools::is_skill_tool(&name) {
+        let slug = args
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "use_skill: missing name".to_string())?
+            .trim()
+            .to_string();
+        let result: Result<serde_json::Value, String> = match state.skills.get(&slug).await {
+            Some(skill) => Ok(serde_json::json!({
+                "slug": skill.slug,
+                "name": skill.name,
+                "description": skill.description,
+                "body": skill.body,
+            })),
+            None => Err(format!(
+                "use_skill: no such skill '{slug}'. See the available-skills list in the system prompt."
+            )),
+        };
+        if let Some(cid) = conversation_id.as_deref() {
+            let (status, preview, full) = match &result {
+                Ok(v) => {
+                    let s = v.to_string();
+                    let preview: String = s.chars().take(240).collect();
+                    ("success", preview, s)
+                }
+                Err(e) => ("error", e.clone(), e.clone()),
+            };
+            let lib = state.librarian.lock().await;
+            let _ = lib.audit.log_execution(
+                cid,
+                tool_call_id.as_deref().unwrap_or("use-skill"),
+                &name,
+                "skills",
+                &args.to_string(),
+                &preview,
+                &full,
+                status,
+            );
+        }
         return result;
     }
 
@@ -3081,11 +3213,19 @@ pub fn run() {
                 let doc_store_slot: Arc<Mutex<Option<Arc<crate::memory::docs::DocStore>>>> =
                     Arc::new(Mutex::new(None));
 
-                // 3. AppState
+                // 3. SkillStore — materialises built-ins on first run, then
+                //    scans the skills dir into memory. Synchronous + cheap.
+                let skills_dir = config_dir.join("skills");
+                let skills_store = crate::skills::SkillStore::new(skills_dir)
+                    .await
+                    .expect("SkillStore init failed");
+
+                // 4. AppState
                 let state = AppState {
                     mcp_manager: mcp_manager.clone(),
                     librarian: librarian_arc.clone(),
                     doc_store: doc_store_slot.clone(),
+                    skills: skills_store,
                     active_task: Arc::new(Mutex::new(None)),
                     context_approvals: Arc::new(Mutex::new(HashMap::new())),
                 };
@@ -3232,7 +3372,13 @@ pub fn run() {
             get_memory_paths,
             extract_facts_from_text,
             extract_facts_for_message,
-            extract_session_end
+            extract_session_end,
+            list_skills,
+            get_skill,
+            create_skill,
+            update_skill,
+            delete_skill,
+            reload_skills
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
