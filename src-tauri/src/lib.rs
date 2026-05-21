@@ -36,20 +36,66 @@ pub struct AppState {
     context_approvals: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
 }
 
-/// Instantiate the configured embedding provider. Returns `None` when no
-/// provider is available in this build (e.g. when the `local-embeddings`
-/// feature is disabled). Phase 4 will add a remote provider here.
-async fn init_embedder() -> Option<Arc<dyn crate::memory::docs::embedding::EmbeddingProvider>> {
-    #[cfg(feature = "local-embeddings")]
-    {
-        match crate::memory::docs::embedding::FastembedProvider::try_default().await {
-            Ok(p) => return Some(Arc::new(p) as Arc<dyn crate::memory::docs::embedding::EmbeddingProvider>),
-            Err(e) => {
-                tracing::warn!("Fastembed init failed; docs recall will be BM25-only: {e}");
+/// Instantiate the configured embedding provider. Returns `None` when the
+/// selected provider is unavailable in this build (e.g. `fastembed` chosen but
+/// the `local-embeddings` feature is off) or fails to initialise — recall then
+/// falls back to BM25-only.
+async fn init_embedder(
+    settings: &Settings,
+) -> Option<Arc<dyn crate::memory::docs::embedding::EmbeddingProvider>> {
+    match settings.memory_embedding_provider.as_str() {
+        "remote" => {
+            let provider_id = match settings.memory_remote_embedding_provider_id.as_deref() {
+                Some(id) if !id.is_empty() => id,
+                _ => {
+                    tracing::warn!(
+                        "memory_embedding_provider=remote but no memory_remote_embedding_provider_id configured"
+                    );
+                    return None;
+                }
+            };
+            let config = match settings.providers.get(provider_id) {
+                Some(c) => c.clone(),
+                None => {
+                    tracing::warn!(
+                        "memory_remote_embedding_provider_id '{provider_id}' is not in providers"
+                    );
+                    return None;
+                }
+            };
+            match crate::memory::docs::embedding::RemoteEmbeddingProvider::try_new(
+                provider_id.to_string(),
+                settings.memory_remote_embedding_model.clone(),
+                &config,
+            )
+            .await
+            {
+                Ok(p) => Some(
+                    Arc::new(p)
+                        as Arc<dyn crate::memory::docs::embedding::EmbeddingProvider>,
+                ),
+                Err(e) => {
+                    tracing::warn!(
+                        "Remote embedding init failed; docs recall will be BM25-only: {e}"
+                    );
+                    None
+                }
             }
         }
+        // "fastembed" or anything unknown falls through to the local provider.
+        _ => {
+            #[cfg(feature = "local-embeddings")]
+            {
+                match crate::memory::docs::embedding::FastembedProvider::try_default().await {
+                    Ok(p) => return Some(Arc::new(p) as Arc<dyn crate::memory::docs::embedding::EmbeddingProvider>),
+                    Err(e) => {
+                        tracing::warn!("Fastembed init failed; docs recall will be BM25-only: {e}");
+                    }
+                }
+            }
+            None
+        }
     }
-    None
 }
 
 #[tauri::command]
@@ -1705,7 +1751,33 @@ async fn execute_tool(
         let Some(store) = store else {
             return Err("Memory subsystem is not ready yet. Try again in a moment.".into());
         };
-        return dispatch_memory_tool(&store, &state.librarian, &name, args).await;
+        let result = dispatch_memory_tool(&store, &state.librarian, &name, args.clone()).await;
+
+        // memory3 Phase 4: log every memory-tool call to the audit log so the
+        // user can see exactly what the LLM wrote into their local stores.
+        if let Some(cid) = conversation_id.as_deref() {
+            let (status, preview, full) = match &result {
+                Ok(v) => {
+                    let s = v.to_string();
+                    let preview: String = s.chars().take(240).collect();
+                    ("success", preview, s)
+                }
+                Err(e) => ("error", e.clone(), e.clone()),
+            };
+            let lib = state.librarian.lock().await;
+            let _ = lib.audit.log_execution(
+                cid,
+                tool_call_id.as_deref().unwrap_or("memory-tool"),
+                &name,
+                "memory",
+                &args.to_string(),
+                &preview,
+                &full,
+                status,
+            );
+        }
+
+        return result;
     }
 
     // 2. Identify Server
@@ -2973,7 +3045,10 @@ pub fn run() {
                     tauri::async_runtime::spawn(async move {
                         let docs_dir = config_dir.join("memory").join("docs");
                         let docs_index_dir = config_dir.join("memory").join("docs_index");
-                        let embedder = init_embedder().await;
+                        let settings_path_for_embed = config_dir.join("settings.json");
+                        let settings_for_embed =
+                            Settings::load_migrated(&settings_path_for_embed);
+                        let embedder = init_embedder(&settings_for_embed).await;
                         match crate::memory::docs::DocStore::new(
                             docs_dir,
                             librarian_for_docs,
@@ -2983,6 +3058,20 @@ pub fn run() {
                         .await
                         {
                             Ok(store) => {
+                                // Forward DocStore progress events to the
+                                // frontend so the user sees re-embed activity.
+                                let app_for_progress = app_handle_for_docs.clone();
+                                store.set_progress_sink(Arc::new(move |phase, current, total| {
+                                    use tauri::Emitter;
+                                    let _ = app_for_progress.emit(
+                                        "memory:reembed-progress",
+                                        serde_json::json!({
+                                            "phase": phase,
+                                            "current": current,
+                                            "total": total,
+                                        }),
+                                    );
+                                }));
                                 match store.startup_reconcile().await {
                                     Ok(summary) => tracing::info!(
                                         "DocStore reconcile: scanned={} ingested={} updated={} deleted={}",

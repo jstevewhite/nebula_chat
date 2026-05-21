@@ -136,6 +136,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     // Side Panels
     const [activeSidePanel, setActiveSidePanel] = useState<'none' | 'memory' | 'tasks'>('none');
     const [recentMemories, setRecentMemories] = useState<string[]>([]);
+    const [reembedProgress, setReembedProgress] = useState<{ current: number; total: number } | null>(null);
 
     // Settings-driven toggles
     const [contextInspectionEnabled, setContextInspectionEnabled] = useState(false);
@@ -157,6 +158,24 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         });
         return () => {
             unlistenPromise.then(unlisten => unlisten());
+        };
+    }, []);
+
+    // memory3 Phase 4: re-embed progress banner.
+    useEffect(() => {
+        const unlistenPromise = listen<{ phase: string; current: number; total: number }>(
+            "memory:reembed-progress",
+            (event) => {
+                const { current, total } = event.payload;
+                if (total === 0 || current >= total) {
+                    setReembedProgress(null);
+                } else {
+                    setReembedProgress({ current, total });
+                }
+            },
+        );
+        return () => {
+            unlistenPromise.then((unlisten) => unlisten());
         };
     }, []);
 
@@ -1622,6 +1641,12 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 ref={scrollRef}
                 onScroll={handleScroll}
             >
+                {reembedProgress && (
+                    <div className="sticky top-0 z-10 -mt-4 -mx-4 mb-2 px-4 py-2 bg-purple-900/40 border-b border-purple-700/60 text-xs text-purple-100 flex items-center gap-2">
+                        <Brain size={14} className="text-purple-300 animate-pulse" />
+                        Re-embedding memory documents: {reembedProgress.current} / {reembedProgress.total}
+                    </div>
+                )}
                 {messages.map((m, i) => (
                     <ChatMessage
                         key={m.id || `${m.role}-${m.created_at ?? "?"}-${i}`}

@@ -176,6 +176,26 @@ pub struct Settings {
     ///   work, but no session-end pass.
     #[serde(default = "default_extraction_policy")]
     pub fact_extraction_policy: String,
+
+    /// Embedding backend selector for the docs subsystem. One of `"fastembed"`
+    /// (local ONNX via the `local-embeddings` feature) or `"remote"` (call the
+    /// embeddings endpoint of a configured LLM provider).
+    #[serde(default = "default_embedding_provider")]
+    pub memory_embedding_provider: String,
+
+    /// fastembed model identifier when `memory_embedding_provider = "fastembed"`.
+    /// Currently only `bge-small-en-v1.5` is wired (384 dim).
+    #[serde(default = "default_fastembed_model")]
+    pub memory_fastembed_model: String,
+
+    /// Key into `providers` that hosts the embedding endpoint when
+    /// `memory_embedding_provider = "remote"`. None disables remote embeddings.
+    #[serde(default)]
+    pub memory_remote_embedding_provider_id: Option<String>,
+
+    /// Remote embedding model name (e.g. `text-embedding-3-small`).
+    #[serde(default = "default_remote_embedding_model")]
+    pub memory_remote_embedding_model: String,
     // Show per-message timestamps in the chat UI.
     #[serde(default = "default_false_bool")]
     pub show_message_timestamps: bool,
@@ -216,6 +236,15 @@ fn default_recall_floor() -> f32 {
 }
 fn default_extraction_policy() -> String {
     "explicit".to_string()
+}
+fn default_embedding_provider() -> String {
+    "fastembed".to_string()
+}
+fn default_fastembed_model() -> String {
+    "bge-small-en-v1.5".to_string()
+}
+fn default_remote_embedding_model() -> String {
+    "text-embedding-3-small".to_string()
 }
 
 fn default_uncompressed_count() -> usize {
@@ -387,6 +416,27 @@ impl Settings {
             .and_then(|v| v.as_str())
         {
             s.fact_extraction_policy = p.to_string();
+        }
+        if let Some(p) = val
+            .get("memory_embedding_provider")
+            .and_then(|v| v.as_str())
+        {
+            s.memory_embedding_provider = p.to_string();
+        }
+        if let Some(p) = val.get("memory_fastembed_model").and_then(|v| v.as_str()) {
+            s.memory_fastembed_model = p.to_string();
+        }
+        if let Some(p) = val
+            .get("memory_remote_embedding_provider_id")
+            .and_then(|v| v.as_str())
+        {
+            s.memory_remote_embedding_provider_id = Some(p.to_string());
+        }
+        if let Some(p) = val
+            .get("memory_remote_embedding_model")
+            .and_then(|v| v.as_str())
+        {
+            s.memory_remote_embedding_model = p.to_string();
         }
         if let Some(theme) = val.get("theme").and_then(|v| v.as_str()) {
             s.theme = theme.to_string();

@@ -32,6 +32,8 @@ use self::watcher::DocsWatcher;
 
 const DEFAULT_DIM: usize = 384;
 
+pub type ProgressSink = Arc<dyn Fn(&str, usize, usize) + Send + Sync>;
+
 pub struct DocStore {
     docs_dir: PathBuf,
     librarian: Arc<Mutex<Librarian>>,
@@ -40,6 +42,7 @@ pub struct DocStore {
     embedder: Option<Arc<dyn EmbeddingProvider>>,
     doc_locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
     watcher: StdMutex<Option<DocsWatcher>>,
+    progress_sink: StdMutex<Option<ProgressSink>>,
 }
 
 #[derive(Debug, Default, Clone, serde::Serialize)]
@@ -48,6 +51,9 @@ pub struct ReconcileSummary {
     pub ingested: usize,
     pub updated: usize,
     pub deleted: usize,
+    /// Number of docs re-embedded because the configured embedding model
+    /// changed (vectors table got truncated).
+    pub reembedded: usize,
 }
 
 impl DocStore {
@@ -98,11 +104,57 @@ impl DocStore {
             embedder,
             doc_locks: StdMutex::new(HashMap::new()),
             watcher: StdMutex::new(None),
+            progress_sink: StdMutex::new(None),
         }))
     }
 
     pub fn docs_dir(&self) -> &Path {
         &self.docs_dir
+    }
+
+    /// Re-embed every doc on disk. Used when the embedding provider or model
+    /// changes and the vectors table has been truncated. Returns the number
+    /// of docs successfully re-ingested. Emits `memory:reembed-progress`
+    /// events via the optional progress sink set with `set_progress_sink`.
+    pub async fn reembed_all(self: &Arc<Self>) -> Result<usize> {
+        let files = store::scan_dir(&self.docs_dir)?;
+        let total = files.len();
+        let mut done = 0;
+        self.emit_progress("reembed", 0, total);
+        for path in files {
+            match store::read_path(&path) {
+                Ok(parsed) => {
+                    // Force re-ingest by skipping the mtime short-circuit.
+                    let mut parsed = parsed;
+                    parsed.mtime_ns = i64::MAX;
+                    if let Err(e) = self.ingest_parsed(parsed).await {
+                        tracing::warn!("reembed: failed on {}: {e}", path.display());
+                    } else {
+                        done += 1;
+                    }
+                }
+                Err(e) => tracing::warn!("reembed: skip unreadable {}: {e}", path.display()),
+            }
+            self.emit_progress("reembed", done, total);
+        }
+        Ok(done)
+    }
+
+    /// Install a sink for progress events. Events look like
+    /// `(phase, current, total)`. Used by the frontend to render a banner.
+    pub fn set_progress_sink(&self, sink: ProgressSink) {
+        *self.progress_sink.lock().expect("progress sink poisoned") = Some(sink);
+    }
+
+    fn emit_progress(&self, phase: &str, current: usize, total: usize) {
+        if let Some(sink) = self
+            .progress_sink
+            .lock()
+            .expect("progress sink poisoned")
+            .as_ref()
+        {
+            sink(phase, current, total);
+        }
     }
 
     pub fn embedder(&self) -> Option<&Arc<dyn EmbeddingProvider>> {
@@ -180,6 +232,24 @@ impl DocStore {
 
         // Rebuild vector cache from SQLite.
         self.reload_vector_cache().await?;
+
+        // Re-embed migration: if any docs exist on disk but the vector cache
+        // is empty (e.g. the user switched embedding model and we truncated
+        // doc_chunk_vecs), regenerate vectors for every chunk by re-ingesting
+        // each doc. Embedding-free runs (no provider) are skipped.
+        if self.embedder.is_some() && !on_disk_ids.is_empty() {
+            let cache_empty = {
+                let guard = self.vectors.read().expect("vector cache poisoned");
+                guard.is_empty()
+            };
+            if cache_empty {
+                tracing::info!(
+                    "vector cache empty after reconcile; re-embedding {} docs",
+                    on_disk_ids.len()
+                );
+                summary.reembedded = self.reembed_all().await?;
+            }
+        }
 
         Ok(summary)
     }

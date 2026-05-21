@@ -17,9 +17,11 @@ pub trait EmbeddingProvider: Send + Sync {
 
 #[cfg(feature = "local-embeddings")]
 pub mod fastembed_provider;
+pub mod remote;
 
 #[cfg(feature = "local-embeddings")]
 pub use fastembed_provider::FastembedProvider;
+pub use remote::RemoteEmbeddingProvider;
 
 /// Pack a slice of f32 into little-endian bytes for SQLite BLOB storage.
 pub fn pack_f32(v: &[f32]) -> Vec<u8> {

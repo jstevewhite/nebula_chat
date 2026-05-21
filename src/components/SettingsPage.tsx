@@ -286,6 +286,14 @@ export default function SettingsPage() {
                     fullSettings.memory_recall_score_floor ?? latest.memory_recall_score_floor,
                 fact_extraction_policy:
                     fullSettings.fact_extraction_policy ?? latest.fact_extraction_policy,
+                memory_embedding_provider:
+                    fullSettings.memory_embedding_provider ?? latest.memory_embedding_provider,
+                memory_fastembed_model:
+                    fullSettings.memory_fastembed_model ?? latest.memory_fastembed_model,
+                memory_remote_embedding_provider_id:
+                    fullSettings.memory_remote_embedding_provider_id ?? latest.memory_remote_embedding_provider_id,
+                memory_remote_embedding_model:
+                    fullSettings.memory_remote_embedding_model ?? latest.memory_remote_embedding_model,
                 context_model: fullSettings.context_model ?? latest.context_model,
                 context_turns: fullSettings.context_turns ?? latest.context_turns,
 
@@ -717,6 +725,51 @@ export default function SettingsPage() {
                                     />
                                     Auto-inject
                                 </label>
+                            </div>
+
+                            <div className="mb-4 border-t border-[var(--color-border-primary)]/50 pt-4">
+                                <label className="block text-sm font-bold text-[var(--color-text-secondary)] mb-1">
+                                    Embedding source
+                                </label>
+                                <p className="text-xs text-[var(--color-text-tertiary)] mb-2">
+                                    How memory documents are embedded for semantic recall. Changing this re-embeds every doc on the next app start.
+                                </p>
+                                <select
+                                    className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded px-2 py-1 text-sm text-[var(--color-text-primary)] mb-2"
+                                    value={fullSettings.memory_embedding_provider ?? "fastembed"}
+                                    onChange={(e) => setFullSettings({ ...fullSettings, memory_embedding_provider: e.target.value })}
+                                >
+                                    <option value="fastembed">Local (fastembed, BGE-small)</option>
+                                    <option value="remote">Remote (configured provider)</option>
+                                </select>
+
+                                {(fullSettings.memory_embedding_provider ?? "fastembed") === "remote" && (
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <div>
+                                            <label className="block text-xs text-[var(--color-text-tertiary)] mb-1">Provider</label>
+                                            <select
+                                                className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded px-2 py-1 text-sm text-[var(--color-text-primary)]"
+                                                value={fullSettings.memory_remote_embedding_provider_id ?? ""}
+                                                onChange={(e) => setFullSettings({ ...fullSettings, memory_remote_embedding_provider_id: e.target.value || null })}
+                                            >
+                                                <option value="">— pick a provider —</option>
+                                                {Object.keys(fullSettings.providers ?? {}).map((pid) => (
+                                                    <option key={pid} value={pid}>{pid}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs text-[var(--color-text-tertiary)] mb-1">Model</label>
+                                            <input
+                                                type="text"
+                                                className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded px-2 py-1 text-sm text-[var(--color-text-primary)]"
+                                                placeholder="text-embedding-3-small"
+                                                value={fullSettings.memory_remote_embedding_model ?? ""}
+                                                onChange={(e) => setFullSettings({ ...fullSettings, memory_remote_embedding_model: e.target.value })}
+                                            />
+                                        </div>
+                                    </div>
+                                )}
                             </div>
 
                             <div className="mb-4">
