@@ -142,6 +142,13 @@ pub struct Settings {
     /// When true, the built-in `update_tasks` tool is hidden from the LLM.
     #[serde(default = "default_false_bool")]
     pub disable_builtin_task_tool: bool,
+
+    /// When true, the six memory_* tools (memory_remember / fetch / edit /
+    /// forget / recall / link_context) skip the per-call approval popup and
+    /// execute immediately. Default true: tool calls only touch local audit-
+    /// visible markdown docs, and prompting on every call drowns the UX.
+    #[serde(default = "default_true_bool")]
+    pub memory_tools_auto_approve: bool,
     // Show per-message timestamps in the chat UI.
     #[serde(default = "default_false_bool")]
     pub show_message_timestamps: bool,
@@ -316,6 +323,12 @@ impl Settings {
         }
         if let Some(mem_enabled) = val.get("memory_enabled").and_then(|v| v.as_bool()) {
             s.memory_enabled = mem_enabled;
+        }
+        if let Some(b) = val
+            .get("memory_tools_auto_approve")
+            .and_then(|v| v.as_bool())
+        {
+            s.memory_tools_auto_approve = b;
         }
         if let Some(theme) = val.get("theme").and_then(|v| v.as_str()) {
             s.theme = theme.to_string();

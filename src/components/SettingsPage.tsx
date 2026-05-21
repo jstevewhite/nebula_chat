@@ -276,6 +276,8 @@ export default function SettingsPage() {
                 ...latest,
                 providers,
                 memory_enabled: fullSettings.memory_enabled ?? latest.memory_enabled,
+                memory_tools_auto_approve:
+                    fullSettings.memory_tools_auto_approve ?? latest.memory_tools_auto_approve,
                 context_model: fullSettings.context_model ?? latest.context_model,
                 context_turns: fullSettings.context_turns ?? latest.context_turns,
 
@@ -666,6 +668,26 @@ export default function SettingsPage() {
                                         className="h-4 w-4 rounded border-[var(--color-border-secondary)] bg-[var(--color-bg-primary)]"
                                     />
                                     Enabled
+                                </label>
+                            </div>
+
+                            <div className="flex items-center justify-between gap-4 mb-3">
+                                <div>
+                                    <label className="block text-sm font-bold text-[var(--color-text-secondary)]">
+                                        Auto-approve memory tools
+                                    </label>
+                                    <p className="text-xs text-[var(--color-text-tertiary)]">
+                                        Skip the per-call approval popup for <code className="font-mono">memory_remember</code> / <code className="font-mono">fetch</code> / <code className="font-mono">edit</code> / <code className="font-mono">forget</code> / <code className="font-mono">recall</code> / <code className="font-mono">link_context</code>. Memory tools only touch local markdown docs that you can audit on disk.
+                                    </p>
+                                </div>
+                                <label className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)] select-none">
+                                    <input
+                                        type="checkbox"
+                                        checked={fullSettings.memory_tools_auto_approve ?? true}
+                                        onChange={(e) => setFullSettings({ ...fullSettings, memory_tools_auto_approve: e.target.checked })}
+                                        className="h-4 w-4 rounded border-[var(--color-border-secondary)] bg-[var(--color-bg-primary)]"
+                                    />
+                                    Auto-approve
                                 </label>
                             </div>
 

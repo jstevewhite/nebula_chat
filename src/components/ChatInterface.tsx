@@ -16,6 +16,17 @@ import TasksPanel from "./TasksPanel";
 import { getProviderIcon } from "../utils/providerIcons";
 import { CustomSelect } from "./ui/CustomSelect";
 
+// Built-in memory tool names (memory3 Phase 1). Kept in sync with
+// src-tauri/src/memory/docs/tools.rs::ALL_NAMES.
+const MEMORY_TOOL_NAMES = new Set([
+    "memory_remember",
+    "memory_fetch",
+    "memory_edit",
+    "memory_forget",
+    "memory_recall",
+    "memory_link_context",
+]);
+
 interface ToolCall {
     id: string;
     function: {
@@ -283,7 +294,13 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         // Built-in update_tasks is auto-approved (no external side effects);
                         // the disable_builtin_task_tool setting hides it from the LLM entirely,
                         // so if we see it here it's enabled and safe to auto-run.
-                        const isAutoApproved = (name: string) => name === "update_tasks" || !!toolPolicies[name];
+                        // The six memory_* tools are auto-approved by default — they only touch
+                        // local audit-visible markdown docs. The user can disable that in settings.
+                        const memoryAutoApprove = fullSettings?.memory_tools_auto_approve ?? true;
+                        const isAutoApproved = (name: string) =>
+                            name === "update_tasks"
+                            || (memoryAutoApprove && MEMORY_TOOL_NAMES.has(name))
+                            || !!toolPolicies[name];
                         const allAuto = toolsToRun.every(t => isAutoApproved(t.name));
                         if (allAuto) {
                             runTools(toolsToRun, history);
@@ -1039,7 +1056,13 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         // Built-in update_tasks is auto-approved (no external side effects);
                         // the disable_builtin_task_tool setting hides it from the LLM entirely,
                         // so if we see it here it's enabled and safe to auto-run.
-                        const isAutoApproved = (name: string) => name === "update_tasks" || !!toolPolicies[name];
+                        // The six memory_* tools are auto-approved by default — they only touch
+                        // local audit-visible markdown docs. The user can disable that in settings.
+                        const memoryAutoApprove = fullSettings?.memory_tools_auto_approve ?? true;
+                        const isAutoApproved = (name: string) =>
+                            name === "update_tasks"
+                            || (memoryAutoApprove && MEMORY_TOOL_NAMES.has(name))
+                            || !!toolPolicies[name];
                         const allAuto = toolsToRun.every(t => isAutoApproved(t.name));
 
                         if (allAuto) {
