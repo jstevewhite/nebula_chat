@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Server, Plus, Edit2, Book, Trash2, Palette, Brain, RefreshCw, Folder, Copy } from "lucide-react";
 import ProvidersSettings, { ProviderConfig } from "./ProvidersSettings";
 import PromptsSettings from "./PromptsSettings";
@@ -1506,6 +1506,7 @@ function PathsPanel() {
     const [paths, setPaths] = useState<MemoryPaths | null>(null);
     const [err, setErr] = useState<string | null>(null);
     const [copied, setCopied] = useState<string | null>(null);
+    const [openErr, setOpenErr] = useState<string | null>(null);
 
     useEffect(() => {
         (async () => {
@@ -1529,11 +1530,26 @@ function PathsPanel() {
         }
     };
 
+    // Open a directory in the OS file manager. `openPath` opens the directory
+    // itself; if it doesn't exist yet (e.g. no docs created on a fresh install)
+    // we fall back to `revealItemInDir`, which shows the target highlighted in
+    // its parent — usable even when the leaf doesn't exist.
     const openDir = async (value: string) => {
+        setOpenErr(null);
         try {
             await openPath(value);
+            return;
         } catch (e) {
-            console.warn("openPath failed", e);
+            const primaryErr = String(e);
+            try {
+                await revealItemInDir(value);
+                return;
+            } catch (e2) {
+                const msg = `${primaryErr} (revealItemInDir fallback also failed: ${e2})`;
+                console.warn("open in file manager failed", msg);
+                setOpenErr(msg);
+                setTimeout(() => setOpenErr(null), 6000);
+            }
         }
     };
 
@@ -1559,6 +1575,11 @@ function PathsPanel() {
 
     return (
         <div className="space-y-1">
+            {openErr && (
+                <div className="text-[11px] text-red-300 bg-red-900/30 border border-red-700/50 rounded p-2">
+                    Could not open in file manager: {openErr}
+                </div>
+            )}
             {rows.map((r) => (
                 <div
                     key={r.key}
