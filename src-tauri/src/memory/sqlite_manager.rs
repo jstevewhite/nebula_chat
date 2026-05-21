@@ -354,6 +354,323 @@ impl SqliteManager {
         Ok(())
     }
 
+    /// Migration v6: docs subsystem (memory3 redesign, Phase 1).
+    ///
+    /// Schema for botmem-style markdown docs that live alongside the existing
+    /// `messages` / `facts` tables. Embeddings are stored as raw little-endian
+    /// f32 BLOBs and loaded into an in-memory cache at startup — v1 deliberately
+    /// avoids `sqlite-vec` to keep cross-platform builds simple.
+    pub fn migrate_docs_v1(&self) -> Result<()> {
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS docs (
+                id          TEXT PRIMARY KEY,
+                title       TEXT NOT NULL,
+                tags_json   TEXT NOT NULL DEFAULT '[]',
+                path        TEXT NOT NULL,
+                mtime_ns    INTEGER NOT NULL,
+                created_at  TEXT NOT NULL,
+                updated_at  TEXT NOT NULL
+            )",
+            [],
+        )?;
+
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS doc_chunks (
+                chunk_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+                doc_id      TEXT NOT NULL REFERENCES docs(id) ON DELETE CASCADE,
+                ord         INTEGER NOT NULL,
+                text        TEXT NOT NULL,
+                text_hash   TEXT NOT NULL,
+                char_start  INTEGER NOT NULL,
+                char_end    INTEGER NOT NULL
+            )",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_doc_chunks_doc ON doc_chunks(doc_id)",
+            [],
+        )?;
+
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS doc_links (
+                src_doc_id  TEXT NOT NULL REFERENCES docs(id) ON DELETE CASCADE,
+                dst_doc_id  TEXT NOT NULL,
+                PRIMARY KEY (src_doc_id, dst_doc_id)
+            )",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_doc_links_dst ON doc_links(dst_doc_id)",
+            [],
+        )?;
+
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS doc_chunk_vecs (
+                chunk_id  INTEGER PRIMARY KEY REFERENCES doc_chunks(chunk_id) ON DELETE CASCADE,
+                embedding BLOB NOT NULL
+            )",
+            [],
+        )?;
+
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS memory_meta (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )",
+            [],
+        )?;
+
+        Ok(())
+    }
+
+    /// Read a value from the `memory_meta` key/value table.
+    pub fn meta_get(&self, key: &str) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare("SELECT value FROM memory_meta WHERE key = ?1")?;
+        let v = stmt.query_row(params![key], |row| row.get::<_, String>(0)).optional()?;
+        Ok(v)
+    }
+
+    /// Upsert a value in the `memory_meta` key/value table.
+    pub fn meta_set(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO memory_meta(key, value) VALUES(?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    // ---------- docs subsystem (memory3 Phase 1) ----------
+
+    /// Upsert a doc row. Returns nothing; callers manage chunks/links separately.
+    pub fn upsert_doc_row(
+        &self,
+        id: &str,
+        title: &str,
+        tags_json: &str,
+        path: &str,
+        mtime_ns: i64,
+        created_at: &str,
+        updated_at: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO docs(id, title, tags_json, path, mtime_ns, created_at, updated_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(id) DO UPDATE SET
+                 title      = excluded.title,
+                 tags_json  = excluded.tags_json,
+                 path       = excluded.path,
+                 mtime_ns   = excluded.mtime_ns,
+                 updated_at = excluded.updated_at",
+            params![id, title, tags_json, path, mtime_ns, created_at, updated_at],
+        )?;
+        Ok(())
+    }
+
+    /// Fetch a doc row by id. Returns (title, tags_json, path, mtime_ns, created_at, updated_at).
+    pub fn get_doc_row(
+        &self,
+        id: &str,
+    ) -> Result<Option<(String, String, String, i64, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT title, tags_json, path, mtime_ns, created_at, updated_at FROM docs WHERE id = ?1",
+        )?;
+        let row = stmt
+            .query_row(params![id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            })
+            .optional()?;
+        Ok(row)
+    }
+
+    /// List all doc rows. Returns (id, title, tags_json, path, mtime_ns, created_at, updated_at).
+    pub fn list_doc_rows(
+        &self,
+    ) -> Result<Vec<(String, String, String, String, i64, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, tags_json, path, mtime_ns, created_at, updated_at \
+             FROM docs ORDER BY updated_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// Delete a doc and cascade chunks, vectors, and links.
+    pub fn delete_doc_row(&self, id: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM docs WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Replace all chunks for a doc. Embeddings must be inserted separately via
+    /// `insert_doc_chunk_vec` keyed on the chunk_id this call assigns. Returns
+    /// the inserted (chunk_id, text_hash, ord) tuples in the order written.
+    pub fn replace_doc_chunks(
+        &self,
+        doc_id: &str,
+        chunks: &[(String, String, usize, usize)], // (text, text_hash, char_start, char_end)
+    ) -> Result<Vec<(i64, String, usize)>> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM doc_chunks WHERE doc_id = ?1", params![doc_id])?;
+        let mut out = Vec::with_capacity(chunks.len());
+        for (ord, (text, hash, char_start, char_end)) in chunks.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO doc_chunks(doc_id, ord, text, text_hash, char_start, char_end)
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    doc_id,
+                    ord as i64,
+                    text,
+                    hash,
+                    *char_start as i64,
+                    *char_end as i64,
+                ],
+            )?;
+            let cid = tx.last_insert_rowid();
+            out.push((cid, hash.clone(), ord));
+        }
+        tx.commit()?;
+        Ok(out)
+    }
+
+    /// Insert or replace an embedding for a chunk. Embedding is packed
+    /// little-endian f32.
+    pub fn insert_doc_chunk_vec(&self, chunk_id: i64, embedding: &[u8]) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO doc_chunk_vecs(chunk_id, embedding) VALUES(?1, ?2)
+             ON CONFLICT(chunk_id) DO UPDATE SET embedding = excluded.embedding",
+            params![chunk_id, embedding],
+        )?;
+        Ok(())
+    }
+
+    /// Load all chunk embeddings. Returns (chunk_id, doc_id, embedding_bytes).
+    pub fn load_all_chunk_vecs(&self) -> Result<Vec<(i64, String, Vec<u8>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT v.chunk_id, c.doc_id, v.embedding \
+             FROM doc_chunk_vecs v JOIN doc_chunks c ON c.chunk_id = v.chunk_id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// Truncate the vectors table. Used when the embedding model changes.
+    pub fn truncate_doc_chunk_vecs(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM doc_chunk_vecs", [])?;
+        Ok(())
+    }
+
+    /// Fetch a single chunk by id. Returns (doc_id, ord, text, text_hash).
+    pub fn get_doc_chunk(
+        &self,
+        chunk_id: i64,
+    ) -> Result<Option<(String, i64, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT doc_id, ord, text, text_hash FROM doc_chunks WHERE chunk_id = ?1",
+        )?;
+        let row = stmt
+            .query_row(params![chunk_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .optional()?;
+        Ok(row)
+    }
+
+    /// Replace the outbound links for a doc. `links` contains the dst doc ids.
+    pub fn replace_doc_links(&self, src: &str, links: &[String]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM doc_links WHERE src_doc_id = ?1", params![src])?;
+        for dst in links {
+            if dst.is_empty() || dst == src {
+                continue;
+            }
+            tx.execute(
+                "INSERT OR IGNORE INTO doc_links(src_doc_id, dst_doc_id) VALUES(?1, ?2)",
+                params![src, dst],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// BFS over `doc_links` starting at `start`, bounded by depth and node count.
+    /// Returns rows of (doc_id, depth). The start node is included with depth 0.
+    pub fn link_bfs(
+        &self,
+        start: &str,
+        max_depth: i64,
+        max_docs: i64,
+    ) -> Result<Vec<(String, i64)>> {
+        let sql = "WITH RECURSIVE
+            reachable(id, depth) AS (
+                SELECT ?1, 0
+                UNION
+                SELECT dl.dst_doc_id, r.depth + 1
+                  FROM doc_links dl JOIN reachable r ON dl.src_doc_id = r.id
+                 WHERE r.depth < ?2
+            )
+            SELECT id, MIN(depth) AS depth FROM reachable
+             GROUP BY id ORDER BY depth, id LIMIT ?3";
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(params![start, max_depth, max_docs], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// Fetch the outbound links for a single doc, for display.
+    pub fn doc_outbound_links(&self, id: &str) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT dst_doc_id FROM doc_links WHERE src_doc_id = ?1 ORDER BY dst_doc_id")?;
+        let rows = stmt.query_map(params![id], |row| row.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
     /// Migration for compaction checkpoints table.
     /// Enables resumable compaction for large conversations.
     pub fn migrate_compaction_checkpoints_v1(&self) -> Result<()> {

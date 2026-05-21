@@ -18,13 +18,66 @@ interface FactRow {
     updated_at: string;
 }
 
+interface DocSummary {
+    id: string;
+    title: string;
+    tags: string[];
+    updated_at: string;
+}
+
+interface DocRecord {
+    id: string;
+    title: string;
+    tags: string[];
+    links: string[];
+    content: string;
+    created_at: string;
+    updated_at: string;
+}
+
 export default function MemoryPanel({ memories, onClose }: MemoryPanelProps) {
-    const [activeTab, setActiveTab] = useState<"context" | "facts">("context");
+    const [activeTab, setActiveTab] = useState<"context" | "facts" | "docs">("context");
     const [userFacts, setUserFacts] = useState<FactRow[]>([]);
     const [entityKey, setEntityKey] = useState("");
     const [entityFacts, setEntityFacts] = useState<FactRow[]>([]);
     const [factsLoading, setFactsLoading] = useState(false);
     const [factsError, setFactsError] = useState<string | null>(null);
+    const [docs, setDocs] = useState<DocSummary[]>([]);
+    const [docsLoading, setDocsLoading] = useState(false);
+    const [docsError, setDocsError] = useState<string | null>(null);
+    const [selectedDoc, setSelectedDoc] = useState<DocRecord | null>(null);
+
+    useEffect(() => {
+        if (activeTab !== "docs") return;
+        if (docs.length > 0 || docsLoading) return;
+        (async () => {
+            try {
+                setDocsLoading(true);
+                const rows = await invoke<DocSummary[]>("list_memory_docs");
+                setDocs(rows);
+                setDocsError(null);
+            } catch (e) {
+                console.error("Failed to load memory docs", e);
+                setDocsError(String(e));
+            } finally {
+                setDocsLoading(false);
+            }
+        })();
+    }, [activeTab, docs.length, docsLoading]);
+
+    const openDoc = async (id: string) => {
+        try {
+            setDocsLoading(true);
+            const doc = await invoke<DocRecord | null>("fetch_memory_doc", { id });
+            setSelectedDoc(doc);
+            setDocsError(null);
+        } catch (e) {
+            console.error("Failed to fetch doc", e);
+            setDocsError(String(e));
+        } finally {
+            setDocsLoading(false);
+        }
+    };
 
     useEffect(() => {
         if (activeTab === "facts" && userFacts.length === 0 && !factsLoading) {
@@ -92,6 +145,16 @@ export default function MemoryPanel({ memories, onClose }: MemoryPanelProps) {
                         >
                             Facts
                         </button>
+                        <button
+                            className={`px-2 py-0.5 rounded-full border ${
+                                activeTab === "docs"
+                                    ? "bg-purple-600/40 border-purple-400 text-purple-50"
+                                    : "bg-[var(--color-bg-tertiary)] border-[var(--color-border-secondary)] text-[var(--color-text-secondary)] hover:bg-[var(--color-hover-bg)]"
+                            }`}
+                            onClick={() => setActiveTab("docs")}
+                        >
+                            Docs
+                        </button>
                     </div>
                 </div>
                 <button
@@ -102,7 +165,7 @@ export default function MemoryPanel({ memories, onClose }: MemoryPanelProps) {
                 </button>
             </div>
 
-            {activeTab === "context" ? (
+            {activeTab === "context" && (
                 <div className="flex-1 overflow-y-auto p-4 space-y-3">
                     {memories.length === 0 ? (
                         <div className="text-center text-[var(--color-text-secondary)] mt-10 text-sm italic">
@@ -122,7 +185,9 @@ export default function MemoryPanel({ memories, onClose }: MemoryPanelProps) {
                         ))
                     )}
                 </div>
-            ) : (
+            )}
+
+            {activeTab === "facts" && (
                 <div className="flex-1 overflow-y-auto p-4 space-y-3 text-xs text-[var(--color-text-primary)]">
                     {factsError && (
                         <div className="text-red-300 bg-red-900/40 border border-red-700/60 rounded p-2">
@@ -214,6 +279,97 @@ export default function MemoryPanel({ memories, onClose }: MemoryPanelProps) {
                             </ul>
                         )}
                     </div>
+                </div>
+            )}
+
+            {activeTab === "docs" && (
+                <div className="flex-1 overflow-y-auto p-4 space-y-3 text-xs text-[var(--color-text-primary)]">
+                    {docsError && (
+                        <div className="text-red-300 bg-red-900/40 border border-red-700/60 rounded p-2">
+                            {docsError}
+                        </div>
+                    )}
+
+                    {selectedDoc ? (
+                        <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                                <h4 className="text-[11px] font-semibold text-purple-300 truncate">
+                                    {selectedDoc.title}
+                                </h4>
+                                <button
+                                    onClick={() => setSelectedDoc(null)}
+                                    className="text-[10px] underline text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                                >
+                                    Back to list
+                                </button>
+                            </div>
+                            <div className="font-mono text-[10px] text-[var(--color-text-tertiary)]">
+                                {selectedDoc.id} · updated {selectedDoc.updated_at}
+                            </div>
+                            {selectedDoc.tags.length > 0 && (
+                                <div className="text-[10px] text-[var(--color-text-secondary)]">
+                                    tags: {selectedDoc.tags.join(", ")}
+                                </div>
+                            )}
+                            {selectedDoc.links.length > 0 && (
+                                <div className="text-[10px] text-[var(--color-text-secondary)]">
+                                    links: {selectedDoc.links.map((l) => (
+                                        <button
+                                            key={l}
+                                            onClick={() => openDoc(l)}
+                                            className="font-mono underline mr-2 hover:text-purple-300"
+                                        >
+                                            {l}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                            <pre className="whitespace-pre-wrap bg-[var(--color-bg-tertiary)]/60 border border-[var(--color-border-secondary)] rounded p-2 text-[11px] text-[var(--color-text-primary)] font-mono">
+                                {selectedDoc.content}
+                            </pre>
+                        </div>
+                    ) : (
+                        <>
+                            <p className="text-[11px] text-[var(--color-text-secondary)]">
+                                Memory documents are markdown files on disk under{" "}
+                                <code className="font-mono">memory/docs/</code>. The LLM can
+                                read and update them via the <code className="font-mono">memory_*</code> tools.
+                            </p>
+                            {docsLoading && docs.length === 0 ? (
+                                <div className="text-[var(--color-text-secondary)] italic">Loading docs...</div>
+                            ) : docs.length === 0 ? (
+                                <div className="text-[var(--color-text-secondary)] italic">
+                                    No memory documents yet.
+                                </div>
+                            ) : (
+                                <ul className="space-y-1">
+                                    {docs.map((d) => (
+                                        <li
+                                            key={d.id}
+                                            className="border border-[var(--color-border-secondary)] rounded px-2 py-1 bg-[var(--color-bg-tertiary)]/60"
+                                        >
+                                            <button
+                                                onClick={() => openDoc(d.id)}
+                                                className="w-full text-left"
+                                            >
+                                                <div className="font-semibold text-[var(--color-text-primary)] truncate">
+                                                    {d.title}
+                                                </div>
+                                                <div className="font-mono text-[10px] text-[var(--color-text-tertiary)] truncate">
+                                                    {d.id} · {d.updated_at}
+                                                </div>
+                                                {d.tags.length > 0 && (
+                                                    <div className="text-[10px] text-[var(--color-text-secondary)] truncate">
+                                                        {d.tags.join(", ")}
+                                                    </div>
+                                                )}
+                                            </button>
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                        </>
+                    )}
                 </div>
             )}
         </div>

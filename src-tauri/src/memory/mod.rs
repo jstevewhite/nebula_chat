@@ -1,4 +1,5 @@
 pub mod audit_logger;
+pub mod docs;
 pub mod extraction;
 pub mod librarian;
 pub mod strategist;

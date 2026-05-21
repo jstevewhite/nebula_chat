@@ -28,9 +28,28 @@ pub mod tasks;
 pub struct AppState {
     mcp_manager: Arc<McpManager>,
     librarian: Arc<Mutex<crate::memory::librarian::Librarian>>,
+    /// memory3 Phase 1: botmem-style doc store. None when docs are disabled or
+    /// initialization failed (the rest of the app should keep working).
+    doc_store: Arc<Mutex<Option<Arc<crate::memory::docs::DocStore>>>>,
     active_task: Arc<Mutex<Option<tokio::task::AbortHandle>>>,
     // For context inspection: maps request_id -> oneshot sender for approval
     context_approvals: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
+}
+
+/// Instantiate the configured embedding provider. Returns `None` when no
+/// provider is available in this build (e.g. when the `local-embeddings`
+/// feature is disabled). Phase 4 will add a remote provider here.
+async fn init_embedder() -> Option<Arc<dyn crate::memory::docs::embedding::EmbeddingProvider>> {
+    #[cfg(feature = "local-embeddings")]
+    {
+        match crate::memory::docs::embedding::FastembedProvider::try_default().await {
+            Ok(p) => return Some(Arc::new(p) as Arc<dyn crate::memory::docs::embedding::EmbeddingProvider>),
+            Err(e) => {
+                tracing::warn!("Fastembed init failed; docs recall will be BM25-only: {e}");
+            }
+        }
+    }
+    None
 }
 
 #[tauri::command]
@@ -830,6 +849,20 @@ async fn send_message(
             tools.push(crate::tasks::build_update_tasks_tool());
         }
 
+        // Inject the memory_* built-in tools (memory3 Phase 1). They are
+        // exposed only when the DocStore has finished initialising.
+        let doc_store_ready = {
+            let slot = state.doc_store.lock().await;
+            slot.is_some()
+        };
+        if doc_store_ready {
+            for t in crate::memory::docs::tools::build_all() {
+                if !settings.disabled_tools.contains(&t.name) {
+                    tools.push(t);
+                }
+            }
+        }
+
         tracing::debug!("[DEBUG] Final tool count: {}", tools.len());
 
         // Phase 1.4: Streaming parity safety
@@ -1235,6 +1268,98 @@ async fn send_message(
 
 
 
+// ---------- memory3 Phase 1: docs subsystem dispatch + UI commands ----------
+
+async fn dispatch_memory_tool(
+    store: &Arc<crate::memory::docs::DocStore>,
+    name: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    use crate::memory::docs::api::*;
+    use crate::memory::docs::tools::*;
+
+    fn err_value(e: &DocsError) -> serde_json::Value {
+        serde_json::to_value(e).unwrap_or_else(|_| serde_json::json!({"code": e.code, "message": e.message}))
+    }
+
+    match name {
+        n if n == TOOL_REMEMBER => {
+            let input: RememberInput = serde_json::from_value(args)
+                .map_err(|e| format!("memory_remember: invalid args: {e}"))?;
+            match store.remember(input).await {
+                Ok(out) => Ok(serde_json::to_value(out).unwrap()),
+                Err(e) => Ok(err_value(&e)),
+            }
+        }
+        n if n == TOOL_FETCH => {
+            let id = args
+                .get("id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "memory_fetch: missing id".to_string())?;
+            match store.fetch(id).await.map_err(|e| e.to_string())? {
+                Some(doc) => Ok(serde_json::to_value(doc).unwrap()),
+                None => Ok(err_value(&DocsError::new("NOT_FOUND", "no such doc"))),
+            }
+        }
+        n if n == TOOL_EDIT => {
+            let input: EditInput = serde_json::from_value(args)
+                .map_err(|e| format!("memory_edit: invalid args: {e}"))?;
+            match store.edit(input).await {
+                Ok(out) => Ok(serde_json::to_value(out).unwrap()),
+                Err(e) => Ok(err_value(&e)),
+            }
+        }
+        n if n == TOOL_FORGET => {
+            let id = args
+                .get("id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "memory_forget: missing id".to_string())?;
+            match store.forget(id).await {
+                Ok(()) => Ok(serde_json::json!({"ok": true, "id": id})),
+                Err(e) => Ok(err_value(&e)),
+            }
+        }
+        n if n == TOOL_RECALL => {
+            let input: RecallInput = serde_json::from_value(args)
+                .map_err(|e| format!("memory_recall: invalid args: {e}"))?;
+            let out = store.recall(input).await.map_err(|e| e.to_string())?;
+            Ok(serde_json::to_value(out).unwrap())
+        }
+        n if n == TOOL_LINK_CONTEXT => {
+            let input: LinkContextInput = serde_json::from_value(args)
+                .map_err(|e| format!("memory_link_context: invalid args: {e}"))?;
+            let out = store.link_context(input).await.map_err(|e| e.to_string())?;
+            Ok(serde_json::to_value(out).unwrap())
+        }
+        _ => Err(format!("memory dispatch: unknown tool '{name}'")),
+    }
+}
+
+#[tauri::command]
+async fn list_memory_docs(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::memory::docs::api::DocSummary>, String> {
+    let store = {
+        let slot = state.doc_store.lock().await;
+        slot.clone()
+    };
+    let store = store.ok_or_else(|| "Memory subsystem is not ready yet.".to_string())?;
+    store.list_docs().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn fetch_memory_doc(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Option<crate::memory::docs::api::DocRecord>, String> {
+    let store = {
+        let slot = state.doc_store.lock().await;
+        slot.clone()
+    };
+    let store = store.ok_or_else(|| "Memory subsystem is not ready yet.".to_string())?;
+    store.fetch(&id).await.map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn list_user_facts(state: State<'_, AppState>) -> Result<Vec<MemoryFact>, String> {
     let lib = state.librarian.lock().await;
@@ -1353,6 +1478,19 @@ async fn execute_tool(
             "count": rows.len(),
             "message": "Task list updated."
         }));
+    }
+
+    // Memory tools are in-process, bypass MCP routing, and bypass the per-tool
+    // approval flow (they only touch local docs the user can audit on disk).
+    if crate::memory::docs::tools::is_memory_tool(&name) {
+        let store = {
+            let slot = state.doc_store.lock().await;
+            slot.clone()
+        };
+        let Some(store) = store else {
+            return Err("Memory subsystem is not ready yet. Try again in a moment.".into());
+        };
+        return dispatch_memory_tool(&store, &name, args).await;
     }
 
     // 2. Identify Server
@@ -2596,14 +2734,66 @@ pub fn run() {
                 let librarian = crate::memory::librarian::Librarian::new(&config_dir).unwrap();
                 let librarian_arc = Arc::new(Mutex::new(librarian));
 
-                // 2. AppState
+                // 2. DocStore (memory3 Phase 1).
+                let doc_store_slot: Arc<Mutex<Option<Arc<crate::memory::docs::DocStore>>>> =
+                    Arc::new(Mutex::new(None));
+
+                // 3. AppState
                 let state = AppState {
                     mcp_manager: mcp_manager.clone(),
                     librarian: librarian_arc.clone(),
+                    doc_store: doc_store_slot.clone(),
                     active_task: Arc::new(Mutex::new(None)),
                     context_approvals: Arc::new(Mutex::new(HashMap::new())),
                 };
                 app_handle.manage(state);
+
+                // 4. Initialise DocStore in the background so app start is fast
+                //    even on the first run that downloads the embedding model.
+                {
+                    let librarian_for_docs = librarian_arc.clone();
+                    let config_dir = config_dir.clone();
+                    let app_handle_for_docs = app_handle.clone();
+                    let doc_store_slot = doc_store_slot.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let docs_dir = config_dir.join("memory").join("docs");
+                        let docs_index_dir = config_dir.join("memory").join("docs_index");
+                        let embedder = init_embedder().await;
+                        match crate::memory::docs::DocStore::new(
+                            docs_dir,
+                            librarian_for_docs,
+                            docs_index_dir,
+                            embedder,
+                        )
+                        .await
+                        {
+                            Ok(store) => {
+                                match store.startup_reconcile().await {
+                                    Ok(summary) => tracing::info!(
+                                        "DocStore reconcile: scanned={} ingested={} updated={} deleted={}",
+                                        summary.scanned,
+                                        summary.ingested,
+                                        summary.updated,
+                                        summary.deleted,
+                                    ),
+                                    Err(e) => tracing::warn!("DocStore reconcile failed: {e}"),
+                                }
+                                if let Err(e) = store.start_watcher() {
+                                    tracing::warn!("DocStore watcher failed to start: {e}");
+                                }
+                                {
+                                    let mut slot = doc_store_slot.lock().await;
+                                    *slot = Some(store);
+                                }
+                                use tauri::Emitter;
+                                let _ = app_handle_for_docs.emit("docs-ready", ());
+                            }
+                            Err(e) => {
+                                tracing::error!("DocStore init failed: {e}");
+                            }
+                        }
+                    });
+                }
 
                 // 3. Initialize Context & MCP
                 let settings_path = config_dir.join("settings.json");
@@ -2676,7 +2866,9 @@ pub fn run() {
             update_fact,
             delete_fact,
             list_facts_for_entity,
-            cleanup_invalid_tool_messages
+            cleanup_invalid_tool_messages,
+            list_memory_docs,
+            fetch_memory_doc
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

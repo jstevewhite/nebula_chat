@@ -40,5 +40,24 @@ keyring = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 
+# Phase 1 of memory3 redesign: docs subsystem.
+# fastembed pulls in ONNX runtime via the `ort` crate, which fetches a static
+# binary at build time. That fetch can fail in restricted networks, so we
+# feature-gate the local embedding backend behind `local-embeddings` (on by
+# default). Builds in offline environments can pass `--no-default-features
+# --features tauri-default` to compile-check the rest of the tree.
+fastembed = { version = "4", optional = true }
+rayon = "1.10"
+notify = "6"
+gray_matter = "0.2"
+serde_yaml = "0.9"
+regex = "1"
+sha2 = "0.10"
+
+[features]
+default = ["local-embeddings"]
+local-embeddings = ["dep:fastembed"]
+tauri-default = []
+
 [dev-dependencies]
 tempfile = "3"

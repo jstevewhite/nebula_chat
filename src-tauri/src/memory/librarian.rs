@@ -56,6 +56,9 @@ impl Librarian {
         // Initialize summaries schema
         sqlite.migrate_summaries_v1()?;
 
+        // Initialize docs schema (memory3 Phase 1).
+        sqlite.migrate_docs_v1()?;
+
         let tantivy = TantivyIndex::new(idx_path.to_str().unwrap())?;
         let audit = AuditLogger::new(&db_path)?;
 
