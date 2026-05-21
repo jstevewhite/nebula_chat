@@ -30,14 +30,18 @@ pub fn is_memory_tool(name: &str) -> bool {
 
 /// Build the full set of tool definitions exposed to the LLM.
 pub fn build_all() -> Vec<ToolDefinition> {
+    // memory_remember_fact is intentionally listed *before* memory_remember so
+    // the model considers the atomic-fact path first when the user mentions a
+    // preference / identity / environment detail. The doc tools follow for
+    // narrative content.
     vec![
+        remember_fact_tool(),
         remember_tool(),
-        fetch_tool(),
         edit_tool(),
+        fetch_tool(),
         forget_tool(),
         recall_tool(),
         link_context_tool(),
-        remember_fact_tool(),
     ]
 }
 
@@ -45,10 +49,23 @@ fn remember_tool() -> ToolDefinition {
     ToolDefinition {
         name: TOOL_REMEMBER.to_string(),
         description:
-            "Create a new long-term memory document. The document is stored as a markdown file \
-             the user can read and edit. Use this for stable, narrative knowledge \
-             (user profile, project notes, working agreements, environment details). \
-             Do NOT use for one-off chat content — that's already captured in conversation history. \
+            "Create a new long-form memory DOCUMENT (markdown file on disk). \
+             Use this ONLY for narrative, multi-paragraph content that needs prose to make sense — \
+             project briefs, architecture decision records, workflow notes, README-style overviews, \
+             working agreements with multiple clauses. \
+             \n\nDO NOT use this tool for atomic facts about the user or an entity \
+             (name, role, preferences, OS, editor, language choice, tool choice, environment details). \
+             Those belong in the knowledge graph — use `memory_remember_fact` instead. \
+             A doc with title \"User Profile\" containing a bulleted list of preferences is the WRONG shape; \
+             each bullet should be a separate `memory_remember_fact` call. \
+             \n\nGood examples for memory_remember:\n\
+             - id: \"project-nebula\", title: \"Nebula architecture notes\" — multi-section overview of the system.\n\
+             - id: \"adr-2026-05-tantivy\", title: \"ADR: use Tantivy for BM25\" — decision record with context and tradeoffs.\n\
+             - id: \"workflow-release\", title: \"Release workflow\" — step-by-step checklist with prose.\n\n\
+             BAD examples (use memory_remember_fact instead):\n\
+             - id: \"user-profile\" with a list of preferences.\n\
+             - id: \"environment\" with OS / editor / shell facts.\n\
+             - any single-line factual statement about the user.\n\n\
              Errors if a doc with this id already exists; use memory_edit to update."
                 .to_string(),
         input_schema: json!({
@@ -156,11 +173,27 @@ fn remember_fact_tool() -> ToolDefinition {
     ToolDefinition {
         name: TOOL_REMEMBER_FACT.to_string(),
         description:
-            "Write a single atomic fact into the knowledge graph. Use this when you learn \
-             something concrete and durable about the user or a project that's better expressed \
-             as a triple than as prose in a document — e.g. preferences (\"user prefers dark mode\"), \
-             stable environment details, decisions, tech stack choices. \
-             For narrative knowledge prefer memory_remember / memory_edit on a markdown doc."
+            "PREFERRED tool for atomic facts about the user or any entity. Writes a single \
+             (subject, predicate, object) triple into the structured knowledge graph. \
+             \n\nALWAYS use this — NOT `memory_remember` — for any short, durable factual statement, \
+             including but not limited to:\n\
+             - The user's name, role, location, pronouns, employer.\n\
+             - Stable preferences (\"user prefers dark mode\", \"user uses vim\").\n\
+             - Environment details (\"user runs Linux\", \"user has an RTX 4090\", \"user uses zsh\").\n\
+             - Tech stack and tool choices (\"user writes Rust\", \"project uses Postgres\").\n\
+             - Concrete decisions (\"we picked Tantivy over Meilisearch\").\n\
+             - Project metadata (\"nebula_chat is built with Tauri\").\n\n\
+             Call this tool ONCE PER FACT. If the user tells you three preferences, make three calls. \
+             Do not batch facts into a markdown doc. Do not create a \"user-profile\" doc — \
+             user-profile-shaped knowledge lives in the KG and is rendered automatically into \
+             every system prompt.\n\n\
+             Examples:\n\
+             - User: \"I prefer dark mode\" → memory_remember_fact(subject=\"user\", predicate=\"prefers\", object=\"dark mode\")\n\
+             - User: \"I'm on Arch Linux\" → memory_remember_fact(subject=\"user\", predicate=\"runs_os\", object=\"arch linux\")\n\
+             - User: \"My main editor is helix\" → memory_remember_fact(subject=\"user\", predicate=\"main_editor\", object=\"helix\")\n\
+             - User: \"nebula_chat uses Tauri\" → memory_remember_fact(subject=\"nebula_chat\", predicate=\"built_with\", object=\"tauri\", object_kind=\"entity\")\n\n\
+             Use `memory_remember` only for genuinely narrative content (project briefs, ADRs, \
+             multi-section notes) that needs prose to make sense."
                 .to_string(),
         input_schema: json!({
             "type": "object",
