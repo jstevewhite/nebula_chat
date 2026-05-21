@@ -223,6 +223,18 @@ impl SqliteManager {
         Ok(out)
     }
 
+    /// Look up the textual content of a message by id. Returns `None` when the
+    /// message exists but has no content (tool messages, for example).
+    pub fn get_message_content(&self, id: &str) -> Result<Option<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT content FROM messages WHERE id = ?1")?;
+        let v = stmt
+            .query_row(params![id], |row| row.get::<_, Option<String>>(0))
+            .optional()?;
+        Ok(v.flatten())
+    }
+
     pub fn delete_tool_executions_by_tool_call_ids(&self, tool_call_ids: &[String]) -> Result<()> {
         if tool_call_ids.is_empty() {
             return Ok(());

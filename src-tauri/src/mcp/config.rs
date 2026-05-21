@@ -164,6 +164,18 @@ pub struct Settings {
     /// Minimum fusion score for a doc to be auto-injected. Defaults to 0.20.
     #[serde(default = "default_recall_floor")]
     pub memory_recall_score_floor: f32,
+
+    /// Trigger policy for KG fact extraction. One of:
+    /// - `"explicit"` (default): only via the `/remember` chat command, the
+    ///   "Save as fact" message action, or the LLM-callable
+    ///   `memory_remember_fact` tool. No implicit per-turn extraction.
+    /// - `"session_end"`: in addition to explicit triggers, run a one-shot
+    ///   extraction pass on the messages added since the last checkpoint when
+    ///   the user switches conversations.
+    /// - `"off"`: all automatic extraction disabled. Explicit triggers still
+    ///   work, but no session-end pass.
+    #[serde(default = "default_extraction_policy")]
+    pub fact_extraction_policy: String,
     // Show per-message timestamps in the chat UI.
     #[serde(default = "default_false_bool")]
     pub show_message_timestamps: bool,
@@ -201,6 +213,9 @@ fn default_auto_inject_budget() -> usize {
 }
 fn default_recall_floor() -> f32 {
     0.20
+}
+fn default_extraction_policy() -> String {
+    "explicit".to_string()
 }
 
 fn default_uncompressed_count() -> usize {
@@ -366,6 +381,12 @@ impl Settings {
             .and_then(|v| v.as_f64())
         {
             s.memory_recall_score_floor = f as f32;
+        }
+        if let Some(p) = val
+            .get("fact_extraction_policy")
+            .and_then(|v| v.as_str())
+        {
+            s.fact_extraction_policy = p.to_string();
         }
         if let Some(theme) = val.get("theme").and_then(|v| v.as_str()) {
             s.theme = theme.to_string();

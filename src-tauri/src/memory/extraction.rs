@@ -9,14 +9,34 @@ use tokio::sync::Mutex;
 pub struct FactExtractor;
 
 impl FactExtractor {
-    /// Extract facts from a message and save them to the librarian.
-    /// This is intended to run in the background.
+    /// Extract facts from a message and save them to the librarian, tagging
+    /// them with the supplied source message id for provenance.
     pub async fn extract(
         librarian: Arc<Mutex<Librarian>>,
         provider: &dyn LlmProvider,
         role: &str,
         content: &str,
         source_message_id: &str,
+    ) -> Result<String> {
+        Self::extract_with_source(
+            librarian,
+            provider,
+            role,
+            content,
+            Some(source_message_id.to_string()),
+        )
+        .await
+    }
+
+    /// Same as `extract`, but with an optional `source_message_id`. Used by
+    /// the `/remember` chat command and other arbitrary-text triggers where
+    /// there is no single backing message.
+    pub async fn extract_with_source(
+        librarian: Arc<Mutex<Librarian>>,
+        provider: &dyn LlmProvider,
+        role: &str,
+        content: &str,
+        source_message_id: Option<String>,
     ) -> Result<String> {
         let prompt = format!(
             r#"You are a long-term memory extraction model for a coding assistant.
@@ -126,7 +146,7 @@ If there are **no** facts that meet the criteria above, return:
                 object,
                 object_kind,
                 confidence,
-                Some(source_message_id.to_string()),
+                source_message_id.clone(),
             );
 
             if let Err(e) = lib.upsert_fact(new_fact) {
@@ -182,7 +202,7 @@ If there are **no** facts that meet the criteria above, return:
         Vec::new()
     }
 
-    fn normalize_key(value: &str) -> String {
+    pub fn normalize_key(value: &str) -> String {
         let lower = value.to_lowercase();
         let parts: Vec<&str> = lower.split_whitespace().collect();
         parts.join("_")

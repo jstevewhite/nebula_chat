@@ -42,10 +42,24 @@ export default function App() {
   const handleNewChat = async () => {
     try {
       const id = await invoke<string>("create_conversation", { title: "New Chat" });
-      setActiveConvId(id);
+      handleSelectConversation(id);
     } catch (e) {
       console.error(e);
     }
+  };
+
+  // memory3 Phase 3: when leaving a conversation, ask the backend whether the
+  // configured fact_extraction_policy wants a session-end pass. The backend
+  // no-ops if the policy is not "session_end", so this is safe to fire on
+  // every switch.
+  const handleSelectConversation = (next: string | null) => {
+    const previous = activeConvId;
+    if (previous && previous !== next) {
+      invoke("extract_session_end", { conversationId: previous }).catch((e) => {
+        console.warn("session-end extraction failed", e);
+      });
+    }
+    setActiveConvId(next);
   };
 
   return (
@@ -89,7 +103,7 @@ export default function App() {
         <div className={activeTab === "chat" ? "flex flex-1 overflow-hidden" : "hidden"}>
           <ConversationList
             activeId={activeConvId}
-            onSelect={setActiveConvId}
+            onSelect={handleSelectConversation}
             onCreate={handleNewChat}
           />
           <div className="flex-1 flex flex-col h-full overflow-hidden">

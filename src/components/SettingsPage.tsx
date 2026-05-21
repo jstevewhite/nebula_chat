@@ -284,6 +284,8 @@ export default function SettingsPage() {
                     fullSettings.memory_auto_inject_token_budget ?? latest.memory_auto_inject_token_budget,
                 memory_recall_score_floor:
                     fullSettings.memory_recall_score_floor ?? latest.memory_recall_score_floor,
+                fact_extraction_policy:
+                    fullSettings.fact_extraction_policy ?? latest.fact_extraction_policy,
                 context_model: fullSettings.context_model ?? latest.context_model,
                 context_turns: fullSettings.context_turns ?? latest.context_turns,
 
@@ -715,6 +717,27 @@ export default function SettingsPage() {
                                     />
                                     Auto-inject
                                 </label>
+                            </div>
+
+                            <div className="mb-4">
+                                <label className="block text-sm font-bold text-[var(--color-text-secondary)] mb-1">
+                                    Fact extraction policy
+                                </label>
+                                <p className="text-xs text-[var(--color-text-tertiary)] mb-2">
+                                    When to run LLM-driven fact extraction into the knowledge graph.
+                                    The <code className="font-mono">/remember</code> chat command, the per-message
+                                    "Save as fact" button, and the LLM tool <code className="font-mono">memory_remember_fact</code>
+                                    work in all modes.
+                                </p>
+                                <select
+                                    className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded px-2 py-1 text-sm text-[var(--color-text-primary)]"
+                                    value={fullSettings.fact_extraction_policy ?? "explicit"}
+                                    onChange={(e) => setFullSettings({ ...fullSettings, fact_extraction_policy: e.target.value })}
+                                >
+                                    <option value="explicit">Explicit — user actions and the LLM tool only</option>
+                                    <option value="session_end">Session end — also extract on conversation switch</option>
+                                    <option value="off">Off — explicit and tool only, no session-end pass</option>
+                                </select>
                             </div>
 
                             <div className={`grid grid-cols-2 gap-4 mb-3 ${!(fullSettings.memory_auto_inject_docs ?? true) ? "opacity-50 pointer-events-none" : ""}`}>

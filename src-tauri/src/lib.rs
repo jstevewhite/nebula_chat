@@ -602,29 +602,12 @@ async fn send_message(
                                 Err(e) => {
                                     tracing::error!("Failed to save user message: {}", e);
                                 }
-                                Ok(msg_id) => {
-                                    // Trigger Background Fact Extraction
-                                    let app_handle_bg = app_handle.clone();
-                                    let lib_clone = state.librarian.clone();
-                                    let content_clone = last.content.clone().unwrap_or_default();
-                                    let msg_id_clone = msg_id.clone();
-
-                                    tokio::spawn(async move {
-                                         let config_dir = app_handle_bg.path().app_config_dir().unwrap_or_default();
-                                         let settings_path = config_dir.join("settings.json");
-                                         let settings = Settings::load_migrated(&settings_path);
-
-                                        if let Some(model_id) = &settings.context_model {
-                                            let parts: Vec<&str> = model_id.split("::").collect();
-                                            if parts.len() == 2 {
-                                                if let Ok(provider) = crate::llm::factory::create_provider(parts[0], parts[1], &settings) {
-                                                    if let Err(e) = FactExtractor::extract(lib_clone, provider.as_ref(), "user", &content_clone, &msg_id_clone).await {
-                                                        tracing::warn!("Fact extraction failed: {}", e);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    });
+                                Ok(_msg_id) => {
+                                    // memory3 Phase 3: per-turn fact extraction
+                                    // has been removed. Facts are now written
+                                    // only via /remember, "Save as fact", the
+                                    // session-end pass, or the LLM tool
+                                    // `memory_remember_fact`.
                                 }
                             }
                         } else {
@@ -650,7 +633,6 @@ async fn send_message(
             .map_err(|e| e.to_string())?;
         let settings_path = config_dir.join("settings.json");
         let settings = Settings::load_migrated(&settings_path);
-        let extraction_model = settings.context_model.clone();
         let memory_enabled = settings.memory_enabled;
 
         // --- CONTEXT COMPACTION ---
@@ -1205,32 +1187,12 @@ async fn send_message(
                 }
             });
 
-            // Trigger Background Fact Extraction for assistant message
-            if memory_enabled {
-                if let (Some(context_model), Some(msg_id), Some(content)) = (
-                    extraction_model.clone(),
-                    assistant_message_id_for_save,
-                    response.content.clone(),
-                ) {
-                    let app_for_facts = app_handle.clone();
-                    let librarian_for_facts = state.librarian.clone();
-                    
-                    tauri::async_runtime::spawn(async move {
-                         let config_dir = app_for_facts.path().app_config_dir().unwrap_or_default();
-                         let settings_path = config_dir.join("settings.json");
-                         let settings = Settings::load_migrated(&settings_path);
-
-                         let parts: Vec<&str> = context_model.split("::").collect();
-                         if parts.len() == 2 {
-                             if let Ok(provider) = crate::llm::factory::create_provider(parts[0], parts[1], &settings) {
-                                 if let Err(e) = FactExtractor::extract(librarian_for_facts, provider.as_ref(), "assistant", &content, &msg_id).await {
-                                     tracing::error!("Assistant fact extraction failed: {}", e);
-                                 }
-                             }
-                         }
-                    });
-                }
-            }
+            // memory3 Phase 3: per-turn assistant fact extraction has been
+            // removed. Facts are only written via the explicit / session_end
+            // policies or the `memory_remember_fact` LLM tool. The captured
+            // `assistant_message_id_for_save` is still used above to set
+            // `response.id`; nothing else is needed here.
+            let _ = &assistant_message_id_for_save;
         }
 
         Ok(response)
@@ -1271,6 +1233,7 @@ async fn send_message(
 
 async fn dispatch_memory_tool(
     store: &Arc<crate::memory::docs::DocStore>,
+    librarian: &Arc<Mutex<crate::memory::librarian::Librarian>>,
     name: &str,
     args: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
@@ -1330,6 +1293,55 @@ async fn dispatch_memory_tool(
             let out = store.link_context(input).await.map_err(|e| e.to_string())?;
             Ok(serde_json::to_value(out).unwrap())
         }
+        n if n == TOOL_REMEMBER_FACT => {
+            let subject = args
+                .get("subject")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "memory_remember_fact: missing subject".to_string())?
+                .trim();
+            let predicate = args
+                .get("predicate")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "memory_remember_fact: missing predicate".to_string())?
+                .trim();
+            let object = args
+                .get("object")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "memory_remember_fact: missing object".to_string())?
+                .trim();
+            if subject.is_empty() || predicate.is_empty() || object.is_empty() {
+                return Err("memory_remember_fact: subject/predicate/object must be non-empty".into());
+            }
+            let object_kind = match args
+                .get("object_kind")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_lowercase())
+                .as_deref()
+            {
+                Some("entity") => ObjectKind::Entity,
+                _ => ObjectKind::Literal,
+            };
+            let confidence = args
+                .get("confidence")
+                .and_then(|v| v.as_f64())
+                .map(|f| f as f32)
+                .unwrap_or(0.9)
+                .clamp(0.0, 1.0);
+
+            let new_fact = crate::memory::NewFact::new(
+                crate::memory::extraction::FactExtractor::normalize_key(subject),
+                crate::memory::extraction::FactExtractor::normalize_key(predicate),
+                object.to_string(),
+                object_kind,
+                confidence,
+                None,
+            );
+            let lib = librarian.lock().await;
+            let id = lib
+                .upsert_fact(new_fact)
+                .map_err(|e| format!("memory_remember_fact: {e}"))?;
+            Ok(serde_json::json!({ "id": id, "ok": true }))
+        }
         _ => Err(format!("memory dispatch: unknown tool '{name}'")),
     }
 }
@@ -1357,6 +1369,210 @@ async fn fetch_memory_doc(
     };
     let store = store.ok_or_else(|| "Memory subsystem is not ready yet.".to_string())?;
     store.fetch(&id).await.map_err(|e| e.to_string())
+}
+
+#[derive(Clone, Serialize)]
+struct ExtractionResult {
+    extracted: usize,
+    message: String,
+}
+
+/// Drive a one-shot fact extraction over arbitrary text. Used by the
+/// `/remember <text>` chat command.
+#[tauri::command]
+async fn extract_facts_from_text(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    text: String,
+) -> Result<ExtractionResult, String> {
+    if text.trim().is_empty() {
+        return Err("empty text".into());
+    }
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let settings = Settings::load_migrated(&settings_path);
+
+    let context_model = settings
+        .context_model
+        .clone()
+        .ok_or_else(|| "No context_model configured; set one in Settings".to_string())?;
+    let parts: Vec<&str> = context_model.split("::").collect();
+    if parts.len() != 2 {
+        return Err(format!("Malformed context_model '{}'", context_model));
+    }
+    let provider = crate::llm::factory::create_provider(parts[0], parts[1], &settings)
+        .map_err(|e| e.to_string())?;
+    let msg = FactExtractor::extract_with_source(
+        state.librarian.clone(),
+        provider.as_ref(),
+        "user",
+        &text,
+        None,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let extracted = parse_extract_count(&msg);
+    Ok(ExtractionResult {
+        extracted,
+        message: msg,
+    })
+}
+
+/// Extract facts from an existing stored message, e.g. when the user clicks
+/// "Save as fact" on an assistant turn.
+#[tauri::command]
+async fn extract_facts_for_message(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    message_id: String,
+) -> Result<ExtractionResult, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let settings = Settings::load_migrated(&settings_path);
+
+    let context_model = settings
+        .context_model
+        .clone()
+        .ok_or_else(|| "No context_model configured; set one in Settings".to_string())?;
+    let parts: Vec<&str> = context_model.split("::").collect();
+    if parts.len() != 2 {
+        return Err(format!("Malformed context_model '{}'", context_model));
+    }
+    let provider = crate::llm::factory::create_provider(parts[0], parts[1], &settings)
+        .map_err(|e| e.to_string())?;
+
+    let (role, content) = {
+        let lib = state.librarian.lock().await;
+        let rows = lib
+            .sqlite
+            .get_messages_by_ids(&[message_id.clone()])
+            .map_err(|e| e.to_string())?;
+        let (id, role, _tc, _tcid) = rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| format!("message {message_id} not found"))?;
+        // get_messages_by_ids does not return content; re-read via the conversation lookup.
+        let _ = id;
+        let content = lib
+            .sqlite
+            .get_message_content(&message_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("message {message_id} has no content"))?;
+        (role, content)
+    };
+
+    let msg = FactExtractor::extract_with_source(
+        state.librarian.clone(),
+        provider.as_ref(),
+        &role,
+        &content,
+        Some(message_id.clone()),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(ExtractionResult {
+        extracted: parse_extract_count(&msg),
+        message: msg,
+    })
+}
+
+/// Run the session-end extraction pass for a conversation, when the
+/// `fact_extraction_policy` setting is `"session_end"`. Walks messages added
+/// since the per-conversation checkpoint (stored in `memory_meta`) and runs a
+/// single extraction over their concatenation. Returns the number of facts
+/// written.
+#[tauri::command]
+async fn extract_session_end(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    conversation_id: String,
+) -> Result<ExtractionResult, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let settings = Settings::load_migrated(&settings_path);
+    if settings.fact_extraction_policy != "session_end" {
+        return Ok(ExtractionResult {
+            extracted: 0,
+            message: "policy is not session_end; skipping".into(),
+        });
+    }
+
+    let context_model = settings
+        .context_model
+        .clone()
+        .ok_or_else(|| "No context_model configured; set one in Settings".to_string())?;
+    let parts: Vec<&str> = context_model.split("::").collect();
+    if parts.len() != 2 {
+        return Err(format!("Malformed context_model '{}'", context_model));
+    }
+    let provider = crate::llm::factory::create_provider(parts[0], parts[1], &settings)
+        .map_err(|e| e.to_string())?;
+
+    let checkpoint_key = format!("fact_extraction_last_msg:{conversation_id}");
+
+    let (text, last_id) = {
+        let lib = state.librarian.lock().await;
+        let prev = lib
+            .sqlite
+            .meta_get(&checkpoint_key)
+            .map_err(|e| e.to_string())?;
+        let messages = lib
+            .sqlite
+            .get_conversation_messages(&conversation_id)
+            .map_err(|e| e.to_string())?;
+        let mut after: bool = prev.is_none();
+        let mut buf = String::new();
+        let mut last_id: Option<String> = None;
+        for (id, role, content, _tc, _tcid, _r, _created, _att) in messages {
+            if !after {
+                if Some(&id) == prev.as_ref() {
+                    after = true;
+                }
+                continue;
+            }
+            if let Some(c) = content {
+                buf.push_str(&format!("{role}: {c}\n\n"));
+            }
+            last_id = Some(id);
+        }
+        (buf, last_id)
+    };
+
+    if text.trim().is_empty() {
+        return Ok(ExtractionResult {
+            extracted: 0,
+            message: "no new messages since last checkpoint".into(),
+        });
+    }
+
+    let msg = FactExtractor::extract_with_source(
+        state.librarian.clone(),
+        provider.as_ref(),
+        "conversation",
+        &text,
+        None,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    if let Some(id) = last_id {
+        let lib = state.librarian.lock().await;
+        let _ = lib.sqlite.meta_set(&checkpoint_key, &id);
+    }
+
+    Ok(ExtractionResult {
+        extracted: parse_extract_count(&msg),
+        message: msg,
+    })
+}
+
+fn parse_extract_count(msg: &str) -> usize {
+    // FactExtractor returns "Extracted and saved N facts" or "No facts extracted".
+    msg.split_whitespace()
+        .find_map(|tok| tok.parse::<usize>().ok())
+        .unwrap_or(0)
 }
 
 #[tauri::command]
@@ -1489,7 +1705,7 @@ async fn execute_tool(
         let Some(store) = store else {
             return Err("Memory subsystem is not ready yet. Try again in a moment.".into());
         };
-        return dispatch_memory_tool(&store, &name, args).await;
+        return dispatch_memory_tool(&store, &state.librarian, &name, args).await;
     }
 
     // 2. Identify Server
@@ -2867,7 +3083,10 @@ pub fn run() {
             list_facts_for_entity,
             cleanup_invalid_tool_messages,
             list_memory_docs,
-            fetch_memory_doc
+            fetch_memory_doc,
+            extract_facts_from_text,
+            extract_facts_for_message,
+            extract_session_end
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

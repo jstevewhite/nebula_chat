@@ -12,6 +12,7 @@ pub const TOOL_EDIT: &str = "memory_edit";
 pub const TOOL_FORGET: &str = "memory_forget";
 pub const TOOL_RECALL: &str = "memory_recall";
 pub const TOOL_LINK_CONTEXT: &str = "memory_link_context";
+pub const TOOL_REMEMBER_FACT: &str = "memory_remember_fact";
 
 pub const ALL_NAMES: &[&str] = &[
     TOOL_REMEMBER,
@@ -20,6 +21,7 @@ pub const ALL_NAMES: &[&str] = &[
     TOOL_FORGET,
     TOOL_RECALL,
     TOOL_LINK_CONTEXT,
+    TOOL_REMEMBER_FACT,
 ];
 
 pub fn is_memory_tool(name: &str) -> bool {
@@ -35,6 +37,7 @@ pub fn build_all() -> Vec<ToolDefinition> {
         forget_tool(),
         recall_tool(),
         link_context_tool(),
+        remember_fact_tool(),
     ]
 }
 
@@ -144,6 +147,48 @@ fn recall_tool() -> ToolDefinition {
                 "query": {"type": "string"},
                 "k": {"type": "integer", "minimum": 1, "maximum": 10, "default": 3},
                 "tags": {"type": "array", "items": {"type": "string"}}
+            }
+        }),
+    }
+}
+
+fn remember_fact_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: TOOL_REMEMBER_FACT.to_string(),
+        description:
+            "Write a single atomic fact into the knowledge graph. Use this when you learn \
+             something concrete and durable about the user or a project that's better expressed \
+             as a triple than as prose in a document — e.g. preferences (\"user prefers dark mode\"), \
+             stable environment details, decisions, tech stack choices. \
+             For narrative knowledge prefer memory_remember / memory_edit on a markdown doc."
+                .to_string(),
+        input_schema: json!({
+            "type": "object",
+            "required": ["subject", "predicate", "object"],
+            "properties": {
+                "subject": {
+                    "type": "string",
+                    "description": "Normalised subject key, lowercase snake_case. Use \"user\" for facts about the human."
+                },
+                "predicate": {
+                    "type": "string",
+                    "description": "Normalised predicate key, lowercase snake_case (e.g. \"prefers\", \"uses\", \"main_editor\")."
+                },
+                "object": {
+                    "type": "string",
+                    "description": "Free-form literal value, or a snake_case entity key when object_kind=\"entity\"."
+                },
+                "object_kind": {
+                    "type": "string",
+                    "enum": ["literal", "entity"],
+                    "description": "\"entity\" if the object is itself a graph node you'd traverse to; \"literal\" otherwise. Defaults to \"literal\"."
+                },
+                "confidence": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "Subjective confidence in the fact (default 0.9)."
+                }
             }
         }),
     }

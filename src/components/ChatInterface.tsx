@@ -16,7 +16,7 @@ import TasksPanel from "./TasksPanel";
 import { getProviderIcon } from "../utils/providerIcons";
 import { CustomSelect } from "./ui/CustomSelect";
 
-// Built-in memory tool names (memory3 Phase 1). Kept in sync with
+// Built-in memory tool names (memory3 Phases 1 & 3). Kept in sync with
 // src-tauri/src/memory/docs/tools.rs::ALL_NAMES.
 const MEMORY_TOOL_NAMES = new Set([
     "memory_remember",
@@ -25,6 +25,7 @@ const MEMORY_TOOL_NAMES = new Set([
     "memory_forget",
     "memory_recall",
     "memory_link_context",
+    "memory_remember_fact",
 ]);
 
 interface ToolCall {
@@ -1135,6 +1136,40 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             return;
         }
 
+        // memory3 Phase 3: `/remember <text>` is a local-only command that runs
+        // KG fact extraction over the supplied text. It does not call the LLM
+        // with the full conversation; it just turns durable assertions into
+        // facts. Surface the result as an assistant note for the user.
+        const rememberPrefix = "/remember ";
+        if (input.trim().toLowerCase().startsWith(rememberPrefix)) {
+            const text = input.trim().slice(rememberPrefix.length).trim();
+            if (!text) {
+                console.log("Empty /remember payload.");
+                return;
+            }
+            setInput("");
+            try {
+                const result = await invoke<{ extracted: number; message: string }>(
+                    "extract_facts_from_text",
+                    { text },
+                );
+                const note: Message = {
+                    role: "system",
+                    content: `Remembered ${result.extracted} fact${result.extracted === 1 ? "" : "s"} from /remember: ${text}`,
+                    created_at: Math.floor(Date.now() / 1000),
+                };
+                setMessages((prev) => [...prev, note]);
+            } catch (e) {
+                const note: Message = {
+                    role: "system",
+                    content: `/remember failed: ${String(e)}`,
+                    created_at: Math.floor(Date.now() / 1000),
+                };
+                setMessages((prev) => [...prev, note]);
+            }
+            return;
+        }
+
         const currentAttachments = attachments.map(a => ({
             name: a.file.name,
             media_type: a.mediaType,
@@ -1170,6 +1205,28 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
     const handleCopy = useCallback((text: string) => {
         navigator.clipboard.writeText(text);
+    }, []);
+
+    const handleSaveAsFact = useCallback(async (messageId: string) => {
+        try {
+            const result = await invoke<{ extracted: number; message: string }>(
+                "extract_facts_for_message",
+                { messageId },
+            );
+            const note: Message = {
+                role: "system",
+                content: `Saved ${result.extracted} fact${result.extracted === 1 ? "" : "s"} from message.`,
+                created_at: Math.floor(Date.now() / 1000),
+            };
+            setMessages((prev) => [...prev, note]);
+        } catch (e) {
+            const note: Message = {
+                role: "system",
+                content: `Save-as-fact failed: ${String(e)}`,
+                created_at: Math.floor(Date.now() / 1000),
+            };
+            setMessages((prev) => [...prev, note]);
+        }
     }, []);
 
     const handleDelete = useCallback(async (index: number, id?: string) => {
@@ -1574,6 +1631,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         onEdit={handleEdit}
                         onDelete={handleDelete}
                         onRegenerate={handleRegenerate}
+                        onSaveAsFact={handleSaveAsFact}
                         showTimestamp={showMessageTimestamps}
                         genStats={m.id ? messageStats[m.id] : undefined}
                     />
@@ -1818,7 +1876,7 @@ const ThinkingBlock = memo(({ content }: { content: string }) => {
     );
 });
 
-const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRegenerate, showTimestamp, genStats }: { message: Message, index: number, onCopy: any, onEdit: any, onDelete: any, onRegenerate: any, showTimestamp: boolean, genStats?: StreamStatsEvent }) => {
+const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRegenerate, onSaveAsFact, showTimestamp, genStats }: { message: Message, index: number, onCopy: any, onEdit: any, onDelete: any, onRegenerate: any, onSaveAsFact?: (id: string) => void, showTimestamp: boolean, genStats?: StreamStatsEvent }) => {
     const [isExpanded, setIsExpanded] = useState(m.role !== "tool");
     const [showRaw, setShowRaw] = useState(false);
     const [showToolArgs, setShowToolArgs] = useState(false);
@@ -2108,6 +2166,15 @@ const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRe
                         {(m.role === "assistant" || m.role === "user" || m.role === "tool") && (
                             <button onClick={() => onRegenerate(i, m.role)} className="p-1 text-[var(--color-text-tertiary)] hover:text-green-400 transition-colors" title="Regenerate">
                                 <RefreshCw size={14} />
+                            </button>
+                        )}
+                        {m.role === "assistant" && m.id && onSaveAsFact && (
+                            <button
+                                onClick={() => onSaveAsFact(m.id!)}
+                                className="p-1 text-[var(--color-text-tertiary)] hover:text-purple-400 transition-colors"
+                                title="Extract long-term facts from this message"
+                            >
+                                <Brain size={14} />
                             </button>
                         )}
                     </div>
