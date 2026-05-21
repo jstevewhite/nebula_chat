@@ -2,6 +2,7 @@ pub mod anthropic;
 pub mod capabilities;
 pub mod compactor;
 pub mod context;
+pub mod factory;
 pub mod ollama;
 pub mod openai;
 pub mod provider;

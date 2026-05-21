@@ -16,6 +16,22 @@ import TasksPanel from "./TasksPanel";
 import { getProviderIcon } from "../utils/providerIcons";
 import { CustomSelect } from "./ui/CustomSelect";
 
+// Built-in memory tool names. Kept in sync with
+// src-tauri/src/memory/docs/tools.rs::ALL_NAMES. Two namespaces:
+//   memory_doc_*  — markdown documents on disk
+//   memory_fact_* — atomic (s, p, o) triples in the KG
+const MEMORY_TOOL_NAMES = new Set([
+    "memory_fact_remember",
+    "memory_fact_recall",
+    "memory_fact_forget",
+    "memory_doc_remember",
+    "memory_doc_fetch",
+    "memory_doc_edit",
+    "memory_doc_forget",
+    "memory_doc_recall",
+    "memory_doc_link_context",
+]);
+
 interface ToolCall {
     id: string;
     function: {
@@ -124,6 +140,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     // Side Panels
     const [activeSidePanel, setActiveSidePanel] = useState<'none' | 'memory' | 'tasks'>('none');
     const [recentMemories, setRecentMemories] = useState<string[]>([]);
+    const [reembedProgress, setReembedProgress] = useState<{ current: number; total: number } | null>(null);
 
     // Settings-driven toggles
     const [contextInspectionEnabled, setContextInspectionEnabled] = useState(false);
@@ -145,6 +162,24 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         });
         return () => {
             unlistenPromise.then(unlisten => unlisten());
+        };
+    }, []);
+
+    // memory3 Phase 4: re-embed progress banner.
+    useEffect(() => {
+        const unlistenPromise = listen<{ phase: string; current: number; total: number }>(
+            "memory:reembed-progress",
+            (event) => {
+                const { current, total } = event.payload;
+                if (total === 0 || current >= total) {
+                    setReembedProgress(null);
+                } else {
+                    setReembedProgress({ current, total });
+                }
+            },
+        );
+        return () => {
+            unlistenPromise.then((unlisten) => unlisten());
         };
     }, []);
 
@@ -283,7 +318,13 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         // Built-in update_tasks is auto-approved (no external side effects);
                         // the disable_builtin_task_tool setting hides it from the LLM entirely,
                         // so if we see it here it's enabled and safe to auto-run.
-                        const isAutoApproved = (name: string) => name === "update_tasks" || !!toolPolicies[name];
+                        // The six memory_* tools are auto-approved by default — they only touch
+                        // local audit-visible markdown docs. The user can disable that in settings.
+                        const memoryAutoApprove = fullSettings?.memory_tools_auto_approve ?? true;
+                        const isAutoApproved = (name: string) =>
+                            name === "update_tasks"
+                            || (memoryAutoApprove && MEMORY_TOOL_NAMES.has(name))
+                            || !!toolPolicies[name];
                         const allAuto = toolsToRun.every(t => isAutoApproved(t.name));
                         if (allAuto) {
                             runTools(toolsToRun, history);
@@ -1039,7 +1080,13 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         // Built-in update_tasks is auto-approved (no external side effects);
                         // the disable_builtin_task_tool setting hides it from the LLM entirely,
                         // so if we see it here it's enabled and safe to auto-run.
-                        const isAutoApproved = (name: string) => name === "update_tasks" || !!toolPolicies[name];
+                        // The six memory_* tools are auto-approved by default — they only touch
+                        // local audit-visible markdown docs. The user can disable that in settings.
+                        const memoryAutoApprove = fullSettings?.memory_tools_auto_approve ?? true;
+                        const isAutoApproved = (name: string) =>
+                            name === "update_tasks"
+                            || (memoryAutoApprove && MEMORY_TOOL_NAMES.has(name))
+                            || !!toolPolicies[name];
                         const allAuto = toolsToRun.every(t => isAutoApproved(t.name));
 
                         if (allAuto) {
@@ -1112,6 +1159,40 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             return;
         }
 
+        // memory3 Phase 3: `/remember <text>` is a local-only command that runs
+        // KG fact extraction over the supplied text. It does not call the LLM
+        // with the full conversation; it just turns durable assertions into
+        // facts. Surface the result as an assistant note for the user.
+        const rememberPrefix = "/remember ";
+        if (input.trim().toLowerCase().startsWith(rememberPrefix)) {
+            const text = input.trim().slice(rememberPrefix.length).trim();
+            if (!text) {
+                console.log("Empty /remember payload.");
+                return;
+            }
+            setInput("");
+            try {
+                const result = await invoke<{ extracted: number; message: string }>(
+                    "extract_facts_from_text",
+                    { text },
+                );
+                const note: Message = {
+                    role: "system",
+                    content: `Remembered ${result.extracted} fact${result.extracted === 1 ? "" : "s"} from /remember: ${text}`,
+                    created_at: Math.floor(Date.now() / 1000),
+                };
+                setMessages((prev) => [...prev, note]);
+            } catch (e) {
+                const note: Message = {
+                    role: "system",
+                    content: `/remember failed: ${String(e)}`,
+                    created_at: Math.floor(Date.now() / 1000),
+                };
+                setMessages((prev) => [...prev, note]);
+            }
+            return;
+        }
+
         const currentAttachments = attachments.map(a => ({
             name: a.file.name,
             media_type: a.mediaType,
@@ -1147,6 +1228,28 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
     const handleCopy = useCallback((text: string) => {
         navigator.clipboard.writeText(text);
+    }, []);
+
+    const handleSaveAsFact = useCallback(async (messageId: string) => {
+        try {
+            const result = await invoke<{ extracted: number; message: string }>(
+                "extract_facts_for_message",
+                { messageId },
+            );
+            const note: Message = {
+                role: "system",
+                content: `Saved ${result.extracted} fact${result.extracted === 1 ? "" : "s"} from message.`,
+                created_at: Math.floor(Date.now() / 1000),
+            };
+            setMessages((prev) => [...prev, note]);
+        } catch (e) {
+            const note: Message = {
+                role: "system",
+                content: `Save-as-fact failed: ${String(e)}`,
+                created_at: Math.floor(Date.now() / 1000),
+            };
+            setMessages((prev) => [...prev, note]);
+        }
     }, []);
 
     const handleDelete = useCallback(async (index: number, id?: string) => {
@@ -1542,6 +1645,12 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 ref={scrollRef}
                 onScroll={handleScroll}
             >
+                {reembedProgress && (
+                    <div className="sticky top-0 z-10 -mt-4 -mx-4 mb-2 px-4 py-2 bg-purple-900/40 border-b border-purple-700/60 text-xs text-purple-100 flex items-center gap-2">
+                        <Brain size={14} className="text-purple-300 animate-pulse" />
+                        Re-embedding memory documents: {reembedProgress.current} / {reembedProgress.total}
+                    </div>
+                )}
                 {messages.map((m, i) => (
                     <ChatMessage
                         key={m.id || `${m.role}-${m.created_at ?? "?"}-${i}`}
@@ -1551,6 +1660,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         onEdit={handleEdit}
                         onDelete={handleDelete}
                         onRegenerate={handleRegenerate}
+                        onSaveAsFact={handleSaveAsFact}
                         showTimestamp={showMessageTimestamps}
                         genStats={m.id ? messageStats[m.id] : undefined}
                     />
@@ -1795,7 +1905,7 @@ const ThinkingBlock = memo(({ content }: { content: string }) => {
     );
 });
 
-const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRegenerate, showTimestamp, genStats }: { message: Message, index: number, onCopy: any, onEdit: any, onDelete: any, onRegenerate: any, showTimestamp: boolean, genStats?: StreamStatsEvent }) => {
+const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRegenerate, onSaveAsFact, showTimestamp, genStats }: { message: Message, index: number, onCopy: any, onEdit: any, onDelete: any, onRegenerate: any, onSaveAsFact?: (id: string) => void, showTimestamp: boolean, genStats?: StreamStatsEvent }) => {
     const [isExpanded, setIsExpanded] = useState(m.role !== "tool");
     const [showRaw, setShowRaw] = useState(false);
     const [showToolArgs, setShowToolArgs] = useState(false);
@@ -2085,6 +2195,15 @@ const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRe
                         {(m.role === "assistant" || m.role === "user" || m.role === "tool") && (
                             <button onClick={() => onRegenerate(i, m.role)} className="p-1 text-[var(--color-text-tertiary)] hover:text-green-400 transition-colors" title="Regenerate">
                                 <RefreshCw size={14} />
+                            </button>
+                        )}
+                        {m.role === "assistant" && m.id && onSaveAsFact && (
+                            <button
+                                onClick={() => onSaveAsFact(m.id!)}
+                                className="p-1 text-[var(--color-text-tertiary)] hover:text-purple-400 transition-colors"
+                                title="Extract long-term facts from this message"
+                            >
+                                <Brain size={14} />
                             </button>
                         )}
                     </div>

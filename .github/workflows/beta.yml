@@ -1,8 +1,8 @@
 # Manual beta release.
 #
 # Trigger from the Actions tab (Run workflow). Provide a version label like
-# `v0.5.2-beta.1`. Builds Linux (deb/rpm/AppImage) and macOS (universal dmg)
-# and publishes them as a *prerelease* on GitHub.
+# `v0.5.2-beta.1`. Builds Linux (deb/rpm/AppImage), macOS (universal dmg),
+# and Windows (msi + nsis exe), and publishes them as a *prerelease* on GitHub.
 #
 # Note: Tauri uses tauri.conf.json's `version` to name the bundles. The tag
 # you enter here is only used for the GitHub release/tag — bundles will still
@@ -39,6 +39,9 @@ jobs:
           - platform: macos-latest
             args: '--target universal-apple-darwin'
             rust-targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
+          - platform: windows-latest
+            args: ''
+            rust-targets: ''
     runs-on: ${{ matrix.platform }}
 
     steps:

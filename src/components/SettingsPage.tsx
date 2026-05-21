@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Server, Plus, Edit2, Book, Trash2, Palette, Brain, RefreshCw } from "lucide-react";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { Server, Plus, Edit2, Book, Trash2, Palette, Brain, RefreshCw, Folder, Copy } from "lucide-react";
 import ProvidersSettings, { ProviderConfig } from "./ProvidersSettings";
 import PromptsSettings from "./PromptsSettings";
 import { ThemeSelector } from "./ThemeSelector";
@@ -276,6 +277,24 @@ export default function SettingsPage() {
                 ...latest,
                 providers,
                 memory_enabled: fullSettings.memory_enabled ?? latest.memory_enabled,
+                memory_tools_auto_approve:
+                    fullSettings.memory_tools_auto_approve ?? latest.memory_tools_auto_approve,
+                memory_auto_inject_docs:
+                    fullSettings.memory_auto_inject_docs ?? latest.memory_auto_inject_docs,
+                memory_auto_inject_token_budget:
+                    fullSettings.memory_auto_inject_token_budget ?? latest.memory_auto_inject_token_budget,
+                memory_recall_score_floor:
+                    fullSettings.memory_recall_score_floor ?? latest.memory_recall_score_floor,
+                fact_extraction_policy:
+                    fullSettings.fact_extraction_policy ?? latest.fact_extraction_policy,
+                memory_embedding_provider:
+                    fullSettings.memory_embedding_provider ?? latest.memory_embedding_provider,
+                memory_fastembed_model:
+                    fullSettings.memory_fastembed_model ?? latest.memory_fastembed_model,
+                memory_remote_embedding_provider_id:
+                    fullSettings.memory_remote_embedding_provider_id ?? latest.memory_remote_embedding_provider_id,
+                memory_remote_embedding_model:
+                    fullSettings.memory_remote_embedding_model ?? latest.memory_remote_embedding_model,
                 context_model: fullSettings.context_model ?? latest.context_model,
                 context_turns: fullSettings.context_turns ?? latest.context_turns,
 
@@ -669,6 +688,149 @@ export default function SettingsPage() {
                                 </label>
                             </div>
 
+                            <div className="flex items-center justify-between gap-4 mb-3">
+                                <div>
+                                    <label className="block text-sm font-bold text-[var(--color-text-secondary)]">
+                                        Auto-approve memory tools
+                                    </label>
+                                    <p className="text-xs text-[var(--color-text-tertiary)]">
+                                        Skip the per-call approval popup for all <code className="font-mono">memory_doc_*</code> and <code className="font-mono">memory_fact_*</code> tools. They only touch local markdown docs and the SQLite knowledge graph, both of which you can audit on disk.
+                                    </p>
+                                </div>
+                                <label className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)] select-none">
+                                    <input
+                                        type="checkbox"
+                                        checked={fullSettings.memory_tools_auto_approve ?? true}
+                                        onChange={(e) => setFullSettings({ ...fullSettings, memory_tools_auto_approve: e.target.checked })}
+                                        className="h-4 w-4 rounded border-[var(--color-border-secondary)] bg-[var(--color-bg-primary)]"
+                                    />
+                                    Auto-approve
+                                </label>
+                            </div>
+
+                            <div className="flex items-center justify-between gap-4 mb-3">
+                                <div>
+                                    <label className="block text-sm font-bold text-[var(--color-text-secondary)]">
+                                        Auto-inject memory docs
+                                    </label>
+                                    <p className="text-xs text-[var(--color-text-tertiary)]">
+                                        Prefix every user turn with the most relevant memory doc and a prose summary of recent facts. Off-mode keeps the <code className="font-mono">memory_*</code> tools available so the LLM can still fetch on demand.
+                                    </p>
+                                </div>
+                                <label className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)] select-none">
+                                    <input
+                                        type="checkbox"
+                                        checked={fullSettings.memory_auto_inject_docs ?? true}
+                                        onChange={(e) => setFullSettings({ ...fullSettings, memory_auto_inject_docs: e.target.checked })}
+                                        className="h-4 w-4 rounded border-[var(--color-border-secondary)] bg-[var(--color-bg-primary)]"
+                                    />
+                                    Auto-inject
+                                </label>
+                            </div>
+
+                            <div className="mb-4 border-t border-[var(--color-border-primary)]/50 pt-4">
+                                <label className="block text-sm font-bold text-[var(--color-text-secondary)] mb-1">
+                                    Embedding source
+                                </label>
+                                <p className="text-xs text-[var(--color-text-tertiary)] mb-2">
+                                    How memory documents are embedded for semantic recall. Changing this re-embeds every doc on the next app start.
+                                </p>
+                                <select
+                                    className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded px-2 py-1 text-sm text-[var(--color-text-primary)] mb-2"
+                                    value={fullSettings.memory_embedding_provider ?? "fastembed"}
+                                    onChange={(e) => setFullSettings({ ...fullSettings, memory_embedding_provider: e.target.value })}
+                                >
+                                    <option value="fastembed">Local (fastembed, BGE-small)</option>
+                                    <option value="remote">Remote (configured provider)</option>
+                                </select>
+
+                                {(fullSettings.memory_embedding_provider ?? "fastembed") === "remote" && (
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <div>
+                                            <label className="block text-xs text-[var(--color-text-tertiary)] mb-1">Provider</label>
+                                            <select
+                                                className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded px-2 py-1 text-sm text-[var(--color-text-primary)]"
+                                                value={fullSettings.memory_remote_embedding_provider_id ?? ""}
+                                                onChange={(e) => setFullSettings({ ...fullSettings, memory_remote_embedding_provider_id: e.target.value || null })}
+                                            >
+                                                <option value="">— pick a provider —</option>
+                                                {Object.keys(fullSettings.providers ?? {}).map((pid) => (
+                                                    <option key={pid} value={pid}>{pid}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs text-[var(--color-text-tertiary)] mb-1">Model</label>
+                                            <input
+                                                type="text"
+                                                className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded px-2 py-1 text-sm text-[var(--color-text-primary)]"
+                                                placeholder="text-embedding-3-small"
+                                                value={fullSettings.memory_remote_embedding_model ?? ""}
+                                                onChange={(e) => setFullSettings({ ...fullSettings, memory_remote_embedding_model: e.target.value })}
+                                            />
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="mb-4">
+                                <label className="block text-sm font-bold text-[var(--color-text-secondary)] mb-1">
+                                    Fact extraction policy
+                                </label>
+                                <p className="text-xs text-[var(--color-text-tertiary)] mb-2">
+                                    When to run LLM-driven fact extraction into the knowledge graph.
+                                    The <code className="font-mono">/remember</code> chat command, the per-message
+                                    "Save as fact" button, and the LLM tool <code className="font-mono">memory_remember_fact</code>
+                                    work in all modes.
+                                </p>
+                                <select
+                                    className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded px-2 py-1 text-sm text-[var(--color-text-primary)]"
+                                    value={fullSettings.fact_extraction_policy ?? "explicit"}
+                                    onChange={(e) => setFullSettings({ ...fullSettings, fact_extraction_policy: e.target.value })}
+                                >
+                                    <option value="explicit">Explicit — user actions and the LLM tool only</option>
+                                    <option value="session_end">Session end — also extract on conversation switch</option>
+                                    <option value="off">Off — explicit and tool only, no session-end pass</option>
+                                </select>
+                            </div>
+
+                            <div className={`grid grid-cols-2 gap-4 mb-3 ${!(fullSettings.memory_auto_inject_docs ?? true) ? "opacity-50 pointer-events-none" : ""}`}>
+                                <div>
+                                    <label className="block text-sm font-bold text-[var(--color-text-secondary)] mb-1">
+                                        Auto-inject token budget
+                                    </label>
+                                    <p className="text-xs text-[var(--color-text-tertiary)] mb-2">
+                                        Hard cap on the auto-injected memory block (doc body + facts).
+                                    </p>
+                                    <input
+                                        type="number"
+                                        min={256}
+                                        max={32000}
+                                        step={256}
+                                        value={fullSettings.memory_auto_inject_token_budget ?? 4000}
+                                        onChange={(e) => setFullSettings({ ...fullSettings, memory_auto_inject_token_budget: parseInt(e.target.value, 10) || 4000 })}
+                                        className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded px-2 py-1 text-sm text-[var(--color-text-primary)]"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-bold text-[var(--color-text-secondary)] mb-1">
+                                        Recall score floor
+                                    </label>
+                                    <p className="text-xs text-[var(--color-text-tertiary)] mb-2">
+                                        Below this fused score, no doc is auto-injected.
+                                    </p>
+                                    <input
+                                        type="number"
+                                        min={0}
+                                        max={1}
+                                        step={0.05}
+                                        value={fullSettings.memory_recall_score_floor ?? 0.20}
+                                        onChange={(e) => setFullSettings({ ...fullSettings, memory_recall_score_floor: parseFloat(e.target.value) || 0.20 })}
+                                        className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded px-2 py-1 text-sm text-[var(--color-text-primary)]"
+                                    />
+                                </div>
+                            </div>
+
                             <div className={`ml-1 pl-4 border-l-2 border-[var(--color-border-secondary)]/30 transition-opacity duration-200 ${!(fullSettings.memory_enabled ?? true) ? "opacity-50 pointer-events-none" : ""}`}>
                                 <label className="block text-sm font-bold text-[var(--color-text-secondary)] mb-2">
                                     Conversation Turns to Analyze
@@ -713,6 +875,17 @@ export default function SettingsPage() {
                                     }))}
                                 />
                             </div>
+                        </div>
+
+                        {/* Storage paths — diagnostic, read-only */}
+                        <div className="mt-4 border-t border-[var(--color-border-secondary)]/50 pt-4">
+                            <label className="block text-sm font-bold text-[var(--color-text-secondary)] mb-1">
+                                Storage locations
+                            </label>
+                            <p className="text-xs text-[var(--color-text-tertiary)] mb-2">
+                                Where Nebula writes data on this machine. Markdown docs under <code className="font-mono">memory/docs/</code> are user-editable — others are managed by the app.
+                            </p>
+                            <PathsPanel />
                         </div>
 
                     </div>
@@ -1315,5 +1488,130 @@ export default function SettingsPage() {
                 )
             }
         </div >
+    );
+}
+
+interface MemoryPaths {
+    config_dir: string;
+    settings_path: string;
+    sqlite_db: string;
+    message_index: string;
+    docs_dir: string;
+    docs_index: string;
+}
+
+/// Read-only display of the resolved storage paths. Each row has a copy and
+/// (where it makes sense) an "open folder" button that uses the opener plugin.
+function PathsPanel() {
+    const [paths, setPaths] = useState<MemoryPaths | null>(null);
+    const [err, setErr] = useState<string | null>(null);
+    const [copied, setCopied] = useState<string | null>(null);
+    const [openErr, setOpenErr] = useState<string | null>(null);
+
+    useEffect(() => {
+        (async () => {
+            try {
+                const p = await invoke<MemoryPaths>("get_memory_paths");
+                setPaths(p);
+                setErr(null);
+            } catch (e) {
+                setErr(String(e));
+            }
+        })();
+    }, []);
+
+    const copyPath = async (key: string, value: string) => {
+        try {
+            await navigator.clipboard.writeText(value);
+            setCopied(key);
+            setTimeout(() => setCopied((c) => (c === key ? null : c)), 1500);
+        } catch (e) {
+            console.warn("clipboard write failed", e);
+        }
+    };
+
+    // Open a directory in the OS file manager. `openPath` opens the directory
+    // itself; if it doesn't exist yet (e.g. no docs created on a fresh install)
+    // we fall back to `revealItemInDir`, which shows the target highlighted in
+    // its parent — usable even when the leaf doesn't exist.
+    const openDir = async (value: string) => {
+        setOpenErr(null);
+        try {
+            await openPath(value);
+            return;
+        } catch (e) {
+            const primaryErr = String(e);
+            try {
+                await revealItemInDir(value);
+                return;
+            } catch (e2) {
+                const msg = `${primaryErr} (revealItemInDir fallback also failed: ${e2})`;
+                console.warn("open in file manager failed", msg);
+                setOpenErr(msg);
+                setTimeout(() => setOpenErr(null), 6000);
+            }
+        }
+    };
+
+    if (err) {
+        return (
+            <div className="text-xs text-red-300 bg-red-900/30 border border-red-700/50 rounded p-2">
+                Failed to load paths: {err}
+            </div>
+        );
+    }
+    if (!paths) {
+        return <div className="text-xs italic text-[var(--color-text-tertiary)]">Loading…</div>;
+    }
+
+    const rows: { key: keyof MemoryPaths; label: string; openable: boolean }[] = [
+        { key: "config_dir", label: "Config directory", openable: true },
+        { key: "settings_path", label: "Settings file", openable: false },
+        { key: "sqlite_db", label: "SQLite database", openable: false },
+        { key: "message_index", label: "Message search index", openable: true },
+        { key: "docs_dir", label: "Memory documents", openable: true },
+        { key: "docs_index", label: "Docs search index", openable: true },
+    ];
+
+    return (
+        <div className="space-y-1">
+            {openErr && (
+                <div className="text-[11px] text-red-300 bg-red-900/30 border border-red-700/50 rounded p-2">
+                    Could not open in file manager: {openErr}
+                </div>
+            )}
+            {rows.map((r) => (
+                <div
+                    key={r.key}
+                    className="flex items-center gap-2 text-[11px] bg-[var(--color-bg-tertiary)]/50 border border-[var(--color-border-secondary)] rounded px-2 py-1"
+                >
+                    <div className="min-w-[150px] text-[var(--color-text-secondary)] font-semibold">
+                        {r.label}
+                    </div>
+                    <code
+                        className="flex-1 font-mono text-[var(--color-text-primary)] truncate"
+                        title={paths[r.key]}
+                    >
+                        {paths[r.key]}
+                    </code>
+                    <button
+                        onClick={() => copyPath(r.key, paths[r.key])}
+                        className="p-1 text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]"
+                        title={copied === r.key ? "Copied" : "Copy path"}
+                    >
+                        <Copy size={12} />
+                    </button>
+                    {r.openable && (
+                        <button
+                            onClick={() => openDir(paths[r.key])}
+                            className="p-1 text-[var(--color-text-tertiary)] hover:text-purple-400"
+                            title="Open in system file manager"
+                        >
+                            <Folder size={12} />
+                        </button>
+                    )}
+                </div>
+            ))}
+        </div>
     );
 }

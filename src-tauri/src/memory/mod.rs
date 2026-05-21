@@ -1,15 +1,12 @@
 pub mod audit_logger;
+pub mod docs;
 pub mod extraction;
 pub mod librarian;
-pub mod strategist;
 
 pub mod sqlite_manager;
 pub mod tantivy_index;
 
 pub use librarian::SearchOptions;
-pub use strategist::{
-    SearchPlan, SearchQuery, StrategistContextResult, StrategistMemoryOrchestrator,
-};
 use tantivy_index::SearchResult;
 
 /// Kind of fact object: another entity eligible for traversal or a literal value.

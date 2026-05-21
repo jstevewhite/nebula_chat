@@ -28,9 +28,74 @@ pub mod tasks;
 pub struct AppState {
     mcp_manager: Arc<McpManager>,
     librarian: Arc<Mutex<crate::memory::librarian::Librarian>>,
+    /// memory3 Phase 1: botmem-style doc store. None when docs are disabled or
+    /// initialization failed (the rest of the app should keep working).
+    doc_store: Arc<Mutex<Option<Arc<crate::memory::docs::DocStore>>>>,
     active_task: Arc<Mutex<Option<tokio::task::AbortHandle>>>,
     // For context inspection: maps request_id -> oneshot sender for approval
     context_approvals: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
+}
+
+/// Instantiate the configured embedding provider. Returns `None` when the
+/// selected provider is unavailable in this build (e.g. `fastembed` chosen but
+/// the `local-embeddings` feature is off) or fails to initialise — recall then
+/// falls back to BM25-only.
+async fn init_embedder(
+    settings: &Settings,
+) -> Option<Arc<dyn crate::memory::docs::embedding::EmbeddingProvider>> {
+    match settings.memory_embedding_provider.as_str() {
+        "remote" => {
+            let provider_id = match settings.memory_remote_embedding_provider_id.as_deref() {
+                Some(id) if !id.is_empty() => id,
+                _ => {
+                    tracing::warn!(
+                        "memory_embedding_provider=remote but no memory_remote_embedding_provider_id configured"
+                    );
+                    return None;
+                }
+            };
+            let config = match settings.providers.get(provider_id) {
+                Some(c) => c.clone(),
+                None => {
+                    tracing::warn!(
+                        "memory_remote_embedding_provider_id '{provider_id}' is not in providers"
+                    );
+                    return None;
+                }
+            };
+            match crate::memory::docs::embedding::RemoteEmbeddingProvider::try_new(
+                provider_id.to_string(),
+                settings.memory_remote_embedding_model.clone(),
+                &config,
+            )
+            .await
+            {
+                Ok(p) => Some(
+                    Arc::new(p)
+                        as Arc<dyn crate::memory::docs::embedding::EmbeddingProvider>,
+                ),
+                Err(e) => {
+                    tracing::warn!(
+                        "Remote embedding init failed; docs recall will be BM25-only: {e}"
+                    );
+                    None
+                }
+            }
+        }
+        // "fastembed" or anything unknown falls through to the local provider.
+        _ => {
+            #[cfg(feature = "local-embeddings")]
+            {
+                match crate::memory::docs::embedding::FastembedProvider::try_default().await {
+                    Ok(p) => return Some(Arc::new(p) as Arc<dyn crate::memory::docs::embedding::EmbeddingProvider>),
+                    Err(e) => {
+                        tracing::warn!("Fastembed init failed; docs recall will be BM25-only: {e}");
+                    }
+                }
+            }
+            None
+        }
+    }
 }
 
 #[tauri::command]
@@ -583,29 +648,12 @@ async fn send_message(
                                 Err(e) => {
                                     tracing::error!("Failed to save user message: {}", e);
                                 }
-                                Ok(msg_id) => {
-                                    // Trigger Background Fact Extraction
-                                    let app_handle_bg = app_handle.clone();
-                                    let lib_clone = state.librarian.clone();
-                                    let content_clone = last.content.clone().unwrap_or_default();
-                                    let msg_id_clone = msg_id.clone();
-
-                                    tokio::spawn(async move {
-                                         let config_dir = app_handle_bg.path().app_config_dir().unwrap_or_default();
-                                         let settings_path = config_dir.join("settings.json");
-                                         let settings = Settings::load_migrated(&settings_path);
-
-                                        if let Some(model_id) = &settings.context_model {
-                                            let parts: Vec<&str> = model_id.split("::").collect();
-                                            if parts.len() == 2 {
-                                                if let Ok(provider) = crate::memory::StrategistMemoryOrchestrator::create_provider(parts[0], parts[1], &settings) {
-                                                    if let Err(e) = FactExtractor::extract(lib_clone, provider.as_ref(), "user", &content_clone, &msg_id_clone).await {
-                                                        tracing::warn!("Fact extraction failed: {}", e);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    });
+                                Ok(_msg_id) => {
+                                    // memory3 Phase 3: per-turn fact extraction
+                                    // has been removed. Facts are now written
+                                    // only via /remember, "Save as fact", the
+                                    // session-end pass, or the LLM tool
+                                    // `memory_remember_fact`.
                                 }
                             }
                         } else {
@@ -631,7 +679,6 @@ async fn send_message(
             .map_err(|e| e.to_string())?;
         let settings_path = config_dir.join("settings.json");
         let settings = Settings::load_migrated(&settings_path);
-        let extraction_model = settings.context_model.clone();
         let memory_enabled = settings.memory_enabled;
 
         // --- CONTEXT COMPACTION ---
@@ -665,52 +712,51 @@ async fn send_message(
         // Use effective_messages for context retrieval and final generation
         let messages_for_context = effective_messages.clone();
 
-        // Retrieve Context (Long-term memory) via Strategist Orchestrator
+        // Retrieve Context (Long-term memory) via the DocStore auto-injection
+        // layer (memory3 Phase 2). Replaces the verbose strategist
+        // planner/synthesizer with a deterministic recall + KG-prose block.
         let mut context_text = String::new();
-        if memory_enabled && !query.is_empty() {
-            // Use strategist orchestrator for intelligent context assembly
-            match crate::memory::StrategistMemoryOrchestrator::assemble_context(
-                &query,
-                &messages_for_context, // Use compacted history
-                state.librarian.clone(),
-                settings.context_turns,
-                settings.context_model.as_deref(),
-                &settings,
-                conversation_id.as_deref(),
-            )
-            .await
-            {
-                Ok(result) => {
-                    if !result.context_text.is_empty() {
-                        context_text = format!("Refined Context:\n{}\n", result.context_text);
+        if memory_enabled
+            && settings.memory_auto_inject_docs
+            && !query.is_empty()
+        {
+            let store = {
+                let slot = state.doc_store.lock().await;
+                slot.clone()
+            };
+            if let Some(store) = store {
+                match store
+                    .auto_inject(
+                        &query,
+                        state.librarian.clone(),
+                        settings.memory_auto_inject_token_budget,
+                        settings.memory_recall_score_floor,
+                    )
+                    .await
+                {
+                    Ok(result) if !result.is_empty() => {
+                        context_text = result.text.clone();
 
-                        // Emit memory-context event for UI
                         use tauri::Emitter;
-                        if let Err(e) =
-                            app_handle.emit("memory-context", &vec![result.context_text.clone()])
+                        if let Err(e) = app_handle.emit("memory-context", &vec![context_text.clone()])
                         {
                             tracing::error!("Failed to emit memory-context: {}", e);
                         }
-
-                        // Emit memory-hits event with selected IDs (for debugging/UI)
                         if let Err(e) =
-                            app_handle.emit("memory-selected-ids", &result.selected_message_ids)
+                            app_handle.emit("memory-selected-doc", &result.doc_id)
                         {
-                            tracing::error!("Failed to emit memory-selected-ids: {}", e);
+                            tracing::error!("Failed to emit memory-selected-doc: {}", e);
                         }
-
-                        // Log search plan if present (for debugging)
-                        if let Some(plan) = &result.search_plan {
-                            tracing::debug!("Strategist plan: {} queries", plan.queries.len());
-                            if let Some(notes) = &plan.notes {
-                                tracing::debug!("Plan notes: {}", notes);
-                            }
+                        if let Err(e) =
+                            app_handle.emit("memory-selected-fact-ids", &result.fact_ids)
+                        {
+                            tracing::error!("Failed to emit memory-selected-fact-ids: {}", e);
                         }
                     }
-                }
-                Err(e) => {
-                    tracing::error!("Strategist memory assembly failed: {}", e);
-                    // Continue without memory context rather than failing the entire request
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!("DocStore auto-inject failed: {}", e);
+                    }
                 }
             }
         }
@@ -723,7 +769,7 @@ async fn send_message(
                 id: None,
                 role: "system".to_string(),
                 content: Some(format!(
-                    "You have access to the following long-term memories:\n{}",
+                    "Long-term memory for this turn:\n\n{}",
                     context_text
                 )),
                 reasoning_content: None,
@@ -828,6 +874,20 @@ async fn send_message(
         // Inject the built-in update_tasks tool unless the user has disabled it.
         if !settings.disable_builtin_task_tool {
             tools.push(crate::tasks::build_update_tasks_tool());
+        }
+
+        // Inject the memory_* built-in tools (memory3 Phase 1). They are
+        // exposed only when the DocStore has finished initialising.
+        let doc_store_ready = {
+            let slot = state.doc_store.lock().await;
+            slot.is_some()
+        };
+        if doc_store_ready {
+            for t in crate::memory::docs::tools::build_all() {
+                if !settings.disabled_tools.contains(&t.name) {
+                    tools.push(t);
+                }
+            }
         }
 
         tracing::debug!("[DEBUG] Final tool count: {}", tools.len());
@@ -1173,32 +1233,12 @@ async fn send_message(
                 }
             });
 
-            // Trigger Background Fact Extraction for assistant message
-            if memory_enabled {
-                if let (Some(context_model), Some(msg_id), Some(content)) = (
-                    extraction_model.clone(),
-                    assistant_message_id_for_save,
-                    response.content.clone(),
-                ) {
-                    let app_for_facts = app_handle.clone();
-                    let librarian_for_facts = state.librarian.clone();
-                    
-                    tauri::async_runtime::spawn(async move {
-                         let config_dir = app_for_facts.path().app_config_dir().unwrap_or_default();
-                         let settings_path = config_dir.join("settings.json");
-                         let settings = Settings::load_migrated(&settings_path);
-
-                         let parts: Vec<&str> = context_model.split("::").collect();
-                         if parts.len() == 2 {
-                             if let Ok(provider) = crate::memory::StrategistMemoryOrchestrator::create_provider(parts[0], parts[1], &settings) {
-                                 if let Err(e) = FactExtractor::extract(librarian_for_facts, provider.as_ref(), "assistant", &content, &msg_id).await {
-                                     tracing::error!("Assistant fact extraction failed: {}", e);
-                                 }
-                             }
-                         }
-                    });
-                }
-            }
+            // memory3 Phase 3: per-turn assistant fact extraction has been
+            // removed. Facts are only written via the explicit / session_end
+            // policies or the `memory_remember_fact` LLM tool. The captured
+            // `assistant_message_id_for_save` is still used above to set
+            // `response.id`; nothing else is needed here.
+            let _ = &assistant_message_id_for_save;
         }
 
         Ok(response)
@@ -1234,6 +1274,408 @@ async fn send_message(
 
 
 
+
+// ---------- memory3 Phase 1: docs subsystem dispatch + UI commands ----------
+
+async fn dispatch_memory_tool(
+    store: &Arc<crate::memory::docs::DocStore>,
+    librarian: &Arc<Mutex<crate::memory::librarian::Librarian>>,
+    name: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    use crate::memory::docs::api::*;
+    use crate::memory::docs::tools::*;
+
+    fn err_value(e: &DocsError) -> serde_json::Value {
+        serde_json::to_value(e).unwrap_or_else(|_| serde_json::json!({"code": e.code, "message": e.message}))
+    }
+
+    match name {
+        n if n == TOOL_DOC_REMEMBER => {
+            let input: RememberInput = serde_json::from_value(args)
+                .map_err(|e| format!("memory_doc_remember: invalid args: {e}"))?;
+            match store.remember(input).await {
+                Ok(out) => Ok(serde_json::to_value(out).unwrap()),
+                Err(e) => Ok(err_value(&e)),
+            }
+        }
+        n if n == TOOL_DOC_FETCH => {
+            let id = args
+                .get("id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "memory_doc_fetch: missing id".to_string())?;
+            match store.fetch(id).await.map_err(|e| e.to_string())? {
+                Some(doc) => Ok(serde_json::to_value(doc).unwrap()),
+                None => Ok(err_value(&DocsError::new("NOT_FOUND", "no such doc"))),
+            }
+        }
+        n if n == TOOL_DOC_EDIT => {
+            let input: EditInput = serde_json::from_value(args)
+                .map_err(|e| format!("memory_doc_edit: invalid args: {e}"))?;
+            match store.edit(input).await {
+                Ok(out) => Ok(serde_json::to_value(out).unwrap()),
+                Err(e) => Ok(err_value(&e)),
+            }
+        }
+        n if n == TOOL_DOC_FORGET => {
+            let id = args
+                .get("id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "memory_doc_forget: missing id".to_string())?;
+            match store.forget(id).await {
+                Ok(()) => Ok(serde_json::json!({"ok": true, "id": id})),
+                Err(e) => Ok(err_value(&e)),
+            }
+        }
+        n if n == TOOL_DOC_RECALL => {
+            let input: RecallInput = serde_json::from_value(args)
+                .map_err(|e| format!("memory_doc_recall: invalid args: {e}"))?;
+            let out = store.recall(input).await.map_err(|e| e.to_string())?;
+            Ok(serde_json::to_value(out).unwrap())
+        }
+        n if n == TOOL_DOC_LINK_CONTEXT => {
+            let input: LinkContextInput = serde_json::from_value(args)
+                .map_err(|e| format!("memory_doc_link_context: invalid args: {e}"))?;
+            let out = store.link_context(input).await.map_err(|e| e.to_string())?;
+            Ok(serde_json::to_value(out).unwrap())
+        }
+        n if n == TOOL_FACT_REMEMBER => {
+            let subject = args
+                .get("subject")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "memory_fact_remember: missing subject".to_string())?
+                .trim();
+            let predicate = args
+                .get("predicate")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "memory_fact_remember: missing predicate".to_string())?
+                .trim();
+            let object = args
+                .get("object")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "memory_fact_remember: missing object".to_string())?
+                .trim();
+            if subject.is_empty() || predicate.is_empty() || object.is_empty() {
+                return Err("memory_fact_remember: subject/predicate/object must be non-empty".into());
+            }
+            let object_kind = match args
+                .get("object_kind")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_lowercase())
+                .as_deref()
+            {
+                Some("entity") => ObjectKind::Entity,
+                _ => ObjectKind::Literal,
+            };
+            let confidence = args
+                .get("confidence")
+                .and_then(|v| v.as_f64())
+                .map(|f| f as f32)
+                .unwrap_or(0.9)
+                .clamp(0.0, 1.0);
+
+            let new_fact = crate::memory::NewFact::new(
+                crate::memory::extraction::FactExtractor::normalize_key(subject),
+                crate::memory::extraction::FactExtractor::normalize_key(predicate),
+                object.to_string(),
+                object_kind,
+                confidence,
+                None,
+            );
+            let lib = librarian.lock().await;
+            let id = lib
+                .upsert_fact(new_fact)
+                .map_err(|e| format!("memory_fact_remember: {e}"))?;
+            Ok(serde_json::json!({ "id": id, "ok": true }))
+        }
+        n if n == TOOL_FACT_RECALL => {
+            let subject = args.get("subject").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty());
+            let predicate = args.get("predicate").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty());
+            let object = args.get("object").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty());
+            let limit = args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize)
+                .unwrap_or(20)
+                .clamp(1, 100);
+            let lib = librarian.lock().await;
+            let facts = lib
+                .sqlite
+                .search_facts_like(subject, predicate, object, limit)
+                .map_err(|e| format!("memory_fact_recall: {e}"))?;
+            Ok(serde_json::json!({ "facts": facts }))
+        }
+        n if n == TOOL_FACT_FORGET => {
+            let id = args
+                .get("id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "memory_fact_forget: missing id".to_string())?;
+            let lib = librarian.lock().await;
+            lib.delete_fact(id).map_err(|e| format!("memory_fact_forget: {e}"))?;
+            Ok(serde_json::json!({ "ok": true, "id": id }))
+        }
+        _ => Err(format!("memory dispatch: unknown tool '{name}'")),
+    }
+}
+
+#[tauri::command]
+async fn list_memory_docs(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::memory::docs::api::DocSummary>, String> {
+    let store = {
+        let slot = state.doc_store.lock().await;
+        slot.clone()
+    };
+    let store = store.ok_or_else(|| "Memory subsystem is not ready yet.".to_string())?;
+    store.list_docs().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn fetch_memory_doc(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Option<crate::memory::docs::api::DocRecord>, String> {
+    let store = {
+        let slot = state.doc_store.lock().await;
+        slot.clone()
+    };
+    let store = store.ok_or_else(|| "Memory subsystem is not ready yet.".to_string())?;
+    store.fetch(&id).await.map_err(|e| e.to_string())
+}
+
+#[derive(Clone, Serialize)]
+struct MemoryPaths {
+    config_dir: String,
+    settings_path: String,
+    sqlite_db: String,
+    message_index: String,
+    docs_dir: String,
+    docs_index: String,
+}
+
+/// Return the resolved filesystem paths for every place the memory subsystem
+/// writes data. Used by Settings → Long-term Memory to surface where the
+/// user's data actually lives on this machine.
+#[tauri::command]
+async fn get_memory_paths(app: tauri::AppHandle) -> Result<MemoryPaths, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let memory = config_dir.join("memory");
+    Ok(MemoryPaths {
+        config_dir: config_dir.to_string_lossy().into_owned(),
+        settings_path: config_dir.join("settings.json").to_string_lossy().into_owned(),
+        sqlite_db: config_dir.join("nebula.db").to_string_lossy().into_owned(),
+        message_index: config_dir
+            .join("fulltext_index")
+            .to_string_lossy()
+            .into_owned(),
+        docs_dir: memory.join("docs").to_string_lossy().into_owned(),
+        docs_index: memory.join("docs_index").to_string_lossy().into_owned(),
+    })
+}
+
+#[derive(Clone, Serialize)]
+struct ExtractionResult {
+    extracted: usize,
+    message: String,
+}
+
+/// Drive a one-shot fact extraction over arbitrary text. Used by the
+/// `/remember <text>` chat command.
+#[tauri::command]
+async fn extract_facts_from_text(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    text: String,
+) -> Result<ExtractionResult, String> {
+    if text.trim().is_empty() {
+        return Err("empty text".into());
+    }
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let settings = Settings::load_migrated(&settings_path);
+
+    let context_model = settings
+        .context_model
+        .clone()
+        .ok_or_else(|| "No context_model configured; set one in Settings".to_string())?;
+    let parts: Vec<&str> = context_model.split("::").collect();
+    if parts.len() != 2 {
+        return Err(format!("Malformed context_model '{}'", context_model));
+    }
+    let provider = crate::llm::factory::create_provider(parts[0], parts[1], &settings)
+        .map_err(|e| e.to_string())?;
+    let msg = FactExtractor::extract_with_source(
+        state.librarian.clone(),
+        provider.as_ref(),
+        "user",
+        &text,
+        None,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let extracted = parse_extract_count(&msg);
+    Ok(ExtractionResult {
+        extracted,
+        message: msg,
+    })
+}
+
+/// Extract facts from an existing stored message, e.g. when the user clicks
+/// "Save as fact" on an assistant turn.
+#[tauri::command]
+async fn extract_facts_for_message(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    message_id: String,
+) -> Result<ExtractionResult, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let settings = Settings::load_migrated(&settings_path);
+
+    let context_model = settings
+        .context_model
+        .clone()
+        .ok_or_else(|| "No context_model configured; set one in Settings".to_string())?;
+    let parts: Vec<&str> = context_model.split("::").collect();
+    if parts.len() != 2 {
+        return Err(format!("Malformed context_model '{}'", context_model));
+    }
+    let provider = crate::llm::factory::create_provider(parts[0], parts[1], &settings)
+        .map_err(|e| e.to_string())?;
+
+    let (role, content) = {
+        let lib = state.librarian.lock().await;
+        let rows = lib
+            .sqlite
+            .get_messages_by_ids(&[message_id.clone()])
+            .map_err(|e| e.to_string())?;
+        let (id, role, _tc, _tcid) = rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| format!("message {message_id} not found"))?;
+        // get_messages_by_ids does not return content; re-read via the conversation lookup.
+        let _ = id;
+        let content = lib
+            .sqlite
+            .get_message_content(&message_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("message {message_id} has no content"))?;
+        (role, content)
+    };
+
+    let msg = FactExtractor::extract_with_source(
+        state.librarian.clone(),
+        provider.as_ref(),
+        &role,
+        &content,
+        Some(message_id.clone()),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(ExtractionResult {
+        extracted: parse_extract_count(&msg),
+        message: msg,
+    })
+}
+
+/// Run the session-end extraction pass for a conversation, when the
+/// `fact_extraction_policy` setting is `"session_end"`. Walks messages added
+/// since the per-conversation checkpoint (stored in `memory_meta`) and runs a
+/// single extraction over their concatenation. Returns the number of facts
+/// written.
+#[tauri::command]
+async fn extract_session_end(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    conversation_id: String,
+) -> Result<ExtractionResult, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let settings = Settings::load_migrated(&settings_path);
+    if settings.fact_extraction_policy != "session_end" {
+        return Ok(ExtractionResult {
+            extracted: 0,
+            message: "policy is not session_end; skipping".into(),
+        });
+    }
+
+    let context_model = settings
+        .context_model
+        .clone()
+        .ok_or_else(|| "No context_model configured; set one in Settings".to_string())?;
+    let parts: Vec<&str> = context_model.split("::").collect();
+    if parts.len() != 2 {
+        return Err(format!("Malformed context_model '{}'", context_model));
+    }
+    let provider = crate::llm::factory::create_provider(parts[0], parts[1], &settings)
+        .map_err(|e| e.to_string())?;
+
+    let checkpoint_key = format!("fact_extraction_last_msg:{conversation_id}");
+
+    let (text, last_id) = {
+        let lib = state.librarian.lock().await;
+        let prev = lib
+            .sqlite
+            .meta_get(&checkpoint_key)
+            .map_err(|e| e.to_string())?;
+        let messages = lib
+            .sqlite
+            .get_conversation_messages(&conversation_id)
+            .map_err(|e| e.to_string())?;
+        let mut after: bool = prev.is_none();
+        let mut buf = String::new();
+        let mut last_id: Option<String> = None;
+        for (id, role, content, _tc, _tcid, _r, _created, _att) in messages {
+            if !after {
+                if Some(&id) == prev.as_ref() {
+                    after = true;
+                }
+                continue;
+            }
+            if let Some(c) = content {
+                buf.push_str(&format!("{role}: {c}\n\n"));
+            }
+            last_id = Some(id);
+        }
+        (buf, last_id)
+    };
+
+    if text.trim().is_empty() {
+        return Ok(ExtractionResult {
+            extracted: 0,
+            message: "no new messages since last checkpoint".into(),
+        });
+    }
+
+    let msg = FactExtractor::extract_with_source(
+        state.librarian.clone(),
+        provider.as_ref(),
+        "conversation",
+        &text,
+        None,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    if let Some(id) = last_id {
+        let lib = state.librarian.lock().await;
+        let _ = lib.sqlite.meta_set(&checkpoint_key, &id);
+    }
+
+    Ok(ExtractionResult {
+        extracted: parse_extract_count(&msg),
+        message: msg,
+    })
+}
+
+fn parse_extract_count(msg: &str) -> usize {
+    // FactExtractor returns "Extracted and saved N facts" or "No facts extracted".
+    msg.split_whitespace()
+        .find_map(|tok| tok.parse::<usize>().ok())
+        .unwrap_or(0)
+}
 
 #[tauri::command]
 async fn list_user_facts(state: State<'_, AppState>) -> Result<Vec<MemoryFact>, String> {
@@ -1353,6 +1795,45 @@ async fn execute_tool(
             "count": rows.len(),
             "message": "Task list updated."
         }));
+    }
+
+    // Memory tools are in-process, bypass MCP routing, and bypass the per-tool
+    // approval flow (they only touch local docs the user can audit on disk).
+    if crate::memory::docs::tools::is_memory_tool(&name) {
+        let store = {
+            let slot = state.doc_store.lock().await;
+            slot.clone()
+        };
+        let Some(store) = store else {
+            return Err("Memory subsystem is not ready yet. Try again in a moment.".into());
+        };
+        let result = dispatch_memory_tool(&store, &state.librarian, &name, args.clone()).await;
+
+        // memory3 Phase 4: log every memory-tool call to the audit log so the
+        // user can see exactly what the LLM wrote into their local stores.
+        if let Some(cid) = conversation_id.as_deref() {
+            let (status, preview, full) = match &result {
+                Ok(v) => {
+                    let s = v.to_string();
+                    let preview: String = s.chars().take(240).collect();
+                    ("success", preview, s)
+                }
+                Err(e) => ("error", e.clone(), e.clone()),
+            };
+            let lib = state.librarian.lock().await;
+            let _ = lib.audit.log_execution(
+                cid,
+                tool_call_id.as_deref().unwrap_or("memory-tool"),
+                &name,
+                "memory",
+                &args.to_string(),
+                &preview,
+                &full,
+                status,
+            );
+        }
+
+        return result;
     }
 
     // 2. Identify Server
@@ -2596,14 +3077,83 @@ pub fn run() {
                 let librarian = crate::memory::librarian::Librarian::new(&config_dir).unwrap();
                 let librarian_arc = Arc::new(Mutex::new(librarian));
 
-                // 2. AppState
+                // 2. DocStore (memory3 Phase 1).
+                let doc_store_slot: Arc<Mutex<Option<Arc<crate::memory::docs::DocStore>>>> =
+                    Arc::new(Mutex::new(None));
+
+                // 3. AppState
                 let state = AppState {
                     mcp_manager: mcp_manager.clone(),
                     librarian: librarian_arc.clone(),
+                    doc_store: doc_store_slot.clone(),
                     active_task: Arc::new(Mutex::new(None)),
                     context_approvals: Arc::new(Mutex::new(HashMap::new())),
                 };
                 app_handle.manage(state);
+
+                // 4. Initialise DocStore in the background so app start is fast
+                //    even on the first run that downloads the embedding model.
+                {
+                    let librarian_for_docs = librarian_arc.clone();
+                    let config_dir = config_dir.clone();
+                    let app_handle_for_docs = app_handle.clone();
+                    let doc_store_slot = doc_store_slot.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let docs_dir = config_dir.join("memory").join("docs");
+                        let docs_index_dir = config_dir.join("memory").join("docs_index");
+                        let settings_path_for_embed = config_dir.join("settings.json");
+                        let settings_for_embed =
+                            Settings::load_migrated(&settings_path_for_embed);
+                        let embedder = init_embedder(&settings_for_embed).await;
+                        match crate::memory::docs::DocStore::new(
+                            docs_dir,
+                            librarian_for_docs,
+                            docs_index_dir,
+                            embedder,
+                        )
+                        .await
+                        {
+                            Ok(store) => {
+                                // Forward DocStore progress events to the
+                                // frontend so the user sees re-embed activity.
+                                let app_for_progress = app_handle_for_docs.clone();
+                                store.set_progress_sink(Arc::new(move |phase, current, total| {
+                                    use tauri::Emitter;
+                                    let _ = app_for_progress.emit(
+                                        "memory:reembed-progress",
+                                        serde_json::json!({
+                                            "phase": phase,
+                                            "current": current,
+                                            "total": total,
+                                        }),
+                                    );
+                                }));
+                                match store.startup_reconcile().await {
+                                    Ok(summary) => tracing::info!(
+                                        "DocStore reconcile: scanned={} ingested={} updated={} deleted={}",
+                                        summary.scanned,
+                                        summary.ingested,
+                                        summary.updated,
+                                        summary.deleted,
+                                    ),
+                                    Err(e) => tracing::warn!("DocStore reconcile failed: {e}"),
+                                }
+                                if let Err(e) = store.start_watcher() {
+                                    tracing::warn!("DocStore watcher failed to start: {e}");
+                                }
+                                {
+                                    let mut slot = doc_store_slot.lock().await;
+                                    *slot = Some(store);
+                                }
+                                use tauri::Emitter;
+                                let _ = app_handle_for_docs.emit("docs-ready", ());
+                            }
+                            Err(e) => {
+                                tracing::error!("DocStore init failed: {e}");
+                            }
+                        }
+                    });
+                }
 
                 // 3. Initialize Context & MCP
                 let settings_path = config_dir.join("settings.json");
@@ -2676,7 +3226,13 @@ pub fn run() {
             update_fact,
             delete_fact,
             list_facts_for_entity,
-            cleanup_invalid_tool_messages
+            cleanup_invalid_tool_messages,
+            list_memory_docs,
+            fetch_memory_doc,
+            get_memory_paths,
+            extract_facts_from_text,
+            extract_facts_for_message,
+            extract_session_end
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
