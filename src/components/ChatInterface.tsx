@@ -280,7 +280,11 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         .filter(t => t !== null) as { name: string, args: any, callId: string }[];
 
                     if (toolsToRun.length > 0) {
-                        const allAuto = toolsToRun.every(t => toolPolicies[t.name]);
+                        // Built-in update_tasks is auto-approved (no external side effects);
+                        // the disable_builtin_task_tool setting hides it from the LLM entirely,
+                        // so if we see it here it's enabled and safe to auto-run.
+                        const isAutoApproved = (name: string) => name === "update_tasks" || !!toolPolicies[name];
+                        const allAuto = toolsToRun.every(t => isAutoApproved(t.name));
                         if (allAuto) {
                             runTools(toolsToRun, history);
                         } else {
@@ -1032,8 +1036,11 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                     }).filter(t => t !== null) as { name: string, args: any, callId: string }[];
 
                     if (toolsToRun.length > 0) {
-                        // Check for Auto-Approval
-                        const allAuto = toolsToRun.every(t => toolPolicies[t.name]);
+                        // Built-in update_tasks is auto-approved (no external side effects);
+                        // the disable_builtin_task_tool setting hides it from the LLM entirely,
+                        // so if we see it here it's enabled and safe to auto-run.
+                        const isAutoApproved = (name: string) => name === "update_tasks" || !!toolPolicies[name];
+                        const allAuto = toolsToRun.every(t => isAutoApproved(t.name));
 
                         if (allAuto) {
                             // Execute immediately
