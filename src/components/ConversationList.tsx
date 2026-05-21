@@ -355,9 +355,16 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
                             )}
                         </div>
 
-                        {/* Actions (Icon/Rename/Delete) */}
+                        {/* Actions (Icon/Rename/Delete).
+                            Visibility is driven by the JS `hoveredId` state (set via
+                            onMouseEnter/onMouseLeave) plus an active-row override.
+                            Earlier versions also applied Tailwind `opacity-0
+                            group-hover:opacity-100`, but the CSS `:hover` pseudo-class is
+                            unreliable on WebKitGTK (Linux) — the buttons would render in
+                            the DOM (clickable) yet stay invisible. JS state alone is
+                            reliable across platforms. */}
                         {(hoveredId === conv.id || activeId === conv.id) && !editingId && (
-                            <div className="absolute right-2 flex items-center gap-1 bg-[var(--color-bg-tertiary)] shadow-sm rounded-md p-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <div className="absolute right-2 flex items-center gap-1 bg-[var(--color-bg-tertiary)] shadow-sm rounded-md p-0.5">
                                 <button
                                     onClick={(e) => startEditIcon(e, conv)}
                                     className="p-1 hover:bg-gray-700 rounded text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
