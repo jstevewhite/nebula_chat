@@ -258,12 +258,12 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         .map(tc => {
                                 try {
                                     // Normalize callId by removing "functions." prefix if present
-                                    let callId = tc.id || "call_" + Math.random().toString(36).substr(2, 9);
+                                    let callId = tc.id || "call_" + Math.random().toString(36).slice(2, 11);
                                     if (callId.startsWith("functions.")) {
                                         callId = callId.substring("functions.".length);
                                         // Fallback if stripping "functions." results in empty string
                                         if (callId.trim() === "") {
-                                            callId = "call_" + Math.random().toString(36).substr(2, 9);
+                                            callId = "call_" + Math.random().toString(36).slice(2, 11);
                                         }
                                     }
                                     
@@ -1015,12 +1015,12 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                     const toolsToRun = response.tool_calls.map(tc => {
                         try {
                             // Normalize callId by removing "functions." prefix if present
-                            let callId = tc.id || "call_" + Math.random().toString(36).substr(2, 9);
+                            let callId = tc.id || "call_" + Math.random().toString(36).slice(2, 11);
                             if (callId.startsWith("functions.")) {
                                 callId = callId.substring("functions.".length);
                                 // Fallback if stripping "functions." results in empty string
                                 if (callId.trim() === "") {
-                                    callId = "call_" + Math.random().toString(36).substr(2, 9);
+                                    callId = "call_" + Math.random().toString(36).slice(2, 11);
                                 }
                             }
                             
