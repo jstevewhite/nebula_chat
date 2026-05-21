@@ -95,3 +95,9 @@ src-tauri/Cargo.lock
 
 # local settings dump (may contain secrets)
 settings_dump.json
+
+
+# Debug request/response dumps. Filenames often contain ':' from model ids
+# (e.g. provider:model), which is illegal on Windows and breaks CI checkout.
+src-tauri/*:*.json
+src-tauri/*_dump_*.json
