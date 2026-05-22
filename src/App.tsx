@@ -197,7 +197,7 @@ export default function App() {
           <SettingsPage />
         </div>
 
-        <RightRail recentMemories={recentMemories} />
+        <RightRail recentMemories={recentMemories} conversationId={activeConvId} />
       </div>
     </div>
   );

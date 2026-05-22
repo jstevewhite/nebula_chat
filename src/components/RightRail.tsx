@@ -1,21 +1,57 @@
 import { useState, useEffect } from "react";
 import { Wrench, Brain, X } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import ToolsPanel from "./ToolsPanel";
 import MemoryPanel from "./MemoryPanel";
+import TasksPanel from "./TasksPanel";
 
 type RightRailTab = "tools" | "memory";
 
 interface RightRailProps {
     recentMemories: string[];
+    conversationId: string | null;
 }
 
-export default function RightRail({ recentMemories }: RightRailProps) {
+export default function RightRail({ recentMemories, conversationId }: RightRailProps) {
     const [activeTab, setActiveTab] = useState<RightRailTab>(() => loadState().activeTab);
     const [collapsed, setCollapsed] = useState<boolean>(() => loadState().collapsed);
 
     useEffect(() => {
         saveState({ activeTab, collapsed });
     }, [activeTab, collapsed]);
+
+    const [taskCount, setTaskCount] = useState(0);
+
+    useEffect(() => {
+        if (!conversationId) {
+            setTaskCount(0);
+            return;
+        }
+        let cancelled = false;
+        invoke<Array<unknown>>("get_conversation_tasks", { conversationId })
+            .then((rows) => {
+                if (!cancelled) setTaskCount(rows.length);
+            })
+            .catch((e) => console.error("RightRail: get_conversation_tasks failed", e));
+        return () => {
+            cancelled = true;
+        };
+    }, [conversationId]);
+
+    useEffect(() => {
+        const unlistenPromise = listen<{ conversation_id: string; tasks: Array<unknown> }>(
+            "tasks-updated",
+            (event) => {
+                if (event.payload.conversation_id === conversationId) {
+                    setTaskCount(event.payload.tasks.length);
+                }
+            }
+        );
+        return () => {
+            unlistenPromise.then((unlisten) => unlisten());
+        };
+    }, [conversationId]);
 
     if (collapsed) {
         return (
@@ -64,7 +100,7 @@ export default function RightRail({ recentMemories }: RightRailProps) {
                     <X size={16} />
                 </button>
             </div>
-            <div className="flex-1 overflow-hidden">
+            <div className={taskCount > 0 ? "flex-1 min-h-0 overflow-hidden flex flex-col" : "flex-1 overflow-hidden"}>
                 {activeTab === "tools" && <ToolsPanel />}
                 {activeTab === "memory" && (
                     <MemoryPanel
@@ -73,6 +109,14 @@ export default function RightRail({ recentMemories }: RightRailProps) {
                     />
                 )}
             </div>
+            {taskCount > 0 && (
+                <div className="border-t border-[var(--color-border-primary)] h-2/5 min-h-0 shrink-0 flex">
+                    <TasksPanel
+                        conversationId={conversationId}
+                        onClose={() => { /* Tasks slab auto-hides when empty; no manual close */ }}
+                    />
+                </div>
+            )}
         </div>
     );
 }
