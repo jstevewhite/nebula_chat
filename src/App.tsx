@@ -197,7 +197,7 @@ export default function App() {
           <SettingsPage />
         </div>
 
-        <RightRail />
+        <RightRail recentMemories={recentMemories} />
       </div>
     </div>
   );
