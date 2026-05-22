@@ -169,30 +169,6 @@ considered it.
 
 ## Other deferred items (not memory3)
 
-### Anthropic-compatible custom endpoints
-
-**Goal:** Many providers now offer Anthropic-compatible endpoints (e.g.
-`/v1/messages`-shaped APIs hosted by non-Anthropic vendors). Allow instantiating
-an Anthropic-shaped provider with a custom base URL and API key, the same way
-the OpenAI provider already supports custom endpoints.
-
-**Files:**
-- `src-tauri/src/llm/anthropic.rs` — accept a configurable base URL instead of
-  hardcoding `https://api.anthropic.com`.
-- `src-tauri/src/mcp/config.rs` — the provider config struct for Anthropic
-  needs a `base_url: Option<String>` field (mirroring whatever OpenAI uses).
-- `src/components/ProvidersSettings.tsx` — expose the custom endpoint input for
-  Anthropic-type providers.
-
-**Gotchas:**
-- Some "Anthropic-compatible" endpoints diverge subtly (auth header name,
-  beta-feature headers, tool-call schema quirks). Start with base URL + API
-  key swap; layer compatibility flags only if a real provider breaks.
-- Streaming format (`event: message_delta` SSE) should be the same — verify
-  against at least one third-party endpoint before declaring done.
-
----
-
 ### Combine Tools / Memory / Tasks panels
 
 **Goal:** The left activity bar currently has separate panels for tool
