@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Wrench, Brain, X } from "lucide-react";
 import ToolsPanel from "./ToolsPanel";
 import MemoryPanel from "./MemoryPanel";
@@ -10,8 +10,12 @@ interface RightRailProps {
 }
 
 export default function RightRail({ recentMemories }: RightRailProps) {
-    const [activeTab, setActiveTab] = useState<RightRailTab>("tools");
-    const [collapsed, setCollapsed] = useState(false);
+    const [activeTab, setActiveTab] = useState<RightRailTab>(() => loadState().activeTab);
+    const [collapsed, setCollapsed] = useState<boolean>(() => loadState().collapsed);
+
+    useEffect(() => {
+        saveState({ activeTab, collapsed });
+    }, [activeTab, collapsed]);
 
     if (collapsed) {
         return (
@@ -113,4 +117,38 @@ function CollapsedIcon({ icon, title, onClick }: CollapsedIconProps) {
             {icon}
         </button>
     );
+}
+
+const STORAGE_KEY = "nebula.rightRail";
+
+interface RightRailState {
+    collapsed: boolean;
+    activeTab: RightRailTab;
+}
+
+const DEFAULT_STATE: RightRailState = {
+    collapsed: false,
+    activeTab: "tools",
+};
+
+function loadState(): RightRailState {
+    try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return DEFAULT_STATE;
+        const parsed = JSON.parse(raw) as Partial<RightRailState>;
+        return {
+            collapsed: typeof parsed.collapsed === "boolean" ? parsed.collapsed : DEFAULT_STATE.collapsed,
+            activeTab: parsed.activeTab === "memory" ? "memory" : "tools",
+        };
+    } catch {
+        return DEFAULT_STATE;
+    }
+}
+
+function saveState(state: RightRailState): void {
+    try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch {
+        // ignore: storage may be full or disabled
+    }
 }
