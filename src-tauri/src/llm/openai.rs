@@ -1,6 +1,7 @@
 use crate::llm::provider::{
     GenerationOptions, LlmProvider, Message, StreamContent, ToolDefinition,
 };
+use crate::llm::think_tag::ThinkTagSplitter;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -504,12 +505,32 @@ impl LlmProvider for OpenAiProvider {
             .cloned()
             .and_then(|v| v.as_array().cloned());
 
-        let reasoning_content = choice
+        let reasoning_from_field = choice
             .get("reasoning_content")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
+        // Split inline <think>...</think> out of the main content (MiniMax, etc.).
+        let (clean_content, inline_reasoning) = {
+            let mut splitter = ThinkTagSplitter::new();
+            let (mut text, mut reasoning) = splitter.push(&content_text);
+            let (text_tail, reasoning_tail) = splitter.flush();
+            text.push_str(&text_tail);
+            reasoning.push_str(&reasoning_tail);
+            (text, reasoning)
+        };
+
+        let reasoning_content = match (reasoning_from_field, inline_reasoning) {
+            (Some(field), inline) if inline.is_empty() => Some(field),
+            (Some(field), inline) => Some(format!("{}\n{}", field, inline)),
+            (None, inline) if inline.is_empty() => None,
+            (None, inline) => Some(inline),
+        };
+
+        let content_text = clean_content;
+
         if content_text.is_empty()
+            && reasoning_content.is_none()
             && (tool_calls.is_none() || tool_calls.as_ref().unwrap().is_empty())
         {
             let raw = json.to_string();
@@ -785,6 +806,7 @@ impl LlmProvider for OpenAiProvider {
 
         let mut sse_buffer = String::new();
         let mut saw_any_delta = false;
+        let mut think_splitter = ThinkTagSplitter::new();
 
         let mut current_tool_index: Option<usize> = None;
         let mut current_tool_id = String::new();
@@ -816,10 +838,27 @@ impl LlmProvider for OpenAiProvider {
                                 if let Some(choice) = choices.first() {
                                     if let Some(delta) = choice.get("delta") {
                                         tracing::debug!("Raw delta: {:?}", delta);
-                                        // Content
+                                        // Content — route through ThinkTagSplitter so that
+                                        // inline <think>...</think> blocks (MiniMax, some
+                                        // Ollama models) are surfaced as reasoning instead
+                                        // of mixed into the main text channel.
+                                        let mut feed_content = |chunk: &str| {
+                                            let (text_out, reasoning_out) =
+                                                think_splitter.push(chunk);
+                                            if !text_out.is_empty() {
+                                                on_token(StreamContent::Text(text_out.clone()));
+                                                full_content.push_str(&text_out);
+                                            }
+                                            if !reasoning_out.is_empty() {
+                                                on_token(StreamContent::Reasoning(
+                                                    reasoning_out.clone(),
+                                                ));
+                                                full_reasoning.push_str(&reasoning_out);
+                                            }
+                                        };
+
                                         if let Some(content_str) = delta["content"].as_str() {
-                                            on_token(StreamContent::Text(content_str.to_string()));
-                                            full_content.push_str(content_str);
+                                            feed_content(content_str);
                                             saw_any_delta = true;
                                         } else if let Some(parts) = delta["content"].as_array() {
                                             for part in parts {
@@ -829,10 +868,7 @@ impl LlmProvider for OpenAiProvider {
                                                     if let Some(txt) =
                                                         part.get("text").and_then(|v| v.as_str())
                                                     {
-                                                        on_token(StreamContent::Text(
-                                                            txt.to_string(),
-                                                        ));
-                                                        full_content.push_str(txt);
+                                                        feed_content(txt);
                                                         saw_any_delta = true;
                                                     }
                                                 }
@@ -918,6 +954,17 @@ impl LlmProvider for OpenAiProvider {
                     "arguments": current_tool_args
                 }
             }));
+        }
+
+        // Flush any content the splitter was holding for a possible tag match.
+        let (text_tail, reasoning_tail) = think_splitter.flush();
+        if !text_tail.is_empty() {
+            on_token(StreamContent::Text(text_tail.clone()));
+            full_content.push_str(&text_tail);
+        }
+        if !reasoning_tail.is_empty() {
+            on_token(StreamContent::Reasoning(reasoning_tail.clone()));
+            full_reasoning.push_str(&reasoning_tail);
         }
 
         if full_content.is_empty()

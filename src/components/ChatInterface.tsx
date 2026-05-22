@@ -1944,7 +1944,10 @@ const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRe
 
     const timestampText = showTimestamp ? formatTimestamp(m.created_at) : "";
 
-    // Parsing logic for <thinking> or <reasoning> tags
+    // Parsing logic for <think>, <thinking>, or <reasoning> tags.
+    // The backend (OpenAI/Ollama providers) now strips <think>...</think> from
+    // streamed content and routes it to reasoning_content. This regex remains
+    // as a safety net for older saved messages and other tag variants.
     const { cleanContent, thinkingContent } = (() => {
         // Priority 1: Dedicated reasoning content (e.g. from DeepSeek/Qwen via backend)
         if (m.reasoning_content) {
@@ -1953,7 +1956,7 @@ const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRe
 
         // Priority 2: Tag parsing (fallback)
         if (!displayContent) return { cleanContent: "", thinkingContent: null };
-        const match = /<(thinking|reasoning)>([\s\S]*?)(<\/\1>|$)/i.exec(displayContent);
+        const match = /<(think|thinking|reasoning)>([\s\S]*?)(<\/\1>|$)/i.exec(displayContent);
         if (match) {
             const fullMatch = match[0];
             const innerContent = match[2];
