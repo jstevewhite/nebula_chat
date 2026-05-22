@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Wrench, Brain } from "lucide-react";
+import { Wrench, Brain, X } from "lucide-react";
 import ToolsPanel from "./ToolsPanel";
 import MemoryPanel from "./MemoryPanel";
 
@@ -11,10 +11,34 @@ interface RightRailProps {
 
 export default function RightRail({ recentMemories }: RightRailProps) {
     const [activeTab, setActiveTab] = useState<RightRailTab>("tools");
+    const [collapsed, setCollapsed] = useState(false);
+
+    if (collapsed) {
+        return (
+            <div className="w-10 h-full border-l border-[var(--color-border-primary)] bg-[var(--color-bg-tertiary)] flex flex-col items-center py-3 gap-2 shrink-0">
+                <CollapsedIcon
+                    icon={<Wrench size={18} />}
+                    title="Tools"
+                    onClick={() => {
+                        setActiveTab("tools");
+                        setCollapsed(false);
+                    }}
+                />
+                <CollapsedIcon
+                    icon={<Brain size={18} />}
+                    title="Memory"
+                    onClick={() => {
+                        setActiveTab("memory");
+                        setCollapsed(false);
+                    }}
+                />
+            </div>
+        );
+    }
 
     return (
         <div className="w-80 h-full border-l border-[var(--color-border-primary)] bg-[var(--color-bg-secondary)] flex flex-col shrink-0">
-            <div className="flex border-b border-[var(--color-border-primary)]">
+            <div className="flex border-b border-[var(--color-border-primary)] items-stretch">
                 <TabButton
                     label="Tools"
                     icon={<Wrench size={14} />}
@@ -27,6 +51,14 @@ export default function RightRail({ recentMemories }: RightRailProps) {
                     active={activeTab === "memory"}
                     onClick={() => setActiveTab("memory")}
                 />
+                <button
+                    onClick={() => setCollapsed(true)}
+                    className="px-3 text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)] transition-colors"
+                    title="Collapse panel"
+                    aria-label="Collapse right rail"
+                >
+                    <X size={16} />
+                </button>
             </div>
             <div className="flex-1 overflow-hidden">
                 {activeTab === "tools" && <ToolsPanel />}
@@ -60,6 +92,25 @@ function TabButton({ label, icon, active, onClick }: TabButtonProps) {
         >
             {icon}
             {label}
+        </button>
+    );
+}
+
+interface CollapsedIconProps {
+    icon: React.ReactNode;
+    title: string;
+    onClick: () => void;
+}
+
+function CollapsedIcon({ icon, title, onClick }: CollapsedIconProps) {
+    return (
+        <button
+            onClick={onClick}
+            title={title}
+            aria-label={`Open ${title}`}
+            className="p-2 rounded-lg text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text-primary)] transition-colors"
+        >
+            {icon}
         </button>
     );
 }
