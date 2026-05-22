@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import ChatInterface from "./components/ChatInterface";
 import SettingsPage from "./components/SettingsPage";
 import ConversationList from "./components/ConversationList";
-import ToolsPanel from "./components/ToolsPanel";
+import RightRail from "./components/RightRail";
 import { Brain, Eye, EyeOff, ListChecks, MessageSquare, Settings, Wrench } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -191,12 +191,13 @@ export default function App() {
               recentMemories={recentMemories}
             />
           </div>
-          {showTools && <ToolsPanel />}
         </div>
 
         <div className={activeTab === "settings" ? "flex flex-1 overflow-auto justify-center" : "hidden"}>
           <SettingsPage />
         </div>
+
+        <RightRail />
       </div>
     </div>
   );
