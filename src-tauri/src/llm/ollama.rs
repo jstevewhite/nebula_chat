@@ -1,6 +1,7 @@
 use crate::llm::provider::{
     GenerationOptions, LlmProvider, Message, StreamContent, ToolDefinition,
 };
+use crate::llm::think_tag::ThinkTagSplitter;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -169,7 +170,25 @@ impl LlmProvider for OllamaProvider {
         let json: Value = resp.json().await?;
         let choice = &json["choices"][0]["message"];
 
-        let content = choice["content"].as_str().map(|s| s.to_string());
+        let raw_content = choice["content"].as_str().unwrap_or_default();
+        let (clean_content, inline_reasoning) = {
+            let mut splitter = ThinkTagSplitter::new();
+            let (mut text, mut reasoning) = splitter.push(raw_content);
+            let (text_tail, reasoning_tail) = splitter.flush();
+            text.push_str(&text_tail);
+            reasoning.push_str(&reasoning_tail);
+            (text, reasoning)
+        };
+        let content = if clean_content.is_empty() {
+            None
+        } else {
+            Some(clean_content)
+        };
+        let reasoning_content = if inline_reasoning.is_empty() {
+            None
+        } else {
+            Some(inline_reasoning)
+        };
         let tool_calls = choice
             .get("tool_calls")
             .cloned()
@@ -182,7 +201,7 @@ impl LlmProvider for OllamaProvider {
             tool_calls,
             tool_call_id: None,
             attachments: None,
-            reasoning_content: None,
+            reasoning_content,
             created_at: None,
         })
     }
@@ -308,6 +327,8 @@ impl LlmProvider for OllamaProvider {
             .bytes_stream();
 
         let mut full_content = String::new();
+        let mut full_reasoning = String::new();
+        let mut think_splitter = ThinkTagSplitter::new();
         // Ollama streaming tool calls support varies; implement basic accumulation similar to OpenAI
         let mut tool_calls_acc: Vec<Value> = Vec::new();
         let mut current_tool_index: Option<usize> = None;
@@ -333,8 +354,18 @@ impl LlmProvider for OllamaProvider {
                         if let Some(choice) = choices.first() {
                             if let Some(delta) = choice.get("delta") {
                                 if let Some(content) = delta["content"].as_str() {
-                                    on_token(StreamContent::Text(content.to_string()));
-                                    full_content.push_str(content);
+                                    let (text_out, reasoning_out) =
+                                        think_splitter.push(content);
+                                    if !text_out.is_empty() {
+                                        on_token(StreamContent::Text(text_out.clone()));
+                                        full_content.push_str(&text_out);
+                                    }
+                                    if !reasoning_out.is_empty() {
+                                        on_token(StreamContent::Reasoning(
+                                            reasoning_out.clone(),
+                                        ));
+                                        full_reasoning.push_str(&reasoning_out);
+                                    }
                                 }
 
                                 if let Some(delta_tool_calls) = delta["tool_calls"].as_array() {
@@ -388,6 +419,16 @@ impl LlmProvider for OllamaProvider {
             }));
         }
 
+        let (text_tail, reasoning_tail) = think_splitter.flush();
+        if !text_tail.is_empty() {
+            on_token(StreamContent::Text(text_tail.clone()));
+            full_content.push_str(&text_tail);
+        }
+        if !reasoning_tail.is_empty() {
+            on_token(StreamContent::Reasoning(reasoning_tail.clone()));
+            full_reasoning.push_str(&reasoning_tail);
+        }
+
         Ok(Message {
             id: None,
             role: "assistant".to_string(),
@@ -403,7 +444,11 @@ impl LlmProvider for OllamaProvider {
             },
             tool_call_id: None,
             attachments: None,
-            reasoning_content: None, // Ollama might support this in future but generic for now
+            reasoning_content: if full_reasoning.is_empty() {
+                None
+            } else {
+                Some(full_reasoning)
+            },
             created_at: None,
         })
     }

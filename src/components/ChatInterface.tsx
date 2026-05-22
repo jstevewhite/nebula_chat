@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, memo, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check, Pin, FileText, Book, Paperclip, X, Brain, Square, Sliders, Download, Eye, EyeOff, ChevronRight, ChevronDown, ListChecks } from "lucide-react";
+import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check, Pin, FileText, Book, Paperclip, X, Brain, Square, Sliders, Download, Eye, ChevronRight, ChevronDown } from "lucide-react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile, readFile, readTextFile } from "@tauri-apps/plugin-fs";
 import ReactMarkdown from "react-markdown";
@@ -74,8 +74,13 @@ interface StreamStatsEvent {
     duration_ms: number;
 }
 
+type SidePanel = "none" | "memory" | "tasks";
+
 interface ChatInterfaceProps {
     conversationId: string | null;
+    activeSidePanel: SidePanel;
+    onChangeSidePanel: (panel: SidePanel) => void;
+    recentMemories: string[];
 }
 
 interface ModelOption {
@@ -105,7 +110,7 @@ interface GenerationSettings {
     reasoning_effort?: string; // "low", "medium", "high"
 }
 
-export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
+export default function ChatInterface({ conversationId, activeSidePanel, onChangeSidePanel, recentMemories }: ChatInterfaceProps) {
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState("");
     const [loading, setLoading] = useState(false);
@@ -140,13 +145,11 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     const [prompts, setPrompts] = useState<SystemPrompt[]>([]);
     const [selectedPromptId, setSelectedPromptId] = useState<string>("");
 
-    // Side Panels
-    const [activeSidePanel, setActiveSidePanel] = useState<'none' | 'memory' | 'tasks'>('none');
-    const [recentMemories, setRecentMemories] = useState<string[]>([]);
+    // Side Panels (activeSidePanel + recentMemories are lifted into App.tsx
+    // so the activity-bar icons can drive them).
     const [reembedProgress, setReembedProgress] = useState<{ current: number; total: number } | null>(null);
 
     // Settings-driven toggles
-    const [contextInspectionEnabled, setContextInspectionEnabled] = useState(false);
     const [memoryEnabled, setMemoryEnabled] = useState<boolean>(true);
     const [fullSettings, setFullSettings] = useState<any>(null);
     const [showContextModal, setShowContextModal] = useState(false);
@@ -156,17 +159,6 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     // Tool Execution State
     const [pendingTools, setPendingTools] = useState<{ name: string, args: any, callId: string }[]>([]);
     const [toolPolicies, setToolPolicies] = useState<Record<string, boolean>>({});
-
-    // Listen for Memory Events
-    useEffect(() => {
-        const unlistenPromise = listen<string[]>("memory-context", (event) => {
-            console.log("Memory Context Received:", event.payload);
-            setRecentMemories(event.payload);
-        });
-        return () => {
-            unlistenPromise.then(unlisten => unlisten());
-        };
-    }, []);
 
     // memory3 Phase 4: re-embed progress banner.
     useEffect(() => {
@@ -572,7 +564,6 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         try {
             const settings: any = await invoke("get_settings");
             setFullSettings(settings);
-            setContextInspectionEnabled(settings.context_inspection_enabled || false);
             setMemoryEnabled(settings.memory_enabled ?? true);
             setShowMessageTimestamps(settings.show_message_timestamps ?? false);
             const models: ModelOption[] = [];
@@ -630,23 +621,6 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     const handleSetPrompt = async (id: string) => {
         setSelectedPromptId(id);
         await invoke("set_active_system_prompt", { id: id || null });
-    };
-
-    const toggleContextInspection = async () => {
-        const newValue = !contextInspectionEnabled;
-        setContextInspectionEnabled(newValue);
-
-        if (fullSettings) {
-            const updatedSettings = { ...fullSettings, context_inspection_enabled: newValue };
-            try {
-                await invoke("save_settings", { settings: updatedSettings });
-                setFullSettings(updatedSettings);
-            } catch (e) {
-                console.error("Failed to save context inspection setting:", e);
-                // Revert on error
-                setContextInspectionEnabled(!newValue);
-            }
-        }
     };
 
     const toggleMemoryEnabled = async () => {
@@ -1576,6 +1550,17 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         )}
                     </div>
 
+                    {/* Memory ON/OFF — kept next to Generation Settings so the
+                        gating toggle is adjacent to the rest of the generation
+                        controls it affects. */}
+                    <button
+                        onClick={toggleMemoryEnabled}
+                        className={`p-2 rounded-lg transition-colors ${memoryEnabled ? 'bg-emerald-500/20 text-emerald-400' : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)]'}`}
+                        title={`Memory: ${memoryEnabled ? 'ON - Use long-term memory and facts' : 'OFF - No long-term memory or fact extraction'}`}
+                    >
+                        <Brain size={18} />
+                    </button>
+
                     {/* Export Button */}
                     <div className="relative group">
                         <button className="p-2 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)] rounded-lg transition-colors" title="Export Conversation">
@@ -1597,47 +1582,6 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         </div>
                     </div>
 
-                    <div className="h-4 w-px bg-[var(--color-bg-tertiary)] mx-2" />
-
-                    <button
-                        onClick={() => setActiveSidePanel(activeSidePanel === 'memory' ? 'none' : 'memory')}
-                        className={`p-2 rounded-lg transition-colors relative ${activeSidePanel === 'memory' ? 'bg-purple-500/20 text-purple-400' : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)]'}`}
-                        title="Memory Context"
-                    >
-                        <Brain size={18} />
-                        {recentMemories.length > 0 && (
-                            <span className="absolute -top-1 -right-1 flex h-3 w-3">
-                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span>
-                                <span className="relative inline-flex rounded-full h-3 w-3 bg-purple-500"></span>
-                            </span>
-                        )}
-                    </button>
-
-                    <button
-                        type="button"
-                        onClick={() => setActiveSidePanel(activeSidePanel === 'tasks' ? 'none' : 'tasks')}
-                        className={`p-2 rounded-lg transition-colors ${activeSidePanel === 'tasks' ? 'bg-blue-500/20 text-blue-400' : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)]'}`}
-                        title={activeSidePanel === 'tasks' ? "Hide tasks" : "Show tasks"}
-                        aria-pressed={activeSidePanel === 'tasks'}
-                    >
-                        <ListChecks size={18} />
-                    </button>
-
-                    <button
-                        onClick={toggleMemoryEnabled}
-                        className={`p-2 rounded-lg transition-colors ${memoryEnabled ? 'bg-emerald-500/20 text-emerald-400' : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)]'}`}
-                        title={`Memory: ${memoryEnabled ? 'ON - Use long-term memory and facts' : 'OFF - No long-term memory or fact extraction'}`}
-                    >
-                        <Brain size={18} />
-                    </button>
-
-                    <button
-                        onClick={toggleContextInspection}
-                        className={`p-2 rounded-lg transition-colors ${contextInspectionEnabled ? 'bg-amber-500/20 text-amber-400' : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)]'}`}
-                        title={`Context Inspection: ${contextInspectionEnabled ? 'ON - Will show context before sending' : 'OFF'}`}
-                    >
-                        {contextInspectionEnabled ? <Eye size={18} /> : <EyeOff size={18} />}
-                    </button>
                 </div>
             </div>
 
@@ -1672,13 +1616,13 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             {activeSidePanel === 'memory' && (
                 <MemoryPanel
                     memories={recentMemories}
-                    onClose={() => setActiveSidePanel('none')}
+                    onClose={() => onChangeSidePanel('none')}
                 />
             )}
             {activeSidePanel === 'tasks' && (
                 <TasksPanel
                     conversationId={conversationId}
-                    onClose={() => setActiveSidePanel('none')}
+                    onClose={() => onChangeSidePanel('none')}
                 />
             )}
             </div>
@@ -1944,7 +1888,10 @@ const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRe
 
     const timestampText = showTimestamp ? formatTimestamp(m.created_at) : "";
 
-    // Parsing logic for <thinking> or <reasoning> tags
+    // Parsing logic for <think>, <thinking>, or <reasoning> tags.
+    // The backend (OpenAI/Ollama providers) now strips <think>...</think> from
+    // streamed content and routes it to reasoning_content. This regex remains
+    // as a safety net for older saved messages and other tag variants.
     const { cleanContent, thinkingContent } = (() => {
         // Priority 1: Dedicated reasoning content (e.g. from DeepSeek/Qwen via backend)
         if (m.reasoning_content) {
@@ -1953,7 +1900,7 @@ const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRe
 
         // Priority 2: Tag parsing (fallback)
         if (!displayContent) return { cleanContent: "", thinkingContent: null };
-        const match = /<(thinking|reasoning)>([\s\S]*?)(<\/\1>|$)/i.exec(displayContent);
+        const match = /<(think|thinking|reasoning)>([\s\S]*?)(<\/\1>|$)/i.exec(displayContent);
         if (match) {
             const fullMatch = match[0];
             const innerContent = match[2];
