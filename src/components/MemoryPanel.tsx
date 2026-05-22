@@ -4,7 +4,6 @@ import { Brain } from "lucide-react";
 
 interface MemoryPanelProps {
     memories: string[];
-    onClose: () => void;
 }
 
 interface FactRow {
@@ -35,7 +34,7 @@ interface DocRecord {
     updated_at: string;
 }
 
-export default function MemoryPanel({ memories, onClose: _onClose }: MemoryPanelProps) {
+export default function MemoryPanel({ memories }: MemoryPanelProps) {
     const [activeTab, setActiveTab] = useState<"context" | "facts" | "docs">("context");
     const [userFacts, setUserFacts] = useState<FactRow[]>([]);
     const [entityKey, setEntityKey] = useState("");

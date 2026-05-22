@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import ToolsPanel from "./ToolsPanel";
 import MemoryPanel from "./MemoryPanel";
 import TasksPanel from "./TasksPanel";
+import type { PersistedTask } from "./TasksPanel";
 
 type RightRailTab = "tools" | "memory";
 
@@ -21,17 +22,17 @@ export default function RightRail({ recentMemories, conversationId }: RightRailP
         saveState({ activeTab, collapsed });
     }, [activeTab, collapsed]);
 
-    const [taskCount, setTaskCount] = useState(0);
+    const [tasks, setTasks] = useState<PersistedTask[]>([]);
 
     useEffect(() => {
         if (!conversationId) {
-            setTaskCount(0);
+            setTasks([]);
             return;
         }
         let cancelled = false;
-        invoke<Array<unknown>>("get_conversation_tasks", { conversationId })
+        invoke<PersistedTask[]>("get_conversation_tasks", { conversationId })
             .then((rows) => {
-                if (!cancelled) setTaskCount(rows.length);
+                if (!cancelled) setTasks(rows);
             })
             .catch((e) => console.error("RightRail: get_conversation_tasks failed", e));
         return () => {
@@ -40,11 +41,11 @@ export default function RightRail({ recentMemories, conversationId }: RightRailP
     }, [conversationId]);
 
     useEffect(() => {
-        const unlistenPromise = listen<{ conversation_id: string; tasks: Array<unknown> }>(
+        const unlistenPromise = listen<{ conversation_id: string; tasks: PersistedTask[] }>(
             "tasks-updated",
             (event) => {
                 if (event.payload.conversation_id === conversationId) {
-                    setTaskCount(event.payload.tasks.length);
+                    setTasks(event.payload.tasks);
                 }
             }
         );
@@ -100,20 +101,17 @@ export default function RightRail({ recentMemories, conversationId }: RightRailP
                     <X size={16} />
                 </button>
             </div>
-            <div className={taskCount > 0 ? "flex-1 min-h-0 overflow-hidden flex flex-col" : "flex-1 overflow-hidden"}>
+            <div className={tasks.length > 0 ? "flex-1 min-h-0 overflow-hidden flex flex-col" : "flex-1 overflow-hidden"}>
                 {activeTab === "tools" && <ToolsPanel />}
                 {activeTab === "memory" && (
-                    <MemoryPanel
-                        memories={recentMemories}
-                        onClose={() => setActiveTab("tools")}
-                    />
+                    <MemoryPanel memories={recentMemories} />
                 )}
             </div>
-            {taskCount > 0 && (
+            {tasks.length > 0 && (
                 <div className="border-t border-[var(--color-border-primary)] h-2/5 min-h-0 shrink-0 flex">
                     <TasksPanel
                         conversationId={conversationId}
-                        onClose={() => { /* Tasks slab auto-hides when empty; no manual close */ }}
+                        tasks={tasks}
                     />
                 </div>
             )}
