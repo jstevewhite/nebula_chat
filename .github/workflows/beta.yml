@@ -82,7 +82,8 @@ jobs:
             file \
             libfuse2 \
             patchelf \
-            rpm
+            rpm \
+            xdg-utils
 
       - name: Setup Node
         uses: actions/setup-node@v4
