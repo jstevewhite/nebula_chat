@@ -11,8 +11,6 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
-import MemoryPanel from "./MemoryPanel";
-import TasksPanel from "./TasksPanel";
 import { getProviderIcon } from "../utils/providerIcons";
 import { CustomSelect } from "./ui/CustomSelect";
 
@@ -74,13 +72,8 @@ interface StreamStatsEvent {
     duration_ms: number;
 }
 
-type SidePanel = "none" | "memory" | "tasks";
-
 interface ChatInterfaceProps {
     conversationId: string | null;
-    activeSidePanel: SidePanel;
-    onChangeSidePanel: (panel: SidePanel) => void;
-    recentMemories: string[];
 }
 
 interface ModelOption {
@@ -110,7 +103,7 @@ interface GenerationSettings {
     reasoning_effort?: string; // "low", "medium", "high"
 }
 
-export default function ChatInterface({ conversationId, activeSidePanel, onChangeSidePanel, recentMemories }: ChatInterfaceProps) {
+export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState("");
     const [loading, setLoading] = useState(false);
@@ -145,8 +138,6 @@ export default function ChatInterface({ conversationId, activeSidePanel, onChang
     const [prompts, setPrompts] = useState<SystemPrompt[]>([]);
     const [selectedPromptId, setSelectedPromptId] = useState<string>("");
 
-    // Side Panels (activeSidePanel + recentMemories are lifted into App.tsx
-    // so the activity-bar icons can drive them).
     const [reembedProgress, setReembedProgress] = useState<{ current: number; total: number } | null>(null);
 
     // Settings-driven toggles
@@ -1613,18 +1604,6 @@ export default function ChatInterface({ conversationId, activeSidePanel, onChang
                     />
                 ))}
             </div>
-            {activeSidePanel === 'memory' && (
-                <MemoryPanel
-                    memories={recentMemories}
-                    onClose={() => onChangeSidePanel('none')}
-                />
-            )}
-            {activeSidePanel === 'tasks' && (
-                <TasksPanel
-                    conversationId={conversationId}
-                    onClose={() => onChangeSidePanel('none')}
-                />
-            )}
             </div>
 
             {

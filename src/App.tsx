@@ -3,7 +3,7 @@ import ChatInterface from "./components/ChatInterface";
 import SettingsPage from "./components/SettingsPage";
 import ConversationList from "./components/ConversationList";
 import RightRail from "./components/RightRail";
-import { Brain, Eye, EyeOff, ListChecks, MessageSquare, Settings, Wrench } from "lucide-react";
+import { Eye, EyeOff, MessageSquare, Settings } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import AppIcon from "../nebula.png";
@@ -15,13 +15,9 @@ interface Conversation {
   created_at: string;
 }
 
-export type SidePanel = "none" | "memory" | "tasks";
-
 export default function App() {
   const [activeTab, setActiveTab] = useState<"chat" | "settings">("chat");
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
-  const [showTools, setShowTools] = useState(true);
-  const [activeSidePanel, setActiveSidePanel] = useState<SidePanel>("none");
   const [contextInspectionEnabled, setContextInspectionEnabled] = useState(false);
   const [recentMemories, setRecentMemories] = useState<string[]>([]);
 
@@ -41,8 +37,8 @@ export default function App() {
       .catch((e) => console.warn("Failed to load context_inspection_enabled", e));
   }, []);
 
-  // Memory-context events from the backend feed both the activity-bar badge
-  // and the MemoryPanel content, so we listen at the App level.
+  // Memory-context events from the backend feed the RightRail's Memory tab,
+  // so we listen at the App level and pass the latest list down.
   useEffect(() => {
     const unlistenPromise = listen<string[]>("memory-context", (event) => {
       setRecentMemories(event.payload);
@@ -88,13 +84,6 @@ export default function App() {
     setActiveConvId(next);
   };
 
-  // Clicking a side-panel icon while the Settings tab is active should jump
-  // back to Chat — the panels are only meaningful alongside the chat view.
-  const openSidePanel = (panel: Exclude<SidePanel, "none">) => {
-    if (activeTab !== "chat") setActiveTab("chat");
-    setActiveSidePanel(activeSidePanel === panel ? "none" : panel);
-  };
-
   const toggleContextInspection = async () => {
     const newValue = !contextInspectionEnabled;
     setContextInspectionEnabled(newValue);
@@ -128,41 +117,11 @@ export default function App() {
         </button>
 
         <button
-          onClick={() => openSidePanel("memory")}
-          className={`relative p-3 rounded-xl transition-all duration-200 ${activeTab === "chat" && activeSidePanel === "memory" ? "bg-purple-500/20 text-purple-400" : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text-primary)]"}`}
-          title="Memory Context"
-        >
-          <Brain size={20} />
-          {recentMemories.length > 0 && (
-            <span className="absolute top-1.5 right-1.5 flex h-2.5 w-2.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-purple-500"></span>
-            </span>
-          )}
-        </button>
-
-        <button
-          onClick={() => openSidePanel("tasks")}
-          className={`p-3 rounded-xl transition-all duration-200 ${activeTab === "chat" && activeSidePanel === "tasks" ? "bg-blue-500/20 text-blue-400" : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text-primary)]"}`}
-          title="Tasks"
-        >
-          <ListChecks size={20} />
-        </button>
-
-        <button
           onClick={toggleContextInspection}
           className={`p-3 rounded-xl transition-all duration-200 ${contextInspectionEnabled ? "bg-amber-500/20 text-amber-400" : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text-primary)]"}`}
           title={`Context Inspection: ${contextInspectionEnabled ? "ON — will show context before sending" : "OFF"}`}
         >
           {contextInspectionEnabled ? <Eye size={20} /> : <EyeOff size={20} />}
-        </button>
-
-        <button
-          onClick={() => setShowTools(!showTools)}
-          className={`p-3 rounded-xl transition-all duration-200 ${showTools && activeTab === "chat" ? "bg-[var(--color-bg-secondary)] text-[var(--color-accent-secondary)]" : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text-primary)]"}`}
-          title="Tools"
-        >
-          <Wrench size={20} />
         </button>
 
         <button
@@ -184,12 +143,7 @@ export default function App() {
             onCreate={handleNewChat}
           />
           <div className="flex-1 flex flex-col h-full overflow-hidden">
-            <ChatInterface
-              conversationId={activeConvId}
-              activeSidePanel={activeSidePanel}
-              onChangeSidePanel={setActiveSidePanel}
-              recentMemories={recentMemories}
-            />
+            <ChatInterface conversationId={activeConvId} />
           </div>
         </div>
 
