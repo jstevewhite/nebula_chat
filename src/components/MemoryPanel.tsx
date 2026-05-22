@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Brain, X } from "lucide-react";
+import { Brain } from "lucide-react";
 
 interface MemoryPanelProps {
     memories: string[];
@@ -35,7 +35,7 @@ interface DocRecord {
     updated_at: string;
 }
 
-export default function MemoryPanel({ memories, onClose }: MemoryPanelProps) {
+export default function MemoryPanel({ memories, onClose: _onClose }: MemoryPanelProps) {
     const [activeTab, setActiveTab] = useState<"context" | "facts" | "docs">("context");
     const [userFacts, setUserFacts] = useState<FactRow[]>([]);
     const [entityKey, setEntityKey] = useState("");
@@ -157,12 +157,6 @@ export default function MemoryPanel({ memories, onClose }: MemoryPanelProps) {
                         </button>
                     </div>
                 </div>
-                <button
-                    onClick={onClose}
-                    className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors p-1 hover:bg-[var(--color-bg-tertiary)] rounded"
-                >
-                    <X size={16} />
-                </button>
             </div>
 
             {activeTab === "context" && (
