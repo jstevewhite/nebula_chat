@@ -1,6 +1,6 @@
 [package]
 name = "tauri-appnebula"
-version = "0.6.0"
+version = "0.7.1"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
