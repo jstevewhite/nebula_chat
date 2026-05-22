@@ -295,7 +295,8 @@ async fn generate_title(
         }
         ProviderType::Anthropic => {
             let api_key = provider_config.api_key.clone().unwrap_or_default();
-            let provider = AnthropicProvider::new(api_key, model.clone());
+            let base_url = provider_config.base_url.clone();
+            let provider = AnthropicProvider::new(api_key, base_url, model.clone());
             provider
                 .chat(messages, tools, None)
                 .await
@@ -1148,7 +1149,8 @@ async fn send_message(
             }
             ProviderType::Anthropic => {
                 let api_key = provider_config.api_key.clone().unwrap_or_default();
-                let provider = AnthropicProvider::new(api_key, model.clone());
+                let base_url = provider_config.base_url.clone();
+                let provider = AnthropicProvider::new(api_key, base_url, model.clone());
 
                 if effective_stream {
                     provider
@@ -2223,11 +2225,24 @@ async fn fetch_models(
             }
         }
         ProviderType::Anthropic => {
-            let url = "https://api.anthropic.com/v1/models";
+            // Allow custom Anthropic-compatible endpoints. Strip trailing slashes and
+            // a trailing `/v1` (we append `/v1/models` ourselves), mirroring the OpenAI
+            // sanitizer so users can paste either form.
+            let mut base = base_url
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "https://api.anthropic.com".to_string());
+            while base.ends_with('/') {
+                base.pop();
+            }
+            if base.ends_with("/v1") {
+                base.truncate(base.len() - 3);
+            }
+            let url = format!("{}/v1/models", base);
             let key = api_key.unwrap_or_default();
 
             let resp = client
-                .get(url)
+                .get(&url)
                 .header("x-api-key", &key)
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")
@@ -2750,7 +2765,8 @@ async fn attempt_pruning(
             }
             ProviderType::Anthropic => {
                 let api_key = provider_config.api_key.clone().unwrap_or_default();
-                let provider = AnthropicProvider::new(api_key, model.clone());
+                let base_url = provider_config.base_url.clone();
+                let provider = AnthropicProvider::new(api_key, base_url, model.clone());
                 provider.chat(vec![Message {
                     id: None,
                     role: "user".to_string(),

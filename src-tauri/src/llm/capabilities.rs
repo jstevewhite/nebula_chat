@@ -20,11 +20,10 @@ pub fn get_capabilities(provider: &ProviderType, _model: &str) -> Capabilities {
         ProviderType::Anthropic => Capabilities {
             supports_tools: true,
             supports_streaming: true,
-            // Anthropic streaming with tools can be tricky or unsupported in some client impls,
-            // but for now we'll flag it as false to be safe per the plan,
-            // or true if we are confident. The plan says "If provider does not support streaming tools..."
-            // Let's be conservative for now as per Phase 1.4 requirements.
-            supports_streaming_tools: false,
+            // The Anthropic provider's stream() now accumulates `tool_use`
+            // blocks across `content_block_start` / `content_block_delta` /
+            // `content_block_stop` events, so streaming with tools is safe.
+            supports_streaming_tools: true,
             supports_multimodal: true,
         },
         ProviderType::Ollama => Capabilities {
@@ -167,11 +166,14 @@ mod tests {
     }
 
     #[test]
-    fn capabilities_anthropic_disables_streaming_tools() {
+    fn capabilities_anthropic_enables_streaming_tools() {
         let c = get_capabilities(&ProviderType::Anthropic, "claude-3-5-sonnet");
         assert!(c.supports_tools);
         assert!(c.supports_streaming);
-        assert!(!c.supports_streaming_tools, "Anthropic streaming+tools should be off by safe default");
+        assert!(
+            c.supports_streaming_tools,
+            "Anthropic streaming+tools is supported by the SSE parser"
+        );
         assert!(c.supports_multimodal);
     }
 

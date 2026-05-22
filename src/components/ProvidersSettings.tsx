@@ -147,16 +147,29 @@ function ProviderCard({ providerKey, config, onUpdate, onDelete, onFetch, loadin
                     </div>
                 )}
 
-                {(config.provider_type === "Ollama" || config.provider_type === "OpenAICompatible") && (
+                {(config.provider_type === "Ollama" || config.provider_type === "OpenAICompatible" || config.provider_type === "Anthropic") && (
                     <div className="space-y-1">
-                        <label className="text-xs font-semibold text-[var(--color-text-tertiary)] uppercase">Base URL</label>
+                        <label className="text-xs font-semibold text-[var(--color-text-tertiary)] uppercase">
+                            Base URL{config.provider_type === "Anthropic" ? " (optional)" : ""}
+                        </label>
                         <input
                             type="text"
                             value={config.base_url || ""}
                             onChange={(e) => onUpdate({ base_url: e.target.value })}
                             className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-primary)] rounded-lg px-3 py-2 text-sm text-[var(--color-text-primary)] focus:ring-1 focus:ring-blue-500 outline-none"
-                            placeholder="http://localhost:11434"
+                            placeholder={
+                                config.provider_type === "Ollama"
+                                    ? "http://localhost:11434"
+                                    : config.provider_type === "Anthropic"
+                                        ? "https://api.anthropic.com"
+                                        : "http://localhost:1234/v1"
+                            }
                         />
+                        {config.provider_type === "Anthropic" && (
+                            <p className="text-[10px] text-[var(--color-text-tertiary)]">
+                                Leave blank for the official Anthropic API. Set to any Anthropic-compatible endpoint (e.g. a self-hosted proxy or third-party provider).
+                            </p>
+                        )}
                     </div>
                 )}
 
@@ -414,13 +427,18 @@ export default function ProvidersSettings({ providers, onChange }: ProvidersSett
         }
 
         const newProviders = { ...providers };
-        // Only set base_url for providers that require it (Ollama/OpenAICompatible)
+        // Only set base_url for providers that need it. OpenAI uses a fixed cloud
+        // endpoint. Anthropic accepts an optional override for Anthropic-compatible
+        // endpoints; pass it through only when the user actually filled it in.
+        const trimmedBaseUrl = newBaseUrl.trim();
         const baseUrlForType =
             newType === "Ollama"
-                ? (newBaseUrl || "http://localhost:11434")
+                ? (trimmedBaseUrl || "http://localhost:11434")
                 : newType === "OpenAICompatible"
-                    ? newBaseUrl
-                    : undefined; // OpenAI / Anthropic use fixed cloud endpoints
+                    ? trimmedBaseUrl
+                    : newType === "Anthropic"
+                        ? (trimmedBaseUrl || undefined)
+                        : undefined; // OpenAI uses fixed cloud endpoint
 
         const apiKeyForType = newType === "Ollama" ? "" : newApiKey;
 
@@ -480,7 +498,20 @@ export default function ProvidersSettings({ providers, onChange }: ProvidersSett
                                 <label className="block text-xs font-semibold text-[var(--color-text-tertiary)] uppercase mb-1">Provider Type</label>
                                 <select
                                     value={newType}
-                                    onChange={(e) => setNewType(e.target.value as ProviderType)}
+                                    onChange={(e) => {
+                                        const next = e.target.value as ProviderType;
+                                        setNewType(next);
+                                        // Reset base URL placeholder/default per provider type so the
+                                        // user doesn't carry over a stale localhost:1234/v1 when they
+                                        // switch to Anthropic.
+                                        if (next === "Ollama") {
+                                            setNewBaseUrl("http://localhost:11434");
+                                        } else if (next === "OpenAICompatible") {
+                                            setNewBaseUrl("http://localhost:1234/v1");
+                                        } else {
+                                            setNewBaseUrl("");
+                                        }
+                                    }}
                                     className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-primary)] rounded-lg px-3 py-2 text-sm text-[var(--color-text-primary)] focus:ring-1 focus:ring-blue-500 outline-none"
                                 >
                                     <option value="OpenAI">OpenAI</option>
@@ -489,15 +520,28 @@ export default function ProvidersSettings({ providers, onChange }: ProvidersSett
                                     <option value="OpenAICompatible">OpenAICompatible</option>
                                 </select>
                             </div>
-                            {(newType === "Ollama" || newType === "OpenAICompatible") && (
+                            {(newType === "Ollama" || newType === "OpenAICompatible" || newType === "Anthropic") && (
                                 <div>
-                                    <label className="block text-xs font-semibold text-[var(--color-text-tertiary)] uppercase mb-1">Base URL</label>
+                                    <label className="block text-xs font-semibold text-[var(--color-text-tertiary)] uppercase mb-1">
+                                        Base URL{newType === "Anthropic" ? " (optional)" : ""}
+                                    </label>
                                     <input
                                         value={newBaseUrl}
                                         onChange={(e) => setNewBaseUrl(e.target.value)}
-                                        placeholder={newType === "Ollama" ? "http://localhost:11434" : "http://localhost:1234/v1"}
+                                        placeholder={
+                                            newType === "Ollama"
+                                                ? "http://localhost:11434"
+                                                : newType === "Anthropic"
+                                                    ? "https://api.anthropic.com"
+                                                    : "http://localhost:1234/v1"
+                                        }
                                         className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border-primary)] rounded-lg px-3 py-2 text-sm text-[var(--color-text-primary)] focus:ring-1 focus:ring-blue-500 outline-none"
                                     />
+                                    {newType === "Anthropic" && (
+                                        <p className="mt-1 text-[10px] text-[var(--color-text-tertiary)]">
+                                            Leave blank for the official Anthropic API. Override only for Anthropic-compatible endpoints.
+                                        </p>
+                                    )}
                                 </div>
                             )}
                             {newType !== "Ollama" && (

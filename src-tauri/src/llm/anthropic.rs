@@ -7,19 +7,42 @@ use futures::StreamExt;
 use reqwest::Client;
 use serde_json::{json, Value};
 
+const DEFAULT_ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
+
+fn sanitize_anthropic_base_url(input: Option<String>) -> String {
+    let mut base = input
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_ANTHROPIC_BASE_URL.to_string());
+    while base.ends_with('/') {
+        base.pop();
+    }
+    // Strip trailing /v1 so callers can paste either form; we append `/v1/messages` ourselves.
+    if base.ends_with("/v1") {
+        base.truncate(base.len() - 3);
+    }
+    base
+}
+
 pub struct AnthropicProvider {
     client: Client,
     api_key: String,
+    base_url: String,
     model: String,
 }
 
 impl AnthropicProvider {
-    pub fn new(api_key: String, model: String) -> Self {
+    pub fn new(api_key: String, base_url: Option<String>, model: String) -> Self {
         Self {
             client: Client::new(),
             api_key,
+            base_url: sanitize_anthropic_base_url(base_url),
             model,
         }
+    }
+
+    fn messages_url(&self) -> String {
+        format!("{}/v1/messages", self.base_url)
     }
 }
 
@@ -51,25 +74,7 @@ impl LlmProvider for AnthropicProvider {
             "messages": filtered_messages,
         });
 
-        if let Some(opts) = options {
-            if let Some(temp) = opts.temperature {
-                body.as_object_mut()
-                    .unwrap()
-                    .insert("temperature".to_string(), json!(temp));
-            }
-            if let Some(top_p) = opts.top_p {
-                body.as_object_mut()
-                    .unwrap()
-                    .insert("top_p".to_string(), json!(top_p));
-            }
-            if let Some(max_tokens) = opts.max_tokens {
-                body.as_object_mut()
-                    .unwrap()
-                    .insert("max_tokens".to_string(), json!(max_tokens));
-            }
-            // Note: Anthropic doesn't support presence_penalty, frequency_penalty, or reasoning_effort
-            // These are OpenAI-specific parameters
-        }
+        apply_sampling_options(&mut body, options.as_ref());
 
         if !system_prompt.is_empty() {
             body.as_object_mut()
@@ -88,7 +93,7 @@ impl LlmProvider for AnthropicProvider {
 
         let resp = self
             .client
-            .post("https://api.anthropic.com/v1/messages")
+            .post(self.messages_url())
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
@@ -190,25 +195,7 @@ impl LlmProvider for AnthropicProvider {
             "stream": true,
         });
 
-        if let Some(opts) = options {
-            if let Some(temp) = opts.temperature {
-                body.as_object_mut()
-                    .unwrap()
-                    .insert("temperature".to_string(), json!(temp));
-            }
-            if let Some(top_p) = opts.top_p {
-                body.as_object_mut()
-                    .unwrap()
-                    .insert("top_p".to_string(), json!(top_p));
-            }
-            if let Some(max_tokens) = opts.max_tokens {
-                body.as_object_mut()
-                    .unwrap()
-                    .insert("max_tokens".to_string(), json!(max_tokens));
-            }
-            // Note: Anthropic doesn't support presence_penalty, frequency_penalty, or reasoning_effort
-            // These are OpenAI-specific parameters
-        }
+        apply_sampling_options(&mut body, options.as_ref());
 
         if !system_prompt.is_empty() {
             body.as_object_mut()
@@ -222,40 +209,178 @@ impl LlmProvider for AnthropicProvider {
                 .insert("tools".to_string(), json!(anthropic_tools));
         }
 
-        let mut stream = self
+        let resp = self
             .client
-            .post("https://api.anthropic.com/v1/messages")
+            .post(self.messages_url())
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
+            .header("accept", "text/event-stream")
             .json(&body)
             .send()
             .await
-            .context("Failed to send stream request")?
-            .bytes_stream();
+            .context("Failed to send stream request")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let error_text = resp.text().await.unwrap_or_default();
+            eprintln!("Anthropic stream error ({}): {}", status, error_text);
+            return Err(anyhow::anyhow!(
+                "Anthropic stream error ({}): {}",
+                status,
+                error_text
+            ));
+        }
+
+        let mut stream = resp.bytes_stream();
 
         let mut full_content = String::new();
+        let mut full_reasoning = String::new();
+        let mut sse_buffer = String::new();
 
-        while let Some(item) = stream.next().await {
+        // Track in-progress content blocks. Anthropic streams identify blocks by
+        // a sequential `index`; we map index → (block kind, accumulator) so a
+        // text and a tool_use block can interleave without colliding.
+        #[derive(Debug)]
+        enum BlockKind {
+            Text,
+            Thinking,
+            ToolUse {
+                id: String,
+                name: String,
+                args: String,
+            },
+        }
+        let mut blocks: std::collections::HashMap<u64, BlockKind> =
+            std::collections::HashMap::new();
+        let mut tool_calls_acc: Vec<Value> = Vec::new();
+
+        'outer: while let Some(item) = stream.next().await {
             let chunk = item?;
-            let chunk_str = String::from_utf8_lossy(&chunk);
+            let chunk_norm = String::from_utf8_lossy(&chunk).replace("\r\n", "\n");
+            sse_buffer.push_str(&chunk_norm);
 
-            for line in chunk_str.lines() {
-                if !line.starts_with("data: ") {
-                    continue;
-                }
-                let data = line.trim_start_matches("data: ");
+            // SSE events are separated by a blank line. Drain whole events out
+            // of the buffer; anything left over is a partial event and stays
+            // for the next chunk.
+            loop {
+                let Some(idx) = sse_buffer.find("\n\n") else {
+                    break;
+                };
+                let event = sse_buffer[..idx].to_string();
+                sse_buffer.drain(..idx + 2);
 
-                if let Ok(json) = serde_json::from_str::<Value>(data) {
-                    if let Some(event_type) = json["type"].as_str() {
-                        if event_type == "content_block_delta" {
-                            if let Some(delta) = json.get("delta") {
-                                if let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
-                                    on_token(StreamContent::Text(text.to_string()));
-                                    full_content.push_str(text);
+                for line in event.lines() {
+                    // SSE has both `event: <name>` and `data: <json>` lines.
+                    // The `data:` payload already includes a `"type"` field
+                    // for Anthropic, so we only need to parse data lines.
+                    if !line.starts_with("data: ") {
+                        continue;
+                    }
+                    let data = line[6..].trim();
+                    if data.is_empty() {
+                        continue;
+                    }
+
+                    let Ok(json) = serde_json::from_str::<Value>(data) else {
+                        tracing::debug!("Anthropic stream: dropped unparseable data line");
+                        continue;
+                    };
+
+                    let Some(event_type) = json["type"].as_str() else {
+                        continue;
+                    };
+
+                    match event_type {
+                        "content_block_start" => {
+                            let index = json["index"].as_u64().unwrap_or(0);
+                            let block = &json["content_block"];
+                            let kind = block["type"].as_str().unwrap_or("");
+                            match kind {
+                                "text" => {
+                                    blocks.insert(index, BlockKind::Text);
                                 }
+                                "thinking" => {
+                                    blocks.insert(index, BlockKind::Thinking);
+                                }
+                                "tool_use" => {
+                                    let id = block["id"].as_str().unwrap_or("").to_string();
+                                    let name = block["name"].as_str().unwrap_or("").to_string();
+                                    blocks.insert(
+                                        index,
+                                        BlockKind::ToolUse {
+                                            id,
+                                            name,
+                                            args: String::new(),
+                                        },
+                                    );
+                                }
+                                _ => {}
                             }
                         }
+                        "content_block_delta" => {
+                            let index = json["index"].as_u64().unwrap_or(0);
+                            let delta = &json["delta"];
+                            let delta_type = delta["type"].as_str().unwrap_or("");
+
+                            match delta_type {
+                                "text_delta" => {
+                                    if let Some(text) = delta["text"].as_str() {
+                                        on_token(StreamContent::Text(text.to_string()));
+                                        full_content.push_str(text);
+                                    }
+                                }
+                                "thinking_delta" => {
+                                    if let Some(text) = delta["thinking"].as_str() {
+                                        on_token(StreamContent::Reasoning(text.to_string()));
+                                        full_reasoning.push_str(text);
+                                    }
+                                }
+                                "input_json_delta" => {
+                                    if let Some(partial) = delta["partial_json"].as_str() {
+                                        if let Some(BlockKind::ToolUse { args, .. }) =
+                                            blocks.get_mut(&index)
+                                        {
+                                            args.push_str(partial);
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        "content_block_stop" => {
+                            let index = json["index"].as_u64().unwrap_or(0);
+                            if let Some(BlockKind::ToolUse { id, name, args }) =
+                                blocks.remove(&index)
+                            {
+                                // Empty input is valid; serialize to `{}` so the
+                                // downstream tool dispatch always sees parseable JSON.
+                                let args_str = if args.is_empty() {
+                                    "{}".to_string()
+                                } else {
+                                    args
+                                };
+                                tool_calls_acc.push(json!({
+                                    "id": id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": name,
+                                        "arguments": args_str,
+                                    }
+                                }));
+                            }
+                        }
+                        "message_stop" => {
+                            sse_buffer.clear();
+                            break 'outer;
+                        }
+                        "error" => {
+                            let msg = json["error"]["message"]
+                                .as_str()
+                                .unwrap_or("unknown stream error");
+                            return Err(anyhow::anyhow!("Anthropic stream error: {}", msg));
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -269,12 +394,49 @@ impl LlmProvider for AnthropicProvider {
             } else {
                 Some(full_content)
             },
-            tool_calls: None, // Streaming tools for Anthropic omitted for brevity in this step
+            tool_calls: if tool_calls_acc.is_empty() {
+                None
+            } else {
+                Some(tool_calls_acc)
+            },
             tool_call_id: None,
             attachments: None,
-            reasoning_content: None,
+            reasoning_content: if full_reasoning.is_empty() {
+                None
+            } else {
+                Some(full_reasoning)
+            },
             created_at: None,
         })
+    }
+}
+
+/// Anthropic rejects `temperature` and `top_p` together on newer models with
+/// `invalid_request_error`. The UI defaults both to non-None values, so we
+/// can't pass them through verbatim — pick one. Temperature wins because it's
+/// what users actually adjust; top_p is left at its slider default (1.0) far
+/// more often.
+///
+/// `presence_penalty`, `frequency_penalty`, and `reasoning_effort` are
+/// OpenAI-only and silently ignored here.
+fn apply_sampling_options(body: &mut Value, options: Option<&GenerationOptions>) {
+    let Some(opts) = options else {
+        return;
+    };
+    let obj = body.as_object_mut().expect("body must be a JSON object");
+
+    match (opts.temperature, opts.top_p) {
+        (Some(temp), _) => {
+            obj.insert("temperature".to_string(), json!(temp));
+        }
+        (None, Some(top_p)) => {
+            obj.insert("top_p".to_string(), json!(top_p));
+        }
+        (None, None) => {}
+    }
+
+    if let Some(max_tokens) = opts.max_tokens {
+        obj.insert("max_tokens".to_string(), json!(max_tokens));
     }
 }
 
