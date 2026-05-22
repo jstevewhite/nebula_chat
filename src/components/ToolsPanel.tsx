@@ -143,7 +143,7 @@ export default function ToolsPanel() {
     });
 
     return (
-        <div className="h-full flex flex-col bg-[var(--color-bg-primary)] border-l border-[var(--color-border-primary)] text-[var(--color-text-primary)] w-80">
+        <div className="h-full flex flex-col bg-[var(--color-bg-primary)] text-[var(--color-text-primary)]">
             <div className="p-4 border-b border-[var(--color-border-primary)] flex items-center justify-between">
                 <div className="flex items-center gap-2 font-semibold">
                     <Wrench size={18} className="text-[var(--color-text-secondary)]" />
