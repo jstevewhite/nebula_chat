@@ -117,7 +117,7 @@ export default function MemoryPanel({ memories, onClose }: MemoryPanelProps) {
     };
 
     return (
-        <div className="w-80 h-full border-l border-[var(--color-border-primary)] bg-[var(--color-bg-secondary)] flex flex-col shadow-xl shrink-0 animate-in slide-in-from-right duration-200">
+        <div className="h-full flex flex-col bg-[var(--color-bg-secondary)]">
             <div className="p-4 border-b border-[var(--color-border-primary)] flex justify-between items-center bg-[var(--color-bg-secondary)]/50 backdrop-blur">
                 <div className="flex flex-col gap-1">
                     <h3 className="text-sm font-semibold text-[var(--color-text-primary)] flex items-center gap-2">
