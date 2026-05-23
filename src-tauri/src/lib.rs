@@ -3191,13 +3191,30 @@ pub fn run() {
     #[cfg(target_os = "linux")]
     {
         std::env::set_var("IBUS_ENABLE_SYNC_MODE", "1");
-        std::env::set_var("GTK_IM_MODULE", "xim");
+        // Commented out to prevent WebKitGTK input focus deadlocks/hangs on modern Linux systems.
+        // std::env::set_var("GTK_IM_MODULE", "xim");
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
 
-        // Disable touch emulation to allow proper mouse/pointer events
-        // This fixes right-click and text selection on Linux
+        // Force software rendering when GPU acceleration isn't available
+        // (e.g. xrdp sessions where EGL/DRI2 authentication fails — visible as
+        // `libEGL warning: DRI2: failed to authenticate` on startup). Without
+        // these, WebKit falls into a half-broken compositor state that hangs
+        // the renderer when a freshly-mounted input gets focus.
+        if std::env::var_os("LIBGL_ALWAYS_SOFTWARE").is_none() {
+            std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1");
+        }
+        if std::env::var_os("WEBKIT_FORCE_GL_FALLBACK").is_none() {
+            std::env::set_var("WEBKIT_FORCE_GL_FALLBACK", "1");
+        }
+
+        // Disable touch emulation to allow proper mouse/pointer events.
+        // This fixes right-click and text selection on Linux.
         std::env::set_var("GDK_CORE_DEVICE_EVENTS", "1");
-        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+        // NOTE: WEBKIT_DISABLE_COMPOSITING_MODE=1 was previously set here, but it
+        // turns off WebKit's accelerated compositor and causes the renderer to
+        // hang when a freshly-mounted input gets focus (e.g. the model dropdown
+        // search field). Opening the inspector forces compositing back on, which
+        // is why the freeze "disappears" while DevTools is open. Leave it unset.
     }
 
     let mcp_manager = Arc::new(McpManager::new());

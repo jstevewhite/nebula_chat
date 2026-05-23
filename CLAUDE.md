@@ -19,10 +19,10 @@ npm run tauri build      # Build production app
 
 **Linux Compatibility:**
 The application automatically sets required environment variables on Linux to fix:
-- IBus input/typing issues (`IBUS_ENABLE_SYNC_MODE`, `GTK_IM_MODULE`)
+- IBus input/typing issues (`IBUS_ENABLE_SYNC_MODE` is set; `GTK_IM_MODULE` is commented out as it caused focus deadlocks/hangs)
 - NVIDIA GPU rendering problems (`WEBKIT_DISABLE_DMABUF_RENDERER`)
 
-These fixes are built into the binary (see `lib.rs:2215`), so DEB/RPM/AppImage packages work out of the box.
+These fixes are built into the binary (see `lib.rs`), so DEB/RPM/AppImage packages work out of the box.
 
 ### Rust Backend
 ```bash
