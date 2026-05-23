@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ListChecks, X, Check, CircleDot, Circle } from "lucide-react";
 
-interface PersistedTask {
+export interface PersistedTask {
     id: string;
     conversation_id: string;
     position: number;
@@ -20,53 +20,60 @@ interface TasksUpdatedPayload {
 
 interface TasksPanelProps {
     conversationId: string | null;
-    onClose: () => void;
+    onClose?: () => void;
+    tasks?: PersistedTask[]; // when provided, skip self-fetch
 }
 
-export default function TasksPanel({ conversationId, onClose }: TasksPanelProps) {
-    const [tasks, setTasks] = useState<PersistedTask[]>([]);
+export default function TasksPanel({ conversationId, onClose, tasks: tasksProp }: TasksPanelProps) {
+    const [selfTasks, setSelfTasks] = useState<PersistedTask[]>([]);
+    const usingProp = tasksProp !== undefined;
+    const tasks = usingProp ? tasksProp : selfTasks;
 
     useEffect(() => {
+        if (usingProp) return;
         if (!conversationId) {
-            setTasks([]);
+            setSelfTasks([]);
             return;
         }
         let cancelled = false;
         invoke<PersistedTask[]>("get_conversation_tasks", { conversationId })
             .then((rows) => {
-                if (!cancelled) setTasks(rows);
+                if (!cancelled) setSelfTasks(rows);
             })
             .catch((e) => console.error("get_conversation_tasks failed", e));
         return () => {
             cancelled = true;
         };
-    }, [conversationId]);
+    }, [conversationId, usingProp]);
 
     useEffect(() => {
+        if (usingProp) return;
         const unlistenPromise = listen<TasksUpdatedPayload>("tasks-updated", (event) => {
             if (event.payload.conversation_id === conversationId) {
-                setTasks(event.payload.tasks);
+                setSelfTasks(event.payload.tasks);
             }
         });
         return () => {
             unlistenPromise.then((unlisten) => unlisten());
         };
-    }, [conversationId]);
+    }, [conversationId, usingProp]);
 
     return (
-        <div className="w-80 h-full border-l border-[var(--color-border-primary)] bg-[var(--color-bg-secondary)] flex flex-col shadow-xl shrink-0 animate-in slide-in-from-right duration-200">
+        <div className="h-full bg-[var(--color-bg-secondary)] flex flex-col flex-1">
             <div className="p-4 border-b border-[var(--color-border-primary)] flex justify-between items-center bg-[var(--color-bg-secondary)]/50 backdrop-blur">
                 <h3 className="text-sm font-semibold text-[var(--color-text-primary)] flex items-center gap-2">
                     <ListChecks size={16} className="text-blue-400" />
                     Tasks
                 </h3>
-                <button
-                    onClick={onClose}
-                    aria-label="Close tasks panel"
-                    className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors p-1 hover:bg-[var(--color-bg-tertiary)] rounded"
-                >
-                    <X size={16} />
-                </button>
+                {onClose && (
+                    <button
+                        onClick={onClose}
+                        aria-label="Close tasks panel"
+                        className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors p-1 hover:bg-[var(--color-bg-tertiary)] rounded"
+                    >
+                        <X size={16} />
+                    </button>
+                )}
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-2">

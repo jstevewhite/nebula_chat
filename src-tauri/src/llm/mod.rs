@@ -6,5 +6,6 @@ pub mod factory;
 pub mod ollama;
 pub mod openai;
 pub mod provider;
+pub mod think_tag;
 pub mod tokenizer;
 pub mod tool_shaping;

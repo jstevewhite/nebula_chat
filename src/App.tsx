@@ -2,9 +2,10 @@ import { useState, useEffect } from "react";
 import ChatInterface from "./components/ChatInterface";
 import SettingsPage from "./components/SettingsPage";
 import ConversationList from "./components/ConversationList";
-import ToolsPanel from "./components/ToolsPanel";
-import { MessageSquare, Settings, Wrench } from "lucide-react";
+import RightRail from "./components/RightRail";
+import { Eye, EyeOff, MessageSquare, Settings } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import AppIcon from "../nebula.png";
 
 interface Conversation {
@@ -17,7 +18,8 @@ interface Conversation {
 export default function App() {
   const [activeTab, setActiveTab] = useState<"chat" | "settings">("chat");
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
-  const [showTools, setShowTools] = useState(true);
+  const [contextInspectionEnabled, setContextInspectionEnabled] = useState(false);
+  const [recentMemories, setRecentMemories] = useState<string[]>([]);
 
   useEffect(() => {
     // Initial load: Get conversations or create one
@@ -25,6 +27,26 @@ export default function App() {
       initializeChat();
     }
   }, [activeTab]);
+
+  // Load the persisted context-inspection setting on mount. The toggle button
+  // for this lives in the activity bar (App), but the value is also consumed
+  // by the backend during generation.
+  useEffect(() => {
+    invoke<any>("get_settings")
+      .then((s) => setContextInspectionEnabled(Boolean(s?.context_inspection_enabled)))
+      .catch((e) => console.warn("Failed to load context_inspection_enabled", e));
+  }, []);
+
+  // Memory-context events from the backend feed the RightRail's Memory tab,
+  // so we listen at the App level and pass the latest list down.
+  useEffect(() => {
+    const unlistenPromise = listen<string[]>("memory-context", (event) => {
+      setRecentMemories(event.payload);
+    });
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
 
   const initializeChat = async () => {
     try {
@@ -62,6 +84,20 @@ export default function App() {
     setActiveConvId(next);
   };
 
+  const toggleContextInspection = async () => {
+    const newValue = !contextInspectionEnabled;
+    setContextInspectionEnabled(newValue);
+    try {
+      const current: any = await invoke("get_settings");
+      await invoke("save_settings", {
+        settings: { ...current, context_inspection_enabled: newValue },
+      });
+    } catch (e) {
+      console.error("Failed to save context_inspection_enabled:", e);
+      setContextInspectionEnabled(!newValue);
+    }
+  };
+
   return (
     <div className="flex h-screen bg-[var(--color-bg-primary)] text-[var(--color-text-primary)] overflow-hidden">
       {/* Activity Bar */}
@@ -81,11 +117,11 @@ export default function App() {
         </button>
 
         <button
-          onClick={() => setShowTools(!showTools)}
-          className={`p-3 rounded-xl transition-all duration-200 ${showTools && activeTab === "chat" ? "bg-[var(--color-bg-secondary)] text-[var(--color-accent-secondary)]" : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text-primary)]"}`}
-          title="Tools"
+          onClick={toggleContextInspection}
+          className={`p-3 rounded-xl transition-all duration-200 ${contextInspectionEnabled ? "bg-amber-500/20 text-amber-400" : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text-primary)]"}`}
+          title={`Context Inspection: ${contextInspectionEnabled ? "ON — will show context before sending" : "OFF"}`}
         >
-          <Wrench size={20} />
+          {contextInspectionEnabled ? <Eye size={20} /> : <EyeOff size={20} />}
         </button>
 
         <button
@@ -109,12 +145,13 @@ export default function App() {
           <div className="flex-1 flex flex-col h-full overflow-hidden">
             <ChatInterface conversationId={activeConvId} />
           </div>
-          {showTools && <ToolsPanel />}
         </div>
 
         <div className={activeTab === "settings" ? "flex flex-1 overflow-auto justify-center" : "hidden"}>
           <SettingsPage />
         </div>
+
+        <RightRail recentMemories={recentMemories} conversationId={activeConvId} />
       </div>
     </div>
   );

@@ -1,10 +1,9 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Brain, X } from "lucide-react";
+import { Brain } from "lucide-react";
 
 interface MemoryPanelProps {
     memories: string[];
-    onClose: () => void;
 }
 
 interface FactRow {
@@ -35,7 +34,7 @@ interface DocRecord {
     updated_at: string;
 }
 
-export default function MemoryPanel({ memories, onClose }: MemoryPanelProps) {
+export default function MemoryPanel({ memories }: MemoryPanelProps) {
     const [activeTab, setActiveTab] = useState<"context" | "facts" | "docs">("context");
     const [userFacts, setUserFacts] = useState<FactRow[]>([]);
     const [entityKey, setEntityKey] = useState("");
@@ -117,7 +116,7 @@ export default function MemoryPanel({ memories, onClose }: MemoryPanelProps) {
     };
 
     return (
-        <div className="w-80 h-full border-l border-[var(--color-border-primary)] bg-[var(--color-bg-secondary)] flex flex-col shadow-xl shrink-0 animate-in slide-in-from-right duration-200">
+        <div className="h-full flex flex-col bg-[var(--color-bg-secondary)]">
             <div className="p-4 border-b border-[var(--color-border-primary)] flex justify-between items-center bg-[var(--color-bg-secondary)]/50 backdrop-blur">
                 <div className="flex flex-col gap-1">
                     <h3 className="text-sm font-semibold text-[var(--color-text-primary)] flex items-center gap-2">
@@ -157,12 +156,6 @@ export default function MemoryPanel({ memories, onClose }: MemoryPanelProps) {
                         </button>
                     </div>
                 </div>
-                <button
-                    onClick={onClose}
-                    className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors p-1 hover:bg-[var(--color-bg-tertiary)] rounded"
-                >
-                    <X size={16} />
-                </button>
             </div>
 
             {activeTab === "context" && (

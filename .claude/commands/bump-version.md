@@ -1,6 +1,15 @@
 # Bump Nebula Version
 
-Bump the version to `$ARGUMENTS` across all four locations, regenerate the Cargo lockfile, sync the Tauri npm packages with the Rust crate version, commit, tag, and push. Pushing the `v$ARGUMENTS` tag triggers the `release` GitHub Actions workflow.
+Bump the version to `$ARGUMENTS` across all four locations, regenerate the Cargo lockfile, sync the Tauri npm packages with the Rust crate version, commit, tag, and push. Pushing the tag triggers the `release` GitHub Actions workflow.
+
+## Normalize the argument FIRST
+
+The user may type `$ARGUMENTS` as either `0.7.1` or `v0.7.1`. Before doing anything else, derive these two forms and use them consistently below — do NOT just string-concat `v$ARGUMENTS`, because that produces `vv0.7.1` when the user already included the leading `v`.
+
+- **`VERSION`** = the bare semver (`0.7.1`) — strip a leading `v` if present. Use this in `Cargo.toml`, `tauri.conf.json`, `package.json`, and the commit message.
+- **`TAG`** = `v` + `VERSION` (`v0.7.1`) — exactly one `v`. Use this in the `README.md` "Current version" line and as the git tag.
+
+If you can't tell which form you have, default to stripping any leading `v` and re-prefixing once.
 
 For beta builds, you typically do NOT need to run this command — the `beta` workflow is `workflow_dispatch` and you trigger it manually from the Actions tab, picking any tag label you want. Use this command only when cutting a real release (or when you want a beta tag committed to history).
 
@@ -17,7 +26,7 @@ For beta builds, you typically do NOT need to run this command — the `beta` wo
 
 ## Steps
 
-1. Edit all four files, replacing the old version with `$ARGUMENTS`.
+1. Edit all four files, replacing the old version. Use **`VERSION`** (bare, no `v`) in `Cargo.toml`, `tauri.conf.json`, and `package.json`. Use **`TAG`** (with one `v`) in `README.md`'s "Current version" line.
 
 2. Regenerate the Cargo lockfile:
    ```
@@ -46,18 +55,18 @@ For beta builds, you typically do NOT need to run this command — the `beta` wo
    npm run build
    ```
 
-5. Stage and commit:
+5. Stage and commit (use **`TAG`** in the commit message so the leading `v` is always present):
    ```
    git add src-tauri/Cargo.toml src-tauri/tauri.conf.json src-tauri/Cargo.lock \
            package.json package-lock.json README.md
-   git commit -m "chore: bump version to $ARGUMENTS"
+   git commit -m "chore: bump version to <TAG>"   # e.g. "chore: bump version to v0.7.1"
    ```
 
-6. Tag and push:
+6. Tag and push — the tag is exactly **`TAG`** (one `v`):
    ```
-   git tag v$ARGUMENTS
+   git tag <TAG>          # e.g. git tag v0.7.1   — NEVER git tag vv0.7.1
    git push
-   git push origin v$ARGUMENTS
+   git push origin <TAG>
    ```
 
    The tag push fires `.github/workflows/release.yml`, which builds bundles on every platform and uploads them to a draft GitHub release, then flips the release out of draft once all platforms succeed.

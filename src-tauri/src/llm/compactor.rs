@@ -453,7 +453,12 @@ impl Compactor {
             }
             ProviderType::Anthropic => {
                 let key = config.api_key.clone().unwrap_or_default();
-                Box::new(AnthropicProvider::new(key, model_name.to_string()))
+                let base_url = config.base_url.clone();
+                Box::new(AnthropicProvider::new(
+                    key,
+                    base_url,
+                    model_name.to_string(),
+                ))
             }
             ProviderType::Ollama => {
                 let base_url = config
