@@ -2,6 +2,10 @@
 
 This document is a quick review of the current `nebula_chat` codebase (React/Tauri UI + Rust backend). It focuses on high-impact missing features, correctness gaps, and architectural improvements.
 
+## Recently shipped
+
+- **Slash commands** (`feature/slash_commands`): client-side command palette accessible by typing `/` in the composer or by pressing `/` while focused in the conversation list sidebar. Ships with `/help`, `/remember`, `/search`, `/facts`, `/skills`, `/skill <slug>`, and `/clear`. Spec: [`docs/superpowers/specs/slash-commands.md`](superpowers/specs/slash-commands.md).
+
 ## Top priorities (high impact / low-medium effort)
 
 ### 1) Fix obvious correctness issues

@@ -117,7 +117,7 @@ The active system prompt is managed in *Settings → Prompts*. Nebula ships a bu
 - **Stop generation**: instantly abort long-running LLM responses with a dedicated stop button.
 - **Right rail**: a single collapsible right-hand rail with **Tools** and **Memory** tabs (Memory shows the exact context being injected) plus a **Tasks** slab that auto-appears when the conversation has a checklist. Collapsed / active-tab state persists across sessions.
 - **Inline `<think>` parsing**: streamed `<think>...</think>` blocks are extracted into the reasoning channel automatically.
-- **Chat commands**: `/remember <text>` runs explicit fact extraction over arbitrary text.
+- **Slash commands**: a client-side command palette opens when you type `/` in the composer (or press `/` while focused in the conversation list sidebar). Includes `/help` (lists every command), `/remember <text>` (explicit fact extraction), `/search <query>` (full-text search across all conversations), `/facts [entity]` (list user-profile facts or facts about a specific entity), `/skills [slug]` (browse the skill catalogue or read a single skill body), `/skill <slug>` (load a skill's body into the current conversation as context), and `/clear` (clear the composer). Results land as system notes in the chat — no LLM round-trip required.
 
 ## Architecture
 
