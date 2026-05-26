@@ -38,13 +38,15 @@ impl SkillStore {
         let builtins_dir = skills_dir.join("built-ins");
         std::fs::create_dir_all(&builtins_dir)?;
 
-        // Materialise built-ins on first run only. We compare per-file so a
-        // newly-shipped built-in lands even if the dir already exists.
+        // Re-materialise built-ins on every startup. `built_in: true` means
+        // we own the content — the binary is the source of truth, and any
+        // edits to files in `built-ins/` are overwritten on launch. To
+        // customise a built-in, create a top-level user skill with the same
+        // slug; `get()` finds the user skill first and overrides the
+        // built-in.
         for (slug, body) in builtins::ALL {
             let path = builtins_dir.join(format!("{slug}.md"));
-            if !path.exists() {
-                std::fs::write(&path, body)?;
-            }
+            std::fs::write(&path, body)?;
         }
 
         let me = Arc::new(Self {

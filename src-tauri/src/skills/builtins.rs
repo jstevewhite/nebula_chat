@@ -1,11 +1,13 @@
-//! Starter skills shipped with the app. On first run these are materialised
-//! to `<skills_dir>/built-ins/<slug>.md`; subsequent runs leave them alone, so
-//! user edits stick. To "reset" a built-in, delete the file and restart.
+//! Skills shipped with the app. These are re-materialised to
+//! `<skills_dir>/built-ins/<slug>.md` on every startup — the binary is the
+//! source of truth, and any edits to files in `built-ins/` are overwritten
+//! on next launch. To customise a built-in, create a top-level user skill
+//! with the same slug; the user skill is returned first by `get()` and
+//! shadows the built-in.
 //!
-//! Each entry's `built_in: true` frontmatter lets the UI render a badge and
-//! lets the system distinguish overrides if we ever want a per-slug override
-//! flow (delete a top-level user skill with the same slug to revert to the
-//! built-in).
+//! Each entry's `built_in: true` frontmatter lets the UI render a "BUILT IN"
+//! badge so users can see at a glance which skills are app-shipped (and
+//! therefore will be reset on update).
 
 /// (slug, file body). Bodies are the full markdown file including YAML
 /// frontmatter — kept human-readable in one place so it's obvious what each

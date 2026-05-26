@@ -636,6 +636,7 @@ export default function SettingsPage() {
             </h2>
             <p className="text-xs text-[var(--color-text-tertiary)] mb-4">
                 Skills are reusable bundles of instructions the model can pull into context via the <code className="font-mono">use_skill</code> tool. Stored as markdown files in the skills folder; the slug + description shows up in every chat's system prompt so the model knows what's available.
+                <span className="block mt-2 font-bold text-[var(--color-text-secondary)]">If you reinstall, any edits to built-in skills will be overwritten. Please make your own copy if you don't want it clobbered on upgrade.</span>
             </p>
             <div className="mb-10">
                 <SkillsSettings />
