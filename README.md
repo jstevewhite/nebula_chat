@@ -8,6 +8,16 @@ This code is mostly written by LLMs. See the HLD (`docs/nebula_hld_0.6.md`) for 
 
 **Current version:** `v0.8.1`
 
+### What's new in v0.8.1
+
+- **Unified right rail**: the **Tools**, **Memory**, and **Tasks** views are consolidated into a single collapsible right-hand rail. Tools and Memory are tabs; the Tasks slab auto-appears when the current conversation has a checklist. Collapse to a thin strip, and your collapsed / active-tab state persists across sessions.
+- **Built-in system prompt**: a leaner default prompt (`nebula-default`) now ships in the binary and is auto-activated on first run, so the model leans on `use_skill` / `update_tasks` out of the box. Like built-in skills, it's restored on startup and is source-of-truth from the binary.
+- **Clone-to-edit for skills & prompts**: built-in skills and prompts show a **BUILT IN** badge and are read-only; a **Clone to edit** button makes a user-owned copy (`<slug>-copy`) you can freely modify, instead of shadowing the original.
+- **More built-in skills**: `code-review`, `summarize-conversation`, `debug-help`, `skill-architect`, `mcp-diagnostics`, `explain-code`, `readme-pro`, and `nebula-setup` ship with the app and are always re-materialized on startup.
+- **Anthropic custom `base_url`**: point the Anthropic provider at Anthropic-compatible third-party endpoints (proxies, vendor-hosted Claude). The streaming parser was rewritten to fix a "response came back but no text" bug, surface extended thinking as reasoning, and correctly stream tool calls.
+- **Ollama non-tool models**: when a model doesn't support tools, Nebula now retries the request without them instead of failing.
+- **Linux stability**: fixed a WebKitGTK input-focus deadlock (dropped `GTK_IM_MODULE` and `WEBKIT_DISABLE_COMPOSITING_MODE`) and added software-rendering fallbacks (`LIBGL_ALWAYS_SOFTWARE`, `WEBKIT_FORCE_GL_FALLBACK`) for xrdp / headless-GPU sessions.
+
 ### What's new in v0.6.0
 
 - **Memory v3 (`memory3`)**: a redesigned long-term memory layer.
@@ -76,7 +86,12 @@ Skills are user-editable markdown files containing imperative instructions ("how
 - The model sees only the list of available skill names + descriptions in its system prompt.
 - When the model calls `use_skill <slug>`, the body of that skill is loaded into the conversation.
 - A filesystem watcher reloads changes live; edit a skill in your editor and the next turn picks it up.
-- Built-ins are restored on startup if deleted; user skills are yours to keep.
+- Built-ins are restored (re-materialized from the binary) on startup; user skills are yours to keep. Ships with `code-review`, `summarize-conversation`, `debug-help`, `skill-architect`, `mcp-diagnostics`, `explain-code`, `readme-pro`, and `nebula-setup`.
+- **Built-ins are read-only**: built-in skills and system prompts show a **BUILT IN** badge with disabled editor fields. Use **Clone to edit** to spin off a user-owned copy you can change.
+
+### System Prompts
+
+The active system prompt is managed in *Settings → Prompts*. Nebula ships a built-in default (`nebula-default`) baked into the binary and auto-activates it on first run, so behavior is sane out of the box. Built-in prompts follow the same read-only / clone-to-edit lifecycle as skills; create your own prompts and switch the active one at any time.
 
 ### Performance & Privacy
 
@@ -100,7 +115,7 @@ Skills are user-editable markdown files containing imperative instructions ("how
 - **Tokens-per-second**: live throughput display for streaming responses.
 - **Per-message timestamps**: optional, toggleable in Appearance settings.
 - **Stop generation**: instantly abort long-running LLM responses with a dedicated stop button.
-- **Side panels**: **Memory Panel** shows the exact memory context being injected; **Tasks Panel** shows the current conversation's checklist.
+- **Right rail**: a single collapsible right-hand rail with **Tools** and **Memory** tabs (Memory shows the exact context being injected) plus a **Tasks** slab that auto-appears when the conversation has a checklist. Collapsed / active-tab state persists across sessions.
 - **Inline `<think>` parsing**: streamed `<think>...</think>` blocks are extracted into the reasoning channel automatically.
 - **Chat commands**: `/remember <text>` runs explicit fact extraction over arbitrary text.
 
@@ -169,9 +184,12 @@ See `docs/nebula_hld_0.6.md` for the full High-Level Design document.
 
 On Linux, Nebula sets a small set of environment variables at startup to work around common quirks:
 
-- IBus input / typing issues (`IBUS_ENABLE_SYNC_MODE`, `GTK_IM_MODULE=xim`).
+- IBus input / typing issues (`IBUS_ENABLE_SYNC_MODE`).
 - NVIDIA GPU rendering (`WEBKIT_DISABLE_DMABUF_RENDERER`).
-- Touch / pointer event handling (`GDK_CORE_DEVICE_EVENTS`, `WEBKIT_DISABLE_COMPOSITING_MODE`).
+- Software-rendering fallbacks for xrdp / headless-GPU sessions where EGL/DRI2 auth fails (`LIBGL_ALWAYS_SOFTWARE`, `WEBKIT_FORCE_GL_FALLBACK`, only set if not already present).
+- Touch / pointer event handling (`GDK_CORE_DEVICE_EVENTS`).
+
+`GTK_IM_MODULE` and `WEBKIT_DISABLE_COMPOSITING_MODE` are intentionally left unset — both triggered WebKitGTK input-focus deadlocks on modern systems.
 
 These fixes are built into the binary, so DEB / RPM / AppImage packages work out of the box. If you build from source and hit issues, you can also export them yourself before launching.
 
