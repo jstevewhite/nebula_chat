@@ -22,6 +22,79 @@ impl OllamaProvider {
             model,
         }
     }
+
+    /// POST to the OpenAI-compatible chat endpoint, returning a successful
+    /// response or a descriptive error.
+    ///
+    /// Two behaviours matter here and were previously missing from the stream
+    /// path, surfacing as a silent "no response":
+    /// 1. The HTTP status is always checked — on error Ollama returns a JSON
+    ///    body, not SSE, which the stream loop would otherwise drop on the
+    ///    floor and return an empty message.
+    /// 2. Tool-less local models (e.g. gemma3) reject *any* request carrying a
+    ///    `tools` array with 400 "... does not support tools". Nebula always
+    ///    attaches built-in tools (update_tasks, memory_*, skills), so we
+    ///    transparently retry once without tools. Chat then works; tool-calling
+    ///    is simply unavailable for that model.
+    async fn post_with_tool_fallback(
+        &self,
+        body: &mut Value,
+        has_tools: bool,
+    ) -> Result<reqwest::Response> {
+        let url = format!("{}/v1/chat/completions", self.base_url.trim_end_matches('/'));
+
+        let resp = self
+            .client
+            .post(&url)
+            .header("Authorization", "Bearer ollama") // Dummy key required by some compat layers
+            .json(&*body)
+            .send()
+            .await
+            .context("Failed to send request to Ollama")?;
+
+        if resp.status().is_success() {
+            return Ok(resp);
+        }
+
+        let status = resp.status();
+        let error_text = resp.text().await.unwrap_or_default();
+
+        if status == reqwest::StatusCode::BAD_REQUEST
+            && has_tools
+            && error_text.contains("does not support tools")
+        {
+            tracing::warn!(
+                "Ollama model '{}' does not support tools; retrying without tools",
+                self.model
+            );
+            if let Some(obj) = body.as_object_mut() {
+                obj.remove("tools");
+                obj.remove("tool_choice");
+            }
+
+            let retry = self
+                .client
+                .post(&url)
+                .header("Authorization", "Bearer ollama")
+                .json(&*body)
+                .send()
+                .await
+                .context("Failed to send request to Ollama")?;
+
+            if !retry.status().is_success() {
+                let retry_status = retry.status();
+                let retry_text = retry.text().await.unwrap_or_default();
+                return Err(anyhow::anyhow!(
+                    "Ollama API Error ({}): {}",
+                    retry_status,
+                    retry_text
+                ));
+            }
+            return Ok(retry);
+        }
+
+        Err(anyhow::anyhow!("Ollama API Error ({}): {}", status, error_text))
+    }
 }
 
 #[async_trait]
@@ -139,7 +212,8 @@ impl LlmProvider for OllamaProvider {
             }
         }
 
-        if !openai_tools.is_empty() {
+        let has_tools = !openai_tools.is_empty();
+        if has_tools {
             body.as_object_mut()
                 .unwrap()
                 .insert("tools".to_string(), json!(openai_tools));
@@ -148,24 +222,7 @@ impl LlmProvider for OllamaProvider {
                 .insert("tool_choice".to_string(), json!("auto"));
         }
 
-        let url = format!(
-            "{}/v1/chat/completions",
-            self.base_url.trim_end_matches('/')
-        );
-
-        let resp = self
-            .client
-            .post(&url)
-            .header("Authorization", "Bearer ollama") // Dummy key required by some compat layers
-            .json(&body)
-            .send()
-            .await
-            .context("Failed to send request to Ollama")?;
-
-        if !resp.status().is_success() {
-            let error_text = resp.text().await?;
-            return Err(anyhow::anyhow!("Ollama API Error: {}", error_text));
-        }
+        let resp = self.post_with_tool_fallback(&mut body, has_tools).await?;
 
         let json: Value = resp.json().await?;
         let choice = &json["choices"][0]["message"];
@@ -301,7 +358,8 @@ impl LlmProvider for OllamaProvider {
             }
         }
 
-        if !openai_tools.is_empty() {
+        let has_tools = !openai_tools.is_empty();
+        if has_tools {
             body.as_object_mut()
                 .unwrap()
                 .insert("tools".to_string(), json!(openai_tools));
@@ -311,20 +369,9 @@ impl LlmProvider for OllamaProvider {
                 .insert("tool_choice".to_string(), json!("auto"));
         }
 
-        let url = format!(
-            "{}/v1/chat/completions",
-            self.base_url.trim_end_matches('/')
-        );
+        let resp = self.post_with_tool_fallback(&mut body, has_tools).await?;
 
-        let mut stream = self
-            .client
-            .post(&url)
-            .header("Authorization", "Bearer ollama")
-            .json(&body)
-            .send()
-            .await
-            .context("Failed to send stream request")?
-            .bytes_stream();
+        let mut stream = resp.bytes_stream();
 
         let mut full_content = String::new();
         let mut full_reasoning = String::new();
@@ -370,7 +417,9 @@ impl LlmProvider for OllamaProvider {
 
                                 if let Some(delta_tool_calls) = delta["tool_calls"].as_array() {
                                     for tc in delta_tool_calls {
-                                        let index = tc["index"].as_u64().unwrap() as usize;
+                                        // `index` is absent in some compat layers; default to 0
+                                        // rather than panicking and killing the stream task.
+                                        let index = tc["index"].as_u64().unwrap_or(0) as usize;
                                         if current_tool_index != Some(index) {
                                             if !current_tool_id.is_empty() {
                                                 tool_calls_acc.push(json!({
