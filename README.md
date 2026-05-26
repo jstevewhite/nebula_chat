@@ -6,7 +6,7 @@ Nebula is the result of my dissatisfaction with the chat clients available, and 
 
 This code is mostly written by LLMs. See the HLD (`docs/nebula_hld_0.6.md`) for the design. I type some code in here or there, but as little as humanly possible. Clients that helped: Warp, Claude Code, Codex, Gemini, Antigravity, and Opencode. LLMs: Gemini Pro 2.5 and 3, Claude Opus, Sonnet, and Haiku; Deepseek 3.2, GLM 4.7, Devstral 3 small, and many others.
 
-**Current version:** `v0.7.1`
+**Current version:** `v0.8.1`
 
 ### What's new in v0.6.0
 
