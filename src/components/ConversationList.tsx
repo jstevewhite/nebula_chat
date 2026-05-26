@@ -1,5 +1,5 @@
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Plus, MessageSquare, Trash2, Search, Upload, Minimize2 } from "lucide-react";
@@ -230,8 +230,54 @@ export default function ConversationList({ activeId, onSelect, onCreate }: Conve
         localStorage.setItem("conversationListCompact", newCompact.toString());
     };
 
+    // Slash command trigger from the left sidebar (first column)
+    // Pressing "/" while not inside the sidebar's own search input focuses the composer.
+    const sidebarRef = useRef<HTMLDivElement>(null);
+
+    const handleSidebarKeyDown = useCallback((e: KeyboardEvent) => {
+        if (e.key !== "/") return;
+
+        const active = document.activeElement as HTMLElement | null;
+        if (!active) return;
+
+        // Don't steal focus if user is typing in an input/textarea inside the sidebar (e.g. search box)
+        const isTypingInSidebarInput =
+            (active.tagName === "INPUT" || active.tagName === "TEXTAREA") &&
+            sidebarRef.current?.contains(active);
+
+        if (isTypingInSidebarInput) return;
+
+        // Check if the event originated from within this sidebar
+        if (!sidebarRef.current?.contains(active)) return;
+
+        e.preventDefault();
+        e.stopPropagation();
+
+        // Focus the main chat composer and seed with "/"
+        const composer = document.querySelector<HTMLTextAreaElement>("textarea.font-chat");
+        if (composer) {
+            composer.focus();
+            // Seed with / if not already starting a command
+            if (!composer.value.startsWith("/")) {
+                // We can't easily set React state from here, so we set the value + dispatch input event
+                composer.value = "/" + composer.value;
+                composer.dispatchEvent(new Event("input", { bubbles: true }));
+            }
+        }
+    }, []);
+
+    useEffect(() => {
+        const el = sidebarRef.current;
+        if (!el) return;
+
+        // Use capture so we can intercept early
+        document.addEventListener("keydown", handleSidebarKeyDown, true);
+        return () => document.removeEventListener("keydown", handleSidebarKeyDown, true);
+    }, [handleSidebarKeyDown]);
+
     return (
-        <div 
+        <div
+            ref={sidebarRef}
             className="bg-[var(--color-bg-secondary)] border-r border-[var(--color-border-primary)] flex flex-col h-full select-none relative"
             style={{ width: `${width}px` }}
         >

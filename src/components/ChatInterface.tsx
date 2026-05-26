@@ -13,6 +13,18 @@ import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import { getProviderIcon } from "../utils/providerIcons";
 import { CustomSelect } from "./ui/CustomSelect";
+import {
+  executeSlashCommand,
+  isSlashCommand,
+  addSystemNoteToMessages,
+  getAllCommands,
+  type CommandContext,
+  type ChatCommand,
+} from "../utils/chatCommands";
+
+type SuggestionItem =
+  | { kind: "command"; cmd: ChatCommand }
+  | { kind: "skill"; slug: string; name: string; description?: string; built_in?: boolean };
 
 // Built-in, in-process tool names. Auto-approved by default since they only
 // touch local audit-visible content the user can inspect on disk. Kept in
@@ -107,6 +119,9 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState("");
     const [loading, setLoading] = useState(false);
+
+    // Slash command suggestions
+    const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
 
 
     const [isDragging, setIsDragging] = useState(false);
@@ -429,6 +444,62 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         };
     }, [currentModel]);
 
+    // Detect if we're in skill subcommand mode (e.g. "/skill ", "/skill res")
+    const skillModeMatch = input.match(/^\/skill\s*(.*)$/i);
+    const isSkillMode = !!skillModeMatch;
+    const skillQuery = skillModeMatch ? skillModeMatch[1].trim().toLowerCase() : "";
+
+    // Top-level command suggestions (existing behavior)
+    const commandSuggestions = useMemo(() => {
+        if (isSkillMode) return [] as ChatCommand[]; // hide commands when in skill mode
+        if (!isSlashCommand(input)) return [] as ChatCommand[];
+        const q = input.slice(1).trim().toLowerCase();
+        const all = getAllCommands();
+        if (!q) return all;
+        return all.filter(
+            (c) =>
+                c.name.toLowerCase().includes(q) ||
+                c.description.toLowerCase().includes(q)
+        );
+    }, [input, isSkillMode]);
+
+    // Skill suggestions (loaded when user types /skill )
+    const [skillItems, setSkillItems] = useState<any[]>([]);
+    const [loadingSkills, setLoadingSkills] = useState(false);
+
+    useEffect(() => {
+        if (!isSkillMode) {
+            setSkillItems([]);
+            return;
+        }
+        if (skillItems.length > 0) return; // already loaded
+
+        setLoadingSkills(true);
+        invoke<any[]>("list_skills")
+            .then((list) => setSkillItems(list || []))
+            .catch(() => setSkillItems([]))
+            .finally(() => setLoadingSkills(false));
+    }, [isSkillMode]);
+
+    // Final list shown in the palette
+    const activeSuggestions = useMemo<SuggestionItem[]>(() => {
+        if (isSkillMode) {
+            const filtered = skillItems.filter((s: any) => {
+                const haystack = `${s.slug} ${s.name} ${s.description || ""}`.toLowerCase();
+                return !skillQuery || haystack.includes(skillQuery);
+            });
+            return filtered.map((s: any) => ({ kind: "skill" as const, ...s }));
+        }
+        return commandSuggestions.map((c) => ({ kind: "command" as const, cmd: c }));
+    }, [isSkillMode, skillItems, skillQuery, commandSuggestions]);
+
+    const showSlashSuggestions = activeSuggestions.length > 0 || (isSkillMode && loadingSkills);
+
+    useEffect(() => {
+        // Reset selection when the list changes
+        setSlashSelectedIndex(0);
+    }, [activeSuggestions.length]);
+
     useEffect(() => {
         if (selectedModel && availableModels.length > 0) {
             const model = currentModel;
@@ -750,6 +821,19 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
     const stableRunTools = useCallback((...args: any[]) => runToolsRef.current?.(...args), []);
     const stableSendMessage = useCallback((...args: any[]) => sendMessageRef.current?.(...args), []);
+
+    // Helper to directly execute a slash command string (used by the suggestions palette)
+    const executeSlashCommandString = useCallback(async (commandString: string) => {
+        const ctx: CommandContext = {
+            conversationId,
+            setInput,
+            setMessages,
+            addSystemNote: (content: string) => {
+                addSystemNoteToMessages(setMessages, content);
+            },
+        };
+        await executeSlashCommand(commandString, ctx);
+    }, [conversationId, setInput, setMessages]);
 
     const runTools = async (tools: { name: string, args: any, callId: string }[], baseHistory: Message[]) => {
         setLoading(true);
@@ -1127,38 +1211,22 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             return;
         }
 
-        // memory3 Phase 3: `/remember <text>` is a local-only command that runs
-        // KG fact extraction over the supplied text. It does not call the LLM
-        // with the full conversation; it just turns durable assertions into
-        // facts. Surface the result as an assistant note for the user.
-        const rememberPrefix = "/remember ";
-        if (input.trim().toLowerCase().startsWith(rememberPrefix)) {
-            const text = input.trim().slice(rememberPrefix.length).trim();
-            if (!text) {
-                console.log("Empty /remember payload.");
+        // Slash command handling (client-only, never sent to the LLM)
+        if (isSlashCommand(input)) {
+            const ctx: CommandContext = {
+                conversationId,
+                setInput,
+                setMessages,
+                addSystemNote: (content: string) => {
+                    addSystemNoteToMessages(setMessages, content);
+                },
+            };
+
+            const handled = await executeSlashCommand(input, ctx);
+            if (handled) {
                 return;
             }
-            setInput("");
-            try {
-                const result = await invoke<{ extracted: number; message: string }>(
-                    "extract_facts_from_text",
-                    { text },
-                );
-                const note: Message = {
-                    role: "system",
-                    content: `Remembered ${result.extracted} fact${result.extracted === 1 ? "" : "s"} from /remember: ${text}`,
-                    created_at: Math.floor(Date.now() / 1000),
-                };
-                setMessages((prev) => [...prev, note]);
-            } catch (e) {
-                const note: Message = {
-                    role: "system",
-                    content: `/remember failed: ${String(e)}`,
-                    created_at: Math.floor(Date.now() / 1000),
-                };
-                setMessages((prev) => [...prev, note]);
-            }
-            return;
+            // If not handled for some reason, fall through to normal send
         }
 
         const currentAttachments = attachments.map(a => ({
@@ -1682,6 +1750,44 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
                         onKeyDown={(e) => {
+                            if (showSlashSuggestions) {
+                                const total = activeSuggestions.length;
+                                if (e.key === "ArrowDown") {
+                                    e.preventDefault();
+                                    setSlashSelectedIndex((i) => Math.min(i + 1, Math.max(0, total - 1)));
+                                    return;
+                                }
+                                if (e.key === "ArrowUp") {
+                                    e.preventDefault();
+                                    setSlashSelectedIndex((i) => Math.max(i - 1, 0));
+                                    return;
+                                }
+                                if (e.key === "Enter" && !e.shiftKey) {
+                                    e.preventDefault();
+                                    const selected = activeSuggestions[slashSelectedIndex];
+
+                                    if (selected) {
+                                        if (selected.kind === "skill") {
+                                            // Directly execute the skill load command (avoids stale input state)
+                                            const fullCommand = `/skill ${selected.slug}`;
+                                            executeSlashCommandString(fullCommand); // fire-and-forget (onKeyDown handler is not async)
+                                            setSlashSelectedIndex(0);
+                                        } else {
+                                            // Regular command: prefill so user can add arguments
+                                            const cmdInput = `/${selected.cmd.name} `;
+                                            setInput(cmdInput);
+                                        }
+                                    }
+                                    return;
+                                }
+                                if (e.key === "Escape") {
+                                    e.preventDefault();
+                                    // Clear the / so it doesn't send as a command
+                                    setInput("");
+                                    return;
+                                }
+                            }
+
                             if (e.key === "Enter" && !e.shiftKey) {
                                 e.preventDefault();
                                 handleSend();
@@ -1704,6 +1810,96 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         {loading ? <Square size={20} fill="currentColor" className="animate-pulse" /> : <Send size={20} />}
                     </button>
                 </div>
+
+                {/* Slash Command Suggestions Dropdown */}
+                {showSlashSuggestions && (
+                    <div className="max-w-4xl mx-auto -mt-1 mb-2 w-full">
+                        <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border-primary)] rounded-xl shadow-xl overflow-hidden text-sm">
+                            <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-[var(--color-text-tertiary)] border-b border-[var(--color-border-secondary)] bg-[var(--color-bg-tertiary)]">
+                                {isSkillMode
+                                    ? loadingSkills 
+                                        ? "Loading skills..." 
+                                        : skillQuery 
+                                            ? "Skills — filter by typing" 
+                                            : "Skills — ↑↓ to navigate • Enter to load • Esc to cancel"
+                                    : input.trim() === "/" 
+                                        ? "Slash commands — type to filter" 
+                                        : "Slash Commands • ↑↓ to navigate • Enter to select • Esc to cancel"}
+                            </div>
+
+                            {loadingSkills && isSkillMode ? (
+                                <div className="px-4 py-3 text-[var(--color-text-tertiary)] italic">
+                                    Loading available skills...
+                                </div>
+                            ) : isSkillMode && activeSuggestions.length === 0 ? (
+                                <div className="px-4 py-3 text-[var(--color-text-tertiary)]">
+                                    No matching skills. Try a different query or check Settings → Skills.
+                                </div>
+                            ) : (
+                                activeSuggestions.map((item, idx) => {
+                                    if (item.kind === "skill") {
+                                        return (
+                                            <button
+                                                key={item.slug}
+                                                onClick={async () => {
+                                                    const full = `/skill ${item.slug}`;
+                                                    await executeSlashCommandString(full);
+                                                    setSlashSelectedIndex(0);
+                                                }}
+                                                className={`w-full text-left px-4 py-2 flex items-start gap-3 hover:bg-[var(--color-bg-tertiary)] transition-colors ${
+                                                    idx === slashSelectedIndex ? "bg-[var(--color-bg-tertiary)]" : ""
+                                                }`}
+                                            >
+                                                <div className="font-mono text-[var(--color-accent-primary)] pt-0.5 shrink-0">/skill</div>
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="text-[var(--color-text-primary)] font-medium">
+                                                        {item.name} <span className="text-[var(--color-text-tertiary)] font-mono text-xs">({item.slug})</span>
+                                                    </div>
+                                                    {item.description && (
+                                                        <div className="text-xs text-[var(--color-text-tertiary)] line-clamp-1">
+                                                            {item.description}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                {item.built_in && (
+                                                    <div className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 self-start mt-0.5">
+                                                        built-in
+                                                    </div>
+                                                )}
+                                            </button>
+                                        );
+                                    }
+
+                                    // Regular command
+                                    const cmd = item.cmd;
+                                    return (
+                                        <button
+                                            key={cmd.name}
+                                            onClick={() => {
+                                                setInput(`/${cmd.name} `);
+                                                setSlashSelectedIndex(idx);
+                                            }}
+                                            className={`w-full text-left px-4 py-2 flex items-start gap-3 hover:bg-[var(--color-bg-tertiary)] transition-colors ${
+                                                idx === slashSelectedIndex ? "bg-[var(--color-bg-tertiary)]" : ""
+                                            }`}
+                                        >
+                                            <div className="font-mono text-[var(--color-accent-primary)] pt-0.5 shrink-0">/{cmd.name}</div>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="text-[var(--color-text-primary)]">{cmd.description}</div>
+                                                {cmd.usage && (
+                                                    <div className="text-xs text-[var(--color-text-tertiary)] font-mono">{cmd.usage}</div>
+                                                )}
+                                            </div>
+                                            <div className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-bg-primary)] text-[var(--color-text-tertiary)] self-start mt-0.5">
+                                                {cmd.category}
+                                            </div>
+                                        </button>
+                                    );
+                                })
+                            )}
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* Context Inspection Modal */}
