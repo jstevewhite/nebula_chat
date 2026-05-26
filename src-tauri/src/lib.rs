@@ -2852,17 +2852,20 @@ async fn get_tools(
 
     let mut result = Vec::new();
     for t in all_tools {
-        let parts: Vec<&str> = t.name.splitn(2, "__").collect();
-        let server = if parts.len() == 2 {
-            parts[0]
-        } else {
-            "unknown"
-        };
+        // Resolve the real server config key via the manager rather than
+        // splitting the advertised name: that name may be sanitized (e.g. a
+        // server keyed "jina.ai" surfaces as "jina_ai__<tool>"), so a naive
+        // split yields a key that doesn't exist in `mcp_servers`.
+        let server = state
+            .mcp_manager
+            .get_server_for_tool(&t.name)
+            .await
+            .unwrap_or_else(|| "unknown".to_string());
 
         result.push(ToolStatus {
             name: t.name.clone(),
             description: t.description,
-            server: server.to_string(),
+            server,
             enabled: !settings.disabled_tools.contains(&t.name),
         });
     }
@@ -2882,19 +2885,18 @@ async fn get_tool_policies(
 
     let mut policies = HashMap::new();
     for t in all_tools {
-        // Extract server name from tool name "server__tool"
-        let parts: Vec<&str> = t.name.splitn(2, "__").collect();
-        let auto_approve = if parts.len() == 2 {
-            let server_name = parts[0];
-            let tool_name = parts[1];
-            settings
-                .mcp_servers
-                .get(server_name)
-                .map(|c| c.auto_approve || c.auto_approve_tools.contains(&tool_name.to_string()))
-                .unwrap_or(false)
-        } else {
-            false
-        };
+        // Resolve the real server config key via the manager (the advertised
+        // name may be sanitized, so splitting it can produce a key that isn't
+        // in `mcp_servers`, e.g. "jina_ai" vs the real "jina.ai"). The simple
+        // tool name stored in `auto_approve_tools` is the part after the first
+        // "__", matching what the UI toggle writes.
+        let server = state.mcp_manager.get_server_for_tool(&t.name).await;
+        let simple_name = t.name.splitn(2, "__").nth(1).unwrap_or(t.name.as_str());
+        let auto_approve = server
+            .as_deref()
+            .and_then(|s| settings.mcp_servers.get(s))
+            .map(|c| c.auto_approve || c.auto_approve_tools.contains(&simple_name.to_string()))
+            .unwrap_or(false);
         policies.insert(t.name.clone(), auto_approve);
     }
 
