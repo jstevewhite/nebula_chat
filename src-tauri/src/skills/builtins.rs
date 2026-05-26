@@ -434,13 +434,26 @@ For **D (tool failing)**:
 
 ### Layer 5 — Approval flow (symptom E)
 
-- "Always allow" is per-tool, not per-server. If the user expected
-  server-wide allow, that's the gap.
-- If approval never fires: check whether the tool is on a pre-whitelist or
-  whether auto-approve is set for that server.
-- If approval *always* fires despite "always allow": the persisted
-  approval state may not be saving. Check the settings file after
-  clicking "always allow".
+Nebula has two layers of auto-approve, both surfaced as shield icons in
+the Tools panel:
+
+- **Server-level auto-approve** (shield next to the server name) sets
+  `auto_approve: true` on the server config; every tool from that
+  server skips the approval prompt.
+- **Per-tool auto-approve** (shield next to an individual tool,
+  hover-revealed) adds the tool name to the server's
+  `auto_approve_tools` list. Locked out when server-level is on.
+
+Diagnostic questions:
+
+- "Always allow" not behaving as expected? Confirm which level the user
+  toggled — they overlap but resolve at different layers.
+- If approval never fires for a write/execute tool: check whether
+  server-level auto-approve is on; if so, that's the culprit. Turn it
+  off and use per-tool instead.
+- If approval *always* fires despite a toggle: the persisted state may
+  not be saving. Read `settings.json` and verify `auto_approve` or
+  `auto_approve_tools` actually contains the expected value.
 
 ## Step 3 — Propose the fix
 
@@ -731,26 +744,20 @@ everything else in this skill.
 Tell the user:
 
 1. Sign up at `https://jina.ai/` to get an API key (free tier).
-2. Add this entry under `mcp_servers` in `settings.json`:
-
-   ```json
-   "jina": {
-     "type": "StreamableHttp",
-     "url": "https://mcp.jina.ai/v1",
-     "headers": {
-       "Authorization": "Bearer {JINA_API_KEY}"
-     }
-   }
-   ```
-
+2. In nebula, open **Settings → MCP servers → Add Server**. Fill in:
+   - **Name:** `jina`
+   - **Transport Type:** Streamable HTTP
+   - **Server URL:** `https://mcp.jina.ai/v1`
+   - **Headers:** `Authorization: Bearer {JINA_API_KEY}` (one line —
+     the UI accepts `Header: Value` lines)
 3. Replace `{JINA_API_KEY}` with the key from step 1.
-4. Restart nebula.
-5. Confirm in settings that the server is connected and tools are
-   listed.
+4. Save Changes. Nebula spawns the server live — no app restart needed.
+5. Confirm in the MCP servers list that `jina` is connected and its
+   tools are populated.
 
-If the URL above no longer works (Jina has changed it before), tell
-the user to check the current endpoint at `https://jina.ai/` rather
-than guessing. Then loop back to Step 1 with the rest of the stack.
+If the URL no longer works (Jina has changed it before), tell the user
+to check the current endpoint at `https://jina.ai/` rather than
+guessing. Then loop back to Step 1 with the rest of the stack.
 
 ## Step 1 — Match servers to what the user actually does
 
@@ -788,78 +795,103 @@ model will sometimes call the wrong one.
 
 ## Step 3 — Add to nebula
 
-For each server the user picked:
+Nebula has a GUI for MCP servers. Use it — do not tell the user to
+hand-edit `settings.json` unless they specifically ask to. For each
+server the user picked:
 
 1. Look up the current install command and config shape live (Step 0).
-2. Get the current `mcp_servers` block: if a filesystem tool is
-   available, read `~/.config/nebula/settings.json` (Linux) or the
-   platform-equivalent config path; otherwise ask the user to paste it.
-3. Add the new entry. Nebula supports three transports:
+2. Have the user open **Settings → MCP servers → Add Server**. The
+   dialog exposes:
 
-   Stdio (local subprocess):
-   ```json
-   "{name}": {
-     "type": "Stdio",
-     "command": "{verified command}",
-     "args": ["{verified arg}", "..."],
-     "env": { "VAR": "value" }
-   }
-   ```
+   - **Name** — short identifier (used as the JSON key).
+   - **Transport Type** — three buttons: Stdio (Local), SSE,
+     Streamable HTTP.
+   - **For Stdio:** Command (single string), Args (comma-separated),
+     Env (one `KEY=value` per line).
+   - **For SSE / Streamable HTTP:** Server URL, Headers (one
+     `Header: Value` per line; the UI also accepts `Header=Value`).
+   - **Allowlist / Denylist** — comma-separated tool names; leave
+     empty to allow all.
 
-   Sse (remote, server-sent events):
-   ```json
-   "{name}": {
-     "type": "Sse",
-     "url": "{verified URL}",
-     "headers": { "Authorization": "Bearer {KEY}" }
-   }
-   ```
-
-   StreamableHttp (remote, streamable HTTP):
-   ```json
-   "{name}": {
-     "type": "StreamableHttp",
-     "url": "{verified URL}",
-     "headers": { "Authorization": "Bearer {KEY}" }
-   }
-   ```
-
-   Each entry also accepts optional `auto_approve: bool`,
-   `auto_approve_tools: [string]`, and
-   `permissions: { allowlist: [], denylist: [] }`. There is no
-   per-server `enabled` flag in `McpServerConfig`; to disable a
-   server use the settings UI (which adds all of its tool names to
-   the top-level `disabled_tools` list — the server stays connected
-   but its tools are hidden from the LLM), or delete the entry to
-   remove it entirely.
-
+3. Save Changes — nebula spawns the server live. No restart needed.
 4. For servers needing an API key: tell the user *where to get it*
-   (link the signup page you verified live) and *how the server reads
-   it* (env var name, config field). Prefer env-var loading over
-   putting the key in `settings.json`.
+   (link the signup page you verified live), and where to paste it
+   (the Headers field for remote servers; the Env field for Stdio
+   servers that read it from the environment). Don't paste the key
+   anywhere else.
 
 Add one server at a time and verify each before moving to the next.
 Batching makes attribution impossible when something fails.
 
-## Step 4 — Restart and verify
+### Reference: the JSON the UI writes
 
-Nebula spawns MCP servers on app start.
+For diagnostics (see `mcp-diagnostics`) or for users who specifically
+want to hand-edit, the underlying `settings.json` shape per transport:
 
-1. Have the user restart nebula (or reload via settings if available).
-2. Confirm in the settings UI: server shows connected, tool list
-   populated.
-3. If it doesn't connect, hand off to `mcp-diagnostics`. Don't try to
+```json
+"{name}": {
+  "type": "Stdio",
+  "command": "{cmd}",
+  "args": ["..."],
+  "env": { "VAR": "value" }
+}
+
+"{name}": {
+  "type": "Sse",
+  "url": "{URL}",
+  "headers": { "Authorization": "Bearer {KEY}" }
+}
+
+"{name}": {
+  "type": "StreamableHttp",
+  "url": "{URL}",
+  "headers": { "Authorization": "Bearer {KEY}" }
+}
+```
+
+Each entry also accepts optional `auto_approve: bool`,
+`auto_approve_tools: [string]`, and
+`permissions: { allowlist: [], denylist: [] }`. There is no per-server
+`enabled` flag; to disable a server use the settings UI (which adds all
+of its tool names to the top-level `disabled_tools` list — the server
+stays connected but its tools are hidden from the LLM), or delete the
+entry entirely.
+
+## Step 4 — Verify
+
+Nebula spawns the server immediately when Save Changes is clicked — no
+restart needed.
+
+1. In the MCP servers list, confirm the server shows as connected and
+   its tools are populated.
+2. If it doesn't connect, hand off to `mcp-diagnostics`. Don't try to
    debug it inline from this skill — that's a different workflow.
 
-## Step 5 — Approval policy
+## Step 5 — Approval and enable/disable toggles
 
-Nebula defaults to per-tool approval. After a server is verified:
+Approval and tool-visibility controls live in nebula's **Tools panel**,
+grouped by server. Four toggles per server:
 
-- **Read-only servers** (Jina fetch, Context7, Serper search) are
-  reasonable "always allow" candidates — they don't mutate state.
+- **Server-level auto-approve** (shield icon next to the server name)
+  — every tool from this server runs without an approval prompt.
+- **Per-tool auto-approve** (shield icon on an individual tool, visible
+  on hover) — same idea, scoped to one tool. Locked out when
+  server-level auto-approve is on.
+- **Server-level enable/disable** (checkbox icon next to the server
+  name, "Enable All" / "Disable All") — toggles every tool from the
+  server in one click. The server stays connected; its tools are
+  hidden from the LLM (added to the top-level `disabled_tools` list).
+- **Per-tool enable/disable** (per-tool checkbox) — same, scoped to
+  one tool.
+
+Recommendations after a server is verified:
+
+- **Read-only servers** (Jina fetch, Context7, Serper search) — server-
+  level auto-approve is reasonable; they don't mutate state.
 - **Write / execute servers** (DesktopCommander shell, Serena edits)
-  keep per-call approval on, at least until the user has built trust
-  with the specific tools they use day-to-day.
+  — keep per-call approval on, at least until the user has built trust
+  with specific tools. If they want to skip prompts for one safe tool,
+  use *per-tool* auto-approve, not server-level.
 
 Never recommend disabling approval wholesale to "make it easier". That
 removes nebula's primary safety boundary.
