@@ -285,17 +285,29 @@ export default function MemoryPanel({ memories }: MemoryPanelProps) {
 
                     {selectedDoc ? (
                         <div className="space-y-2">
-                            <div className="flex items-center justify-between">
-                                <h4 className="text-[11px] font-semibold text-purple-300 truncate">
-                                    {selectedDoc.title}
-                                </h4>
+                            <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2 min-w-0">
+                                    <h4 className="text-[11px] font-semibold text-purple-300 truncate">
+                                        {selectedDoc.title}
+                                    </h4>
+                                    {selectedDoc.tags.includes("built-in") && (
+                                        <span className="shrink-0 text-[9px] font-bold uppercase tracking-wider bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1.5 py-0.5 rounded">
+                                            Built In
+                                        </span>
+                                    )}
+                                </div>
                                 <button
                                     onClick={() => setSelectedDoc(null)}
-                                    className="text-[10px] underline text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                                    className="text-[10px] underline text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] shrink-0"
                                 >
                                     Back to list
                                 </button>
                             </div>
+                            {selectedDoc.tags.includes("built-in") && (
+                                <div className="text-[10px] text-[var(--color-text-tertiary)] italic">
+                                    Shipped with nebula. Re-materialised on every launch — edit/forget tool calls are refused.
+                                </div>
+                            )}
                             <div className="font-mono text-[10px] text-[var(--color-text-tertiary)]">
                                 {selectedDoc.id} · updated {selectedDoc.updated_at}
                             </div>
@@ -345,15 +357,22 @@ export default function MemoryPanel({ memories }: MemoryPanelProps) {
                                                 onClick={() => openDoc(d.id)}
                                                 className="w-full text-left"
                                             >
-                                                <div className="font-semibold text-[var(--color-text-primary)] truncate">
-                                                    {d.title}
+                                                <div className="flex items-center gap-2 min-w-0">
+                                                    <span className="font-semibold text-[var(--color-text-primary)] truncate">
+                                                        {d.title}
+                                                    </span>
+                                                    {d.tags.includes("built-in") && (
+                                                        <span className="shrink-0 text-[9px] font-bold uppercase tracking-wider bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1.5 py-0.5 rounded">
+                                                            Built In
+                                                        </span>
+                                                    )}
                                                 </div>
                                                 <div className="font-mono text-[10px] text-[var(--color-text-tertiary)] truncate">
                                                     {d.id} · {d.updated_at}
                                                 </div>
                                                 {d.tags.length > 0 && (
                                                     <div className="text-[10px] text-[var(--color-text-secondary)] truncate">
-                                                        {d.tags.join(", ")}
+                                                        {d.tags.filter((t) => t !== "built-in").join(", ")}
                                                     </div>
                                                 )}
                                             </button>

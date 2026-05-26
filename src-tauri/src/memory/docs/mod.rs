@@ -4,6 +4,7 @@
 //! a startup reconciliation pass.
 
 pub mod api;
+pub mod builtins;
 pub mod chunker;
 pub mod embedding;
 pub mod inject;
@@ -167,6 +168,47 @@ impl DocStore {
             .entry(id.to_string())
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
+    }
+
+    /// Materialise built-in nebula docs onto disk. Always overwrites when
+    /// the bundled body differs from what's on disk (parallel to
+    /// `skills::builtins`), but skips the write when content matches so we
+    /// don't bump mtime and trigger needless re-embedding via the
+    /// `startup_reconcile` mtime check. Returns the count of files written.
+    ///
+    /// Call this *before* `startup_reconcile` so the new/updated files flow
+    /// through the normal ingest path.
+    pub fn materialize_builtins(&self) -> Result<usize> {
+        let tags: Vec<String> = builtins::TAGS.iter().map(|s| s.to_string()).collect();
+        let mut written = 0;
+        for (id, title, body, links) in builtins::ALL {
+            let existing = store::read_id(&self.docs_dir, id).ok().flatten();
+            // Skip if body matches and tags/title already correct.
+            if let Some(parsed) = &existing {
+                let body_matches = parsed.body.trim_end() == body.trim_end();
+                let tags_match = parsed.front.tags == tags;
+                let title_matches = parsed.front.title == *title;
+                if body_matches && tags_match && title_matches {
+                    continue;
+                }
+            }
+            let preserve_created = existing
+                .as_ref()
+                .map(|p| p.front.created_at.clone())
+                .filter(|s| !s.is_empty());
+            let link_vec: Vec<String> = links.iter().map(|s| s.to_string()).collect();
+            store::write_doc(
+                &self.docs_dir,
+                id,
+                title,
+                &tags,
+                &link_vec,
+                body,
+                preserve_created.as_deref(),
+            )?;
+            written += 1;
+        }
+        Ok(written)
     }
 
     /// Reconcile the on-disk docs with the SQLite + cache state before the
@@ -543,6 +585,21 @@ impl DocStore {
             }
         };
 
+        // Built-in docs are app-shipped and re-materialised on each launch;
+        // refuse edits so the model gets a clear failure instead of having
+        // its change silently reverted on next startup.
+        if parsed.front.tags.iter().any(|t| t == builtins::BUILT_IN_TAG) {
+            return Err(DocsError::new(
+                "BUILT_IN",
+                format!(
+                    "doc '{}' is a built-in nebula doc and cannot be edited. \
+                     Create a new doc with a different id if you want a \
+                     modifiable copy.",
+                    input.id
+                ),
+            ));
+        }
+
         // Optimistic concurrency check.
         if let Some(expected) = &input.expected_updated_at {
             if expected != &parsed.front.updated_at {
@@ -604,6 +661,21 @@ impl DocStore {
     pub async fn forget(&self, id: &str) -> std::result::Result<(), DocsError> {
         if !links::is_valid_slug(id) {
             return Err(DocsError::new("INVALID_ID", "id is not a valid slug"));
+        }
+        // Built-in docs would just be re-materialised on next startup, so
+        // refuse the delete and surface a clear error to the caller.
+        if let Some(parsed) = store::read_id(&self.docs_dir, id)
+            .map_err(|e| DocsError::new("INTERNAL", e.to_string()))?
+        {
+            if parsed.front.tags.iter().any(|t| t == builtins::BUILT_IN_TAG) {
+                return Err(DocsError::new(
+                    "BUILT_IN",
+                    format!(
+                        "doc '{}' is a built-in nebula doc and cannot be deleted.",
+                        id
+                    ),
+                ));
+            }
         }
         self.delete_internal(id)
             .await

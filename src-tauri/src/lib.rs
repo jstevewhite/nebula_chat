@@ -3369,6 +3369,19 @@ pub fn run() {
                                         }),
                                     );
                                 }));
+                                // Materialise built-in nebula docs before
+                                // reconcile so they flow through normal
+                                // ingest (SQLite + Tantivy + embeddings).
+                                match store.materialize_builtins() {
+                                    Ok(n) if n > 0 => tracing::info!(
+                                        "DocStore: materialised {} built-in doc(s)",
+                                        n
+                                    ),
+                                    Ok(_) => {}
+                                    Err(e) => tracing::warn!(
+                                        "DocStore: materialise built-ins failed: {e}"
+                                    ),
+                                }
                                 match store.startup_reconcile().await {
                                     Ok(summary) => tracing::info!(
                                         "DocStore reconcile: scanned={} ingested={} updated={} deleted={}",
