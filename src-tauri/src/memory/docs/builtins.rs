@@ -38,6 +38,30 @@ pub const ALL: &[(&str, &str, &str, &[&str])] = &[
         NEBULA_SKILLS,
         &["nebula-architecture", "nebula-memory"],
     ),
+    (
+        "nebula-conversations",
+        "Nebula: using conversations",
+        NEBULA_CONVERSATIONS,
+        &["nebula-architecture", "nebula-memory-usage"],
+    ),
+    (
+        "nebula-providers",
+        "Nebula: LLM providers",
+        NEBULA_PROVIDERS,
+        &["nebula-architecture"],
+    ),
+    (
+        "nebula-memory-usage",
+        "Nebula: using memory",
+        NEBULA_MEMORY_USAGE,
+        &["nebula-memory", "nebula-conversations"],
+    ),
+    (
+        "nebula-troubleshooting",
+        "Nebula: troubleshooting",
+        NEBULA_TROUBLESHOOTING,
+        &["nebula-mcp", "nebula-memory-usage", "nebula-skills"],
+    ),
 ];
 
 /// The tag every built-in doc carries. Used by `DocStore::edit` /
@@ -340,3 +364,254 @@ as `r#"..."#` raw strings. Register a new slug in the `ALL` array,
 recompile, ship. On next launch, every user gets the new skill
 automatically — no migration needed.
 "##;
+
+const NEBULA_CONVERSATIONS: &str = r#"Conversations live in the left sidebar (ConversationList). Each
+conversation is independent — its own message history, system prompt,
+model, and memory context. Switching does not reset nebula; it just
+changes which thread you're viewing.
+
+## Sidebar actions
+
+- **New conversation:** plus button at the top of the sidebar. Creates
+  a fresh thread using the current default system prompt + model (see
+  "Setting defaults" below).
+- **Switch:** click a conversation in the list.
+- **Rename:** double-click the title. No length rules.
+- **Set icon:** click the small icon next to the title and pick from
+  the emoji picker — purely cosmetic, helps visual scanning.
+- **Delete:** hover icon → trash. Confirmation prompt warns once;
+  deletion is permanent (messages and Librarian index entries removed).
+
+## Search
+
+The search field at the top of the sidebar does two things at once:
+
+- **Title search:** filters the sidebar list by conversation title
+  (case-insensitive substring).
+- **"Match in Chat" content search:** surfaces message-content matches
+  across *all* conversations. Click a match to jump to that
+  conversation.
+
+## Import / export
+
+- **Export:** Download icon in the chat top bar. Saves the active
+  conversation as JSON — self-contained, includes messages, role / tool-
+  call structure, attachment references.
+- **Import:** import button in the sidebar header. Reads a JSON file
+  produced by Export and creates a new conversation entry.
+
+## Setting defaults for new conversations
+
+The Pin icon in the chat input area sets the *current* conversation's
+system prompt + model as the default for new conversations created
+afterwards. Doesn't retroactively change existing conversations.
+
+## Side panels
+
+- **Tools panel** (right): tool list + per-server / per-tool approval
+  toggles. See `nebula-mcp`.
+- **Memory panel** (right): three tabs — Context, Facts, Docs. See
+  `nebula-memory-usage`.
+- **Context inspection** (eye icon, left tool strip): when enabled, the
+  full context payload is shown before each send with a Cancel / OK
+  dialog so you can sanity-check what the model will receive. Setting
+  key: `context_inspection_enabled`.
+
+## Attachments
+
+Image-only at present. Supported types: PNG, JPG / JPEG, WebP, GIF.
+Multiple attachments per message. Drop files into the chat or use the
+paperclip icon. Only multi-modal models (GPT-4V, Claude 3+) actually
+process the images; other models receive only the text portion.
+"#;
+
+const NEBULA_PROVIDERS: &str = r#"LLM providers are managed in Settings → Providers. Each provider has a
+type, an enabled flag, an optional base URL, an API key, and a list of
+models you've imported or configured.
+
+## Supported provider types
+
+- **OpenAI** — OpenAI API (GPT-4, GPT-5, etc.). Needs an API key.
+- **Anthropic** — Anthropic API (Claude models). Needs an API key.
+- **Ollama** — local Ollama instance. No key; requires base URL
+  pointing at the Ollama server (typically `http://localhost:11434`).
+- **OpenAI-compatible** — anything that speaks the OpenAI API shape:
+  LMStudio, vLLM, OpenRouter, Together, Groq, custom proxies. Set base
+  URL + API key (key may be ignored by some local servers).
+
+## Adding a provider
+
+1. Open Settings → Providers and pick the provider type.
+2. Toggle Enabled.
+3. Paste API key (remote providers) or set base URL (local).
+4. Add models via the Import flow (fetches the provider's model list
+   and lets you pick) or by hand (id + display name + context window).
+5. Save.
+
+## API key storage
+
+When `enable_keychain` is on (default), API keys are stored in the OS
+keychain, not in `settings.json`. The settings file holds the provider
+configuration shell; keys are read from the keychain on load. Disable
+keychain only for headless or restricted environments — the key falls
+back to `settings.json` in plain text.
+
+## Environment variable overrides
+
+Two env vars override the corresponding API keys on every load, useful
+for CI or shared installs:
+
+- `NEBULA_OPENAI_KEY` — overrides the OpenAI provider's `api_key`.
+- `NEBULA_ANTHROPIC_KEY` — overrides Anthropic's.
+
+Other providers (Ollama, OpenAI-compatible) use settings only.
+
+## Selecting the active model
+
+The model dropdown lives in the chat input area. It lists models from
+every enabled provider, deduplicated. Switch any time — the next
+message uses the new model. The current model + system prompt can be
+pinned as the default for new conversations via the Pin icon (see
+`nebula-conversations`).
+
+## Per-model knobs
+
+Each model entry in a provider config carries optional fields:
+
+- `context_window`, `max_tokens` — budget caps used by token accounting.
+- `prompt_cost`, `completion_cost` — for cost estimation.
+- `supports_reasoning_effort` (OpenAI o-series),
+  `supports_thinking_mode` (DeepSeek-style),
+  `supports_extended_thinking` (Anthropic Claude 4) — capability flags
+  that surface model-specific reasoning knobs in the UI.
+
+The Import flow auto-detects most of these for OpenRouter-style
+catalogues. For hand-added models, set them yourself.
+"#;
+
+const NEBULA_MEMORY_USAGE: &str = r#"Nebula remembers across conversations through three mechanisms.
+Different mechanisms have different opt-in profiles.
+
+## What's automatic vs. opt-in
+
+- **Always automatic:** every chat message is saved to Librarian
+  (SQLite + Tantivy). You can search past conversations from the
+  sidebar (see `nebula-conversations`). This is your raw chat history;
+  nothing is extracted from it automatically.
+- **Opt-in: knowledge graph (KG) facts.** Durable subject–predicate–
+  object triples about you or entities you care about. Three ways to
+  add facts:
+  1. **Per-message brain icon.** Click the brain icon on any assistant
+     message. Nebula extracts facts from *that message* via the
+     `FactExtractor`. Returns "Saved N facts from message".
+  2. **`/remember <text>` chat command.** Type
+     `/remember <assertion>` in the chat input. Nebula runs fact
+     extraction over the supplied text only — no LLM call against the
+     full conversation. Returns "Remembered N facts from /remember:
+     <text>". May return 0 if the text contains no durable triples
+     (e.g. `/remember the test passed` — too transient).
+  3. **Natural-language requests.** Saying "remember that I prefer
+     Python for ML" lets the model itself decide to call the
+     `memory_fact_remember` tool. Less predictable, more flexible.
+- **Opt-in: long-term docs.** Markdown documents under
+  `memory/docs/<id>.md`. The model creates and edits them via the
+  `memory_doc_*` tools when you ask it to. Doc bodies get chunked,
+  embedded, and made searchable. See `nebula-memory` for the
+  architecture.
+
+## Memory panel
+
+The Memory panel on the right has three tabs:
+
+- **Context** — every memory fragment that got injected into the
+  system prompt for *this turn*. Inspect what the model actually sees
+  from memory before answering.
+- **Facts** — KG triples. User-profile facts at the top; below, look
+  up facts about a specific entity by name.
+- **Docs** — long-term memory documents. Click to read the body. Built-
+  in nebula docs are tagged `built-in`.
+
+## Settings worth knowing (Settings → Memory)
+
+- **Memory enabled** — master switch. Off disables KG fact injection
+  and doc auto-injection. Chat history persistence is not affected.
+- **Auto-inject memory docs** — whether the most-relevant doc + top KG
+  facts are prefixed to the system prompt automatically each turn. On
+  by default. Off means the model has to call `memory_doc_*` tools
+  explicitly to retrieve anything.
+- **Token budget for auto-injection** — hard cap on the injected
+  block. Default 4000. Lower it if context is tight; raise it for big
+  contexts with more memory in scope.
+- **Recall score floor** — minimum fusion score (cosine + BM25) for a
+  doc to qualify for auto-injection. Default 0.20. Raise if injection
+  pulls in irrelevant docs; lower if relevant ones aren't surfacing.
+- **Fact extraction policy** — `explicit` (default; only the three
+  methods above), `session_end` (also extracts when you switch
+  conversations), or `off` (no session-end pass; explicit still works).
+- **Auto-approve memory tools** — when on, the model's `memory_*` tool
+  calls skip the per-call approval prompt. On by default since these
+  only touch local audit-visible markdown + the local KG.
+
+## Why `/remember <X>` sometimes returns 0 facts
+
+The FactExtractor looks for durable, atemporal subject–predicate–object
+assertions. "The test passed" lacks a stable subject + persistent
+predicate — it's an event, not a fact about the world. Try
+`/remember the user prefers Python over Rust for ML prototyping` —
+that mines a real triple.
+"#;
+
+const NEBULA_TROUBLESHOOTING: &str = r#"When something doesn't work in nebula, the fastest path is usually
+invoking the right diagnostic skill rather than poking around in
+settings. This doc is a symptom → skill routing table.
+
+## Symptom → skill
+
+| Symptom                                                    | Skill to invoke                |
+|------------------------------------------------------------|--------------------------------|
+| MCP server won't connect, red dot in settings              | `mcp-diagnostics` (Layer 1–2)  |
+| Tools don't appear in the model's available list           | `mcp-diagnostics` (Layer 3)    |
+| Model never calls a tool you expected it to                | `mcp-diagnostics` (Layer 4)    |
+| Tool call fails, times out, returns garbage                | `mcp-diagnostics` (Layer 4)    |
+| Approval prompts loop despite "always allow"               | `mcp-diagnostics` (Layer 5)    |
+| User reports a bug in their own code                       | `debug-help`                   |
+| User wants a code walkthrough                              | `explain-code`                 |
+| User wants a diff reviewed                                 | `code-review`                  |
+| User wants a README written or audited                     | `readme-pro`                   |
+| User is setting up MCP servers for the first time          | `nebula-setup`                 |
+| User wants to design a new skill                           | `skill-architect`              |
+| User asks "what have we covered?"                          | `summarize-conversation`       |
+
+If you are the assistant reading this: call the matching skill via
+`use_skill(slug)` *before* attempting the work yourself. The skill body
+overrides your default approach for that task.
+
+## Things to check before invoking a skill
+
+A few issues have very common causes worth eyeballing first:
+
+- **Tools not appearing.** Check Settings → MCP servers — is the server
+  connected (green)? Are its tools listed *and* enabled in the right-
+  side Tools panel? Disabled tools are filtered out before the model
+  sees them (see `nebula-mcp` for the disable mechanism).
+- **Approval prompt loops.** Check the Tools panel for that server.
+  Server-level shield icon = auto-approve every tool from this server.
+  Per-tool shield = auto-approve one specific tool. Server-level locks
+  out per-tool when on.
+- **Memory not surfacing what you expect.** Open the Memory panel →
+  Context tab. That's exactly what got injected this turn. If the
+  relevant doc isn't there, raise the auto-inject budget or lower the
+  recall score floor (see `nebula-memory-usage`).
+- **Slow first response.** Local models (Ollama, LMStudio) often need
+  warmup time after a model swap. Hosted models can also see latency
+  spikes during provider incidents.
+- **/remember returned 0 facts.** Not a bug — the text didn't contain a
+  durable triple. See `nebula-memory-usage`.
+
+## When no skill fits
+
+For everything else, follow the `debug-help` pattern even if the
+problem isn't strictly a bug: get a precise statement of expected vs.
+observed behaviour, check the layer below (Tauri logs, dev console,
+MCP server output), isolate before guessing.
+"#;
