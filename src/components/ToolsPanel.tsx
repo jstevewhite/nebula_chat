@@ -10,6 +10,11 @@ interface ToolStatus {
     enabled: boolean;
 }
 
+const getSimpleToolName = (fullToolName: string): string => {
+    const idx = fullToolName.indexOf("__");
+    return idx === -1 ? fullToolName : fullToolName.slice(idx + 2);
+};
+
 export default function ToolsPanel() {
     const [tools, setTools] = useState<ToolStatus[]>([]);
     const [loading, setLoading] = useState(false);
@@ -90,7 +95,7 @@ export default function ToolsPanel() {
     const toggleToolAutoApprove = async (fullToolName: string, serverName: string, current: boolean) => {
         // Optimistic update
         setToolPolicies(prev => ({ ...prev, [fullToolName]: !current }));
-        const simpleName = fullToolName.split("__")[1];
+        const simpleName = getSimpleToolName(fullToolName);
         if (!simpleName) return;
 
         try {
@@ -245,7 +250,7 @@ export default function ToolsPanel() {
                                                 <div className="flex-1 min-w-0">
                                                     <div className="flex items-center justify-between gap-2">
                                                         <div className="text-sm font-medium text-gray-200 truncate" title={tool.name as string}>
-                                                            {(tool.name as string).split("__")[1]}
+                                                            {getSimpleToolName(tool.name as string)}
                                                         </div>
 
                                                         {/* Tool Auto-Approve Toggle */}
