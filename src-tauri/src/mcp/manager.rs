@@ -311,30 +311,49 @@ impl McpManager {
         all_tools
     }
 
-    pub async fn get_server_for_tool(&self, tool_name: &str) -> Option<String> {
-        // Preferred: resolve via the cache, since the outward-facing name may
-        // have been sanitized and no longer split cleanly on "__".
+    /// Map an outward-facing tool name back to `(server, original_tool_name)`.
+    ///
+    /// The advertised name may have been sanitized (see `sanitize_tool_name`),
+    /// so it can no longer be split on "__" to recover the real server key or
+    /// tool name — e.g. a server keyed "jina.ai" surfaces as "jina_ai__<tool>",
+    /// and a tool named "read.file" surfaces as "read_file". The cache is the
+    /// source of truth; we fall back to the legacy "<server>__<tool>" split
+    /// only for names that aren't in the cache. Returns `None` when neither
+    /// approach can route the name.
+    async fn resolve_tool_route(&self, name: &str) -> Option<(String, String)> {
         {
             let cache = self.tool_cache.read().await;
-            for (server, entries) in cache.iter() {
-                if entries.iter().any(|e| e.def.name == tool_name) {
-                    return Some(server.clone());
-                }
+            if let Some(route) = cache.iter().find_map(|(server, entries)| {
+                entries
+                    .iter()
+                    .find(|e| e.def.name == name)
+                    .map(|e| (server.clone(), e.original_name.clone()))
+            }) {
+                return Some(route);
             }
         }
         // Fallback: legacy "<server>__<tool>" split for names not in the cache.
-        let parts: Vec<&str> = tool_name.splitn(2, "__").collect();
+        let parts: Vec<&str> = name.splitn(2, "__").collect();
         if parts.len() == 2 {
-            Some(parts[0].to_string())
+            Some((parts[0].to_string(), parts[1].to_string()))
         } else {
-            // Tools are advertised as "<server>__<tool>"; a bare name means we
-            // can't route it. Log so misconfigured tools don't silently vanish
-            // from the routing layer.
-            tracing::warn!(
-                "get_server_for_tool: cannot route tool '{}' — expected '<server>__<tool>' format",
-                tool_name
-            );
             None
+        }
+    }
+
+    pub async fn get_server_for_tool(&self, tool_name: &str) -> Option<String> {
+        match self.resolve_tool_route(tool_name).await {
+            Some((server, _)) => Some(server),
+            None => {
+                // Tools are advertised as "<server>__<tool>"; a bare name means we
+                // can't route it. Log so misconfigured tools don't silently vanish
+                // from the routing layer.
+                tracing::warn!(
+                    "get_server_for_tool: cannot route tool '{}' — expected '<server>__<tool>' format",
+                    tool_name
+                );
+                None
+            }
         }
     }
 
@@ -343,30 +362,13 @@ impl McpManager {
         name: &str,
         args: serde_json::Value,
     ) -> Result<serde_json::Value> {
-        // Recover the real server + the server's original tool name from the
-        // cache. The `name` the model produced is what we advertised, which may
-        // be a sanitized alias whose "__" split no longer matches reality.
-        let route = {
-            let cache = self.tool_cache.read().await;
-            cache.iter().find_map(|(server, entries)| {
-                entries
-                    .iter()
-                    .find(|e| e.def.name == name)
-                    .map(|e| (server.clone(), e.original_name.clone()))
-            })
-        };
-
-        let (server_name, tool_name) = match route {
-            Some(route) => route,
-            None => {
-                // Fallback: legacy split for names not present in the cache.
-                let parts: Vec<&str> = name.splitn(2, "__").collect();
-                if parts.len() != 2 {
-                    return Err(anyhow::anyhow!("Invalid tool name format"));
-                }
-                (parts[0].to_string(), parts[1].to_string())
-            }
-        };
+        // Recover the real server + the server's original tool name; the `name`
+        // the model produced is what we advertised, which may be a sanitized
+        // alias whose "__" split no longer matches reality.
+        let (server_name, tool_name) = self
+            .resolve_tool_route(name)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Invalid tool name format"))?;
 
         if let Some(client) = self.get_client(&server_name).await {
             let params = json!({
@@ -381,7 +383,9 @@ impl McpManager {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_tool_name;
+    use super::{sanitize_tool_name, McpManager, ToolEntry};
+    use crate::llm::provider::ToolDefinition;
+    use serde_json::json;
 
     fn is_api_safe(name: &str) -> bool {
         !name.is_empty()
@@ -421,5 +425,87 @@ mod tests {
     fn never_produces_empty_name() {
         assert!(!sanitize_tool_name("").is_empty());
         assert!(is_api_safe(&sanitize_tool_name("")));
+    }
+
+    /// Build a manager whose tool cache holds one server's entries, mimicking
+    /// the state after `get_all_tools` has fetched and sanitized them.
+    async fn manager_with_cached_tools(server: &str, entries: Vec<ToolEntry>) -> McpManager {
+        let mgr = McpManager::new();
+        mgr.tool_cache
+            .write()
+            .await
+            .insert(server.to_string(), entries);
+        mgr
+    }
+
+    fn entry(advertised: &str, original: &str) -> ToolEntry {
+        ToolEntry {
+            def: ToolDefinition {
+                name: advertised.to_string(),
+                description: String::new(),
+                input_schema: json!({}),
+            },
+            original_name: original.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn route_recovers_real_server_key_when_prefix_was_sanitized() {
+        // Server keyed "jina.ai" surfaces as "jina_ai__read_url"; routing must
+        // recover the real key "jina.ai" (the regression behind the auto-approve
+        // flicker), not the sanitized "jina_ai".
+        let mgr =
+            manager_with_cached_tools("jina.ai", vec![entry("jina_ai__read_url", "read_url")]).await;
+
+        assert_eq!(
+            mgr.resolve_tool_route("jina_ai__read_url").await,
+            Some(("jina.ai".to_string(), "read_url".to_string()))
+        );
+        assert_eq!(
+            mgr.get_server_for_tool("jina_ai__read_url").await,
+            Some("jina.ai".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn route_recovers_original_tool_name_when_tool_was_sanitized() {
+        // A tool literally named "read.file" is advertised as "fs__read_file";
+        // call_tool must send the server its real name "read.file" back.
+        let mgr = manager_with_cached_tools("fs", vec![entry("fs__read_file", "read.file")]).await;
+
+        assert_eq!(
+            mgr.resolve_tool_route("fs__read_file").await,
+            Some(("fs".to_string(), "read.file".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn route_falls_back_to_split_for_uncached_names() {
+        // Names not in the cache (e.g. before any fetch) still resolve via the
+        // legacy "<server>__<tool>" split.
+        let mgr = McpManager::new();
+        assert_eq!(
+            mgr.resolve_tool_route("foo__bar").await,
+            Some(("foo".to_string(), "bar".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn route_returns_none_for_unroutable_bare_name() {
+        let mgr = McpManager::new();
+        assert_eq!(mgr.resolve_tool_route("bare_name").await, None);
+        assert_eq!(mgr.get_server_for_tool("bare_name").await, None);
+    }
+
+    #[tokio::test]
+    async fn cache_resolution_wins_over_split() {
+        // The cached entry's original name differs from a naive split of the
+        // advertised name; the cache must take precedence.
+        let mgr =
+            manager_with_cached_tools("srv", vec![entry("srv__a_b", "a.b")]).await;
+        assert_eq!(
+            mgr.resolve_tool_route("srv__a_b").await,
+            Some(("srv".to_string(), "a.b".to_string()))
+        );
     }
 }

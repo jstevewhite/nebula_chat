@@ -55,7 +55,7 @@ mod tests {
 
     #[test]
     fn pack_unpack_roundtrip() {
-        let v = vec![1.0f32, -2.5, 3.14, 0.0];
+        let v = vec![1.0f32, -2.5, std::f32::consts::PI, 0.0];
         let bytes = pack_f32(&v);
         let back = unpack_f32(&bytes).unwrap();
         assert_eq!(v, back);

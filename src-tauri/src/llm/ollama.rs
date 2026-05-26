@@ -502,3 +502,248 @@ impl LlmProvider for OllamaProvider {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::OllamaProvider;
+    use crate::llm::provider::{LlmProvider, Message, StreamContent, ToolDefinition};
+    use serde_json::json;
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+
+    struct MockResponse {
+        status: u16,
+        content_type: &'static str,
+        body: String,
+    }
+
+    impl MockResponse {
+        fn json(status: u16, body: &str) -> Self {
+            Self {
+                status,
+                content_type: "application/json",
+                body: body.to_string(),
+            }
+        }
+        fn sse(body: &str) -> Self {
+            Self {
+                status: 200,
+                content_type: "text/event-stream",
+                body: body.to_string(),
+            }
+        }
+    }
+
+    /// Minimal one-request-per-connection HTTP server. Serves `responses` in
+    /// order (one per incoming request) and records each request body so tests
+    /// can assert on what the provider actually sent. Returns the base URL and
+    /// the shared list of captured request bodies.
+    async fn start_mock(responses: Vec<MockResponse>) -> (String, Arc<Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let requests_task = requests.clone();
+        let count = responses.len();
+        let mut queue: VecDeque<MockResponse> = responses.into();
+
+        tokio::spawn(async move {
+            for _ in 0..count {
+                let (mut sock, _) = listener.accept().await.unwrap();
+                let body = read_request_body(&mut sock).await;
+                requests_task.lock().unwrap().push(body);
+                let resp = queue.pop_front().unwrap();
+                write_response(&mut sock, &resp).await;
+            }
+        });
+
+        (format!("http://{}", addr), requests)
+    }
+
+    fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        haystack.windows(needle.len()).position(|w| w == needle)
+    }
+
+    async fn read_request_body(sock: &mut TcpStream) -> String {
+        let mut buf = Vec::new();
+        let mut tmp = [0u8; 1024];
+        loop {
+            let n = sock.read(&mut tmp).await.unwrap();
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&tmp[..n]);
+            let Some(pos) = find_subslice(&buf, b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&buf[..pos]).to_lowercase();
+            let content_len = headers
+                .lines()
+                .find_map(|l| l.strip_prefix("content-length:"))
+                .and_then(|v| v.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            let body_start = pos + 4;
+            while buf.len() - body_start < content_len {
+                let n = sock.read(&mut tmp).await.unwrap();
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&tmp[..n]);
+            }
+            let end = (body_start + content_len).min(buf.len());
+            return String::from_utf8_lossy(&buf[body_start..end]).to_string();
+        }
+        String::new()
+    }
+
+    async fn write_response(sock: &mut TcpStream, resp: &MockResponse) {
+        let reason = match resp.status {
+            200 => "OK",
+            400 => "Bad Request",
+            500 => "Internal Server Error",
+            _ => "Status",
+        };
+        let raw = format!(
+            "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            resp.status,
+            reason,
+            resp.content_type,
+            resp.body.len(),
+            resp.body
+        );
+        sock.write_all(raw.as_bytes()).await.unwrap();
+        sock.flush().await.unwrap();
+        let _ = sock.shutdown().await;
+    }
+
+    fn user_msg(text: &str) -> Message {
+        Message {
+            id: None,
+            role: "user".to_string(),
+            content: Some(text.to_string()),
+            reasoning_content: None,
+            tool_calls: None,
+            tool_call_id: None,
+            attachments: None,
+            created_at: None,
+        }
+    }
+
+    fn a_tool() -> ToolDefinition {
+        ToolDefinition {
+            name: "update_tasks".to_string(),
+            description: "x".to_string(),
+            input_schema: json!({"type": "object", "properties": {}}),
+        }
+    }
+
+    const TOOLS_UNSUPPORTED: &str =
+        r#"{"error":{"message":"registry.ollama.ai/library/gemma3:4b does not support tools","type":"invalid_request_error"}}"#;
+
+    #[tokio::test]
+    async fn chat_retries_without_tools_when_model_rejects_them() {
+        let (url, requests) = start_mock(vec![
+            MockResponse::json(400, TOOLS_UNSUPPORTED),
+            MockResponse::json(200, r#"{"choices":[{"message":{"content":"hello there"}}]}"#),
+        ])
+        .await;
+
+        let provider = OllamaProvider::new(url, "gemma3:4b".to_string());
+        let msg = provider
+            .chat(vec![user_msg("hi")], vec![a_tool()], None)
+            .await
+            .expect("chat should succeed after retrying without tools");
+
+        assert_eq!(msg.content.as_deref(), Some("hello there"));
+
+        let reqs = requests.lock().unwrap();
+        assert_eq!(reqs.len(), 2, "should have made an initial + retry request");
+        assert!(reqs[0].contains("\"tools\""), "first request carries tools");
+        assert!(
+            !reqs[1].contains("\"tools\""),
+            "retry must strip the tools array"
+        );
+        assert!(!reqs[1].contains("tool_choice"), "retry must strip tool_choice");
+    }
+
+    #[tokio::test]
+    async fn chat_surfaces_other_400_errors_without_retrying() {
+        let (url, requests) = start_mock(vec![MockResponse::json(
+            400,
+            r#"{"error":{"message":"context length exceeded"}}"#,
+        )])
+        .await;
+
+        let provider = OllamaProvider::new(url, "gemma3:4b".to_string());
+        let err = provider
+            .chat(vec![user_msg("hi")], vec![a_tool()], None)
+            .await
+            .expect_err("a non-tools 400 should surface as an error");
+
+        assert!(err.to_string().contains("context length exceeded"));
+        assert_eq!(
+            requests.lock().unwrap().len(),
+            1,
+            "must not retry on unrelated errors"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_returns_error_instead_of_silent_empty_message() {
+        // The original bug: stream() never checked status, so an error body
+        // (not SSE) yielded an empty Ok message — "no response" in the UI.
+        let (url, _requests) = start_mock(vec![MockResponse::json(500, "boom")]).await;
+
+        let provider = OllamaProvider::new(url, "gemma3:4b".to_string());
+        let result = provider
+            .stream(
+                vec![user_msg("hi")],
+                vec![],
+                None,
+                Box::new(|_| {}),
+            )
+            .await;
+
+        assert!(
+            result.is_err(),
+            "stream must surface HTTP errors, not return an empty message"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_parses_sse_and_retries_without_tools() {
+        let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n\
+                   data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n\
+                   data: [DONE]\n\n";
+        let (url, requests) = start_mock(vec![
+            MockResponse::json(400, TOOLS_UNSUPPORTED),
+            MockResponse::sse(sse),
+        ])
+        .await;
+
+        let collected = Arc::new(Mutex::new(String::new()));
+        let sink = collected.clone();
+        let provider = OllamaProvider::new(url, "gemma3:4b".to_string());
+        let msg = provider
+            .stream(
+                vec![user_msg("hi")],
+                vec![a_tool()],
+                None,
+                Box::new(move |c| {
+                    if let StreamContent::Text(t) = c {
+                        sink.lock().unwrap().push_str(&t);
+                    }
+                }),
+            )
+            .await
+            .expect("stream should succeed after retrying without tools");
+
+        assert_eq!(msg.content.as_deref(), Some("Hello"));
+        assert_eq!(*collected.lock().unwrap(), "Hello");
+
+        let reqs = requests.lock().unwrap();
+        assert_eq!(reqs.len(), 2);
+        assert!(!reqs[1].contains("\"tools\""), "retry must strip tools");
+    }
+}
