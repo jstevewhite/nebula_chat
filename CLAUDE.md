@@ -85,19 +85,26 @@ The backend is organized into three main modules:
 ### MCP Integration
 
 Nebula acts as an **MCP Host**:
-- Supports `stdio` (subprocess) and `sse` (HTTP) transports
+- Supports three transports: `Stdio` (subprocess), `Sse` (server-sent events), and `StreamableHttp` (streamable HTTP). See [`McpTransport`](src-tauri/src/mcp/config.rs) for the exact shapes.
 - MCP servers configured in `settings.json` (`mcp_servers` section)
 - Tools from all connected servers are merged and presented to the LLM
-- Human-in-the-loop approval for tool execution (configurable per server)
+- Human-in-the-loop approval for tool execution; `auto_approve` and `auto_approve_tools` on each server config customize the policy
 
-Example MCP server config:
+**Enable/disable mechanism.** There is no per-server `enabled` flag on `McpServerConfig`. The settings UI disables a "server" by adding all of its tool names to the top-level `Settings.disabled_tools` list (see `toggle_tool_list` in `lib.rs`). The server process stays connected; its tools are filtered out before being exposed to the LLM. To remove a server entirely, delete its entry from `mcp_servers`.
+
+Example MCP server configs:
 ```json
 "mcp_servers": {
   "filesystem": {
     "type": "Stdio",
     "command": "npx",
     "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/user"],
-    "enabled": true
+    "env": {}
+  },
+  "jina": {
+    "type": "StreamableHttp",
+    "url": "https://mcp.jina.ai/v1",
+    "headers": { "Authorization": "Bearer ${JINA_API_KEY}" }
   }
 }
 ```
