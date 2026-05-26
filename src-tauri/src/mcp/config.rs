@@ -276,6 +276,8 @@ pub struct SystemPrompt {
     pub id: String,
     pub name: String,
     pub content: String,
+    #[serde(default)]
+    pub built_in: bool,
 }
 
 impl Settings {
@@ -284,6 +286,50 @@ impl Settings {
         // or we can redirect to load_migrated if we want to enforce migration always.
         // For strict backward compat without migration, simplistic:
         Self::load_migrated(path)
+    }
+
+    /// Re-apply built-in system prompts. Always overwrites existing entries
+    /// with matching IDs so the binary remains source of truth (parallels
+    /// `skills::builtins` materialization). Inserts missing built-ins.
+    /// Returns true if anything changed and the settings should be re-saved.
+    ///
+    /// On the very first run (no prompts yet AND no active prompt set), also
+    /// activates the first built-in so the user gets the intended behaviour
+    /// out of the box. Subsequent runs leave `active_system_prompt_id` alone
+    /// — including the case where the user has explicitly deactivated.
+    pub fn materialize_builtin_prompts(&mut self) -> bool {
+        let mut changed = false;
+        let was_empty = self.system_prompts.is_empty();
+
+        for (id, name, content) in crate::mcp::builtin_prompts::ALL {
+            let new_prompt = SystemPrompt {
+                id: id.to_string(),
+                name: name.to_string(),
+                content: content.to_string(),
+                built_in: true,
+            };
+            if let Some(existing) = self.system_prompts.iter_mut().find(|p| p.id == *id) {
+                if existing.name != new_prompt.name
+                    || existing.content != new_prompt.content
+                    || !existing.built_in
+                {
+                    *existing = new_prompt;
+                    changed = true;
+                }
+            } else {
+                self.system_prompts.push(new_prompt);
+                changed = true;
+            }
+        }
+
+        if was_empty && self.active_system_prompt_id.is_none() {
+            if let Some((first_id, _, _)) = crate::mcp::builtin_prompts::ALL.first() {
+                self.active_system_prompt_id = Some(first_id.to_string());
+                changed = true;
+            }
+        }
+
+        changed
     }
 
     // Helper for safe loading including migration from old format

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Plus, Trash2, Save, Sparkles, Lock } from "lucide-react";
+import { Plus, Trash2, Save, Sparkles, Lock, Copy } from "lucide-react";
 
 interface SkillSummary {
     slug: string;
@@ -82,6 +82,7 @@ export default function SkillsSettings() {
             setStatus("Error: slug, name, description, and body are all required");
             return;
         }
+        if (builtIn) return;
         setStatus("Saving...");
         try {
             if (selectedSlug) {
@@ -94,6 +95,39 @@ export default function SkillsSettings() {
             await loadSkills();
             setStatus("Saved");
             setTimeout(() => setStatus((s) => (s === "Saved" ? "" : s)), 1500);
+        } catch (e) {
+            setStatus(`Error: ${e}`);
+        }
+    };
+
+    const handleClone = async () => {
+        // Built-in is selected — create a user-level skill seeded with its
+        // contents. Slug gets `-copy` (or `-copy-2`, `-copy-3`, ...) appended
+        // to keep it valid kebab-case and unique against existing skills.
+        const existingSlugs = new Set(skills.map((s) => s.slug));
+        let cloneSlug = `${slug}-copy`;
+        let suffix = 2;
+        while (existingSlugs.has(cloneSlug)) {
+            cloneSlug = `${slug}-copy-${suffix}`;
+            suffix += 1;
+        }
+        const cloneName = `${name} (Copy)`;
+        setStatus("Cloning...");
+        try {
+            await invoke("create_skill", {
+                slug: cloneSlug,
+                name: cloneName,
+                description,
+                body,
+            });
+            await loadSkills();
+            // Switch to the new user-owned copy so the user can edit immediately.
+            setSelectedSlug(cloneSlug);
+            setEditingNewSlug(null);
+            setSlug(cloneSlug);
+            setName(cloneName);
+            setBuiltIn(false);
+            setStatus("Cloned — editing your copy now.");
         } catch (e) {
             setStatus(`Error: ${e}`);
         }
@@ -150,13 +184,15 @@ export default function SkillsSettings() {
                                     </span>
                                 )}
                             </div>
-                            <button
-                                onClick={(ev) => handleDelete(s, ev)}
-                                className="p-1 hover:text-red-400 transition-opacity"
-                                title="Delete"
-                            >
-                                <Trash2 size={14} />
-                            </button>
+                            {!s.built_in && (
+                                <button
+                                    onClick={(ev) => handleDelete(s, ev)}
+                                    className="p-1 hover:text-red-400 transition-opacity"
+                                    title="Delete"
+                                >
+                                    <Trash2 size={14} />
+                                </button>
+                            )}
                         </div>
                     ))}
                     {skills.length === 0 && (
@@ -178,10 +214,11 @@ export default function SkillsSettings() {
                         <div className="p-4 border-b border-[var(--color-border-primary)] space-y-3">
                             <div className="flex items-center gap-2">
                                 <input
-                                    className="flex-1 bg-transparent text-lg font-bold placeholder-gray-600 outline-none"
+                                    className="flex-1 bg-transparent text-lg font-bold placeholder-gray-600 outline-none disabled:opacity-70 disabled:cursor-not-allowed"
                                     placeholder="Skill name (e.g. Code Review)"
                                     value={name}
                                     onChange={(e) => setName(e.target.value)}
+                                    disabled={builtIn}
                                 />
                                 {builtIn && (
                                     <span className="flex items-center gap-1 text-[10px] uppercase tracking-wider bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded">
@@ -197,34 +234,45 @@ export default function SkillsSettings() {
                                 onChange={(e) => setSlug(e.target.value)}
                             />
                             <input
-                                className="w-full bg-transparent text-sm outline-none border border-[var(--color-border-secondary)] rounded px-2 py-1"
+                                className="w-full bg-transparent text-sm outline-none border border-[var(--color-border-secondary)] rounded px-2 py-1 disabled:opacity-70 disabled:cursor-not-allowed"
                                 placeholder="When should the LLM use this skill?"
                                 value={description}
                                 onChange={(e) => setDescription(e.target.value)}
+                                disabled={builtIn}
                             />
                             {builtIn && (
                                 <p className="text-[10px] text-[var(--color-text-tertiary)]">
-                                    Edits to built-in skills stick. To restore the original, delete the skill — it regenerates on app start.
+                                    Built-in skills are re-applied from the binary on every launch — edits would be overwritten. Click <span className="font-bold">Clone to edit</span> below to create your own editable copy.
                                 </p>
                             )}
                         </div>
                         <textarea
-                            className="flex-1 w-full bg-[var(--color-bg-primary)] p-4 resize-none outline-none text-sm font-mono text-[var(--color-text-secondary)] leading-relaxed border-none focus:border-blue-500"
+                            className="flex-1 w-full bg-[var(--color-bg-primary)] p-4 resize-none outline-none text-sm font-mono text-[var(--color-text-secondary)] leading-relaxed border-none focus:border-blue-500 read-only:opacity-80 read-only:cursor-default"
                             placeholder="System-prompt-shaped body. Treated as authoritative guidance when the model calls use_skill."
                             value={body}
                             onChange={(e) => setBody(e.target.value)}
+                            readOnly={builtIn}
                         />
                         <div className="p-3 border-t border-[var(--color-border-primary)] flex justify-between items-center bg-[var(--color-bg-secondary)]">
                             <span className={`text-xs ${status.startsWith("Error") ? "text-red-400" : "text-green-400"}`}>
                                 {status}
                             </span>
-                            <button
-                                onClick={handleSave}
-                                disabled={!slug || !name || !description || !body}
-                                className="flex items-center gap-2 px-4 py-2 btn-primary disabled:opacity-50 disabled:cursor-not-allowed text-sm font-bold rounded-lg transition-colors"
-                            >
-                                <Save size={16} /> Save
-                            </button>
+                            {builtIn ? (
+                                <button
+                                    onClick={handleClone}
+                                    className="flex items-center gap-2 px-4 py-2 btn-primary text-sm font-bold rounded-lg transition-colors"
+                                >
+                                    <Copy size={16} /> Clone to edit
+                                </button>
+                            ) : (
+                                <button
+                                    onClick={handleSave}
+                                    disabled={!slug || !name || !description || !body}
+                                    className="flex items-center gap-2 px-4 py-2 btn-primary disabled:opacity-50 disabled:cursor-not-allowed text-sm font-bold rounded-lg transition-colors"
+                                >
+                                    <Save size={16} /> Save
+                                </button>
+                            )}
                         </div>
                     </>
                 )}

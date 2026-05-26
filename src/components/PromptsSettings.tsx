@@ -1,11 +1,12 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Plus, Trash2, Save, Book } from "lucide-react";
+import { Plus, Trash2, Save, Book, Copy } from "lucide-react";
 
 interface SystemPrompt {
     id: string;
     name: string;
     content: string;
+    built_in?: boolean;
 }
 
 export default function PromptsSettings() {
@@ -14,6 +15,7 @@ export default function PromptsSettings() {
     const [name, setName] = useState("");
     const [content, setContent] = useState("");
     const [status, setStatus] = useState("");
+    const [isBuiltIn, setIsBuiltIn] = useState(false);
 
     useEffect(() => {
         loadPrompts();
@@ -32,6 +34,7 @@ export default function PromptsSettings() {
         setSelectedId(p.id);
         setName(p.name);
         setContent(p.content);
+        setIsBuiltIn(!!p.built_in);
         setStatus("");
     };
 
@@ -39,11 +42,13 @@ export default function PromptsSettings() {
         setSelectedId(null);
         setName("");
         setContent("");
+        setIsBuiltIn(false);
         setStatus("");
     };
 
     const handleSave = async () => {
         if (!name || !content) return;
+        if (isBuiltIn) return;
         setStatus("Saving...");
         try {
             await invoke("save_system_prompt", {
@@ -54,14 +59,35 @@ export default function PromptsSettings() {
             await loadPrompts();
             setStatus("Saved!");
             if (!selectedId) {
-                // If we improved the backend to return ID we could auto-select, 
-                // but for now we'll just clear or find by name.
-                // Let's just reset to new state for rapid entry or maybe stay?
-                // Better UX: Find the new one.
                 const list = await invoke<SystemPrompt[]>("get_system_prompts");
                 const newItem = list.find(p => p.name === name && p.content === content);
                 if (newItem) setSelectedId(newItem.id);
             }
+        } catch (e: any) {
+            setStatus("Error: " + e);
+        }
+    };
+
+    const handleClone = async () => {
+        // Built-in is selected; create a new user prompt seeded with its content.
+        const cloneName = `${name} (Copy)`;
+        setStatus("Cloning...");
+        try {
+            await invoke("save_system_prompt", {
+                id: null,
+                name: cloneName,
+                content,
+            });
+            const list = await invoke<SystemPrompt[]>("get_system_prompts");
+            setPrompts(list);
+            const created = list.find(p => p.name === cloneName && p.content === content && !p.built_in);
+            if (created) {
+                setSelectedId(created.id);
+                setName(created.name);
+                setContent(created.content);
+                setIsBuiltIn(false);
+            }
+            setStatus("Cloned — editing your copy now.");
         } catch (e: any) {
             setStatus("Error: " + e);
         }
@@ -96,16 +122,23 @@ export default function PromptsSettings() {
                             onClick={() => handleSelect(p)}
                             className={`p-2 rounded cursor-pointer text-sm flex justify-between items-center group transition-colors ${selectedId === p.id ? "bg-[var(--color-bg-tertiary)] text-[var(--color-accent-primary)]" : "hover:bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)]"}`}
                         >
-                            <div className="flex items-center gap-2 truncate">
-                                <Book size={14} className="opacity-50" />
+                            <div className="flex items-center gap-2 truncate min-w-0">
+                                <Book size={14} className="opacity-50 shrink-0" />
                                 <span className="truncate">{p.name}</span>
+                                {p.built_in && (
+                                    <span className="text-[9px] font-bold uppercase tracking-wider bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1.5 py-0.5 rounded shrink-0">
+                                        Built In
+                                    </span>
+                                )}
                             </div>
-                            <button
-                                onClick={(e) => handleDelete(p.id, e)}
-                                className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-opacity"
-                            >
-                                <Trash2 size={14} />
-                            </button>
+                            {!p.built_in && (
+                                <button
+                                    onClick={(e) => handleDelete(p.id, e)}
+                                    className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-opacity"
+                                >
+                                    <Trash2 size={14} />
+                                </button>
+                            )}
                         </div>
                     ))}
                     {prompts.length === 0 && (
@@ -119,34 +152,55 @@ export default function PromptsSettings() {
             {/* Editor */}
             <div className="flex-1 flex flex-col bg-[var(--color-bg-primary)]">
                 <div className="p-4 border-b border-[var(--color-border-primary)] space-y-3">
-                    <div>
+                    <div className="flex items-center gap-2">
                         <input
-                            className="w-full bg-transparent text-lg font-bold placeholder-gray-600 outline-none"
+                            className="flex-1 bg-transparent text-lg font-bold placeholder-gray-600 outline-none disabled:opacity-70 disabled:cursor-not-allowed"
                             placeholder="Prompt Name (e.g. Coding Assistant)"
                             value={name}
                             onChange={(e) => setName(e.target.value)}
+                            disabled={isBuiltIn}
                         />
+                        {isBuiltIn && (
+                            <span className="text-[10px] font-bold uppercase tracking-wider bg-purple-500/20 text-purple-300 border border-purple-500/30 px-2 py-1 rounded shrink-0">
+                                Built In
+                            </span>
+                        )}
                     </div>
+                    {isBuiltIn && (
+                        <p className="text-xs text-[var(--color-text-tertiary)]">
+                            Built-in prompts are shipped with Nebula and re-applied from the binary on every launch — edits would be overwritten. Click <span className="font-bold">Clone to edit</span> below to create your own editable copy.
+                        </p>
+                    )}
                 </div>
                 <textarea
-                    className="flex-1 w-full bg-[var(--color-bg-primary)] p-4 resize-none outline-none text-sm font-mono text-[var(--color-text-secondary)] leading-relaxed border-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                    className="flex-1 w-full bg-[var(--color-bg-primary)] p-4 resize-none outline-none text-sm font-mono text-[var(--color-text-secondary)] leading-relaxed border-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 read-only:opacity-80 read-only:cursor-default"
                     placeholder="Enter system prompt content here..."
                     value={content}
                     onChange={(e) => setContent(e.target.value)}
                     autoFocus={selectedId === null}
+                    readOnly={isBuiltIn}
                     style={{fieldSizing: "content" as any}}
                 />
                 <div className="p-3 border-t border-[var(--color-border-primary)] flex justify-between items-center bg-[var(--color-bg-secondary)]">
                     <span className={`text-xs ${status.startsWith("Error") ? "text-red-400" : "text-green-400"}`}>
                         {status}
                     </span>
-                    <button
-                        onClick={handleSave}
-                        disabled={!name || !content}
-                        className="flex items-center gap-2 px-4 py-2 btn-primary disabled:opacity-50 disabled:cursor-not-allowed text-sm font-bold rounded-lg transition-colors"
-                    >
-                        <Save size={16} /> Save Prompt
-                    </button>
+                    {isBuiltIn ? (
+                        <button
+                            onClick={handleClone}
+                            className="flex items-center gap-2 px-4 py-2 btn-primary text-sm font-bold rounded-lg transition-colors"
+                        >
+                            <Copy size={16} /> Clone to edit
+                        </button>
+                    ) : (
+                        <button
+                            onClick={handleSave}
+                            disabled={!name || !content}
+                            className="flex items-center gap-2 px-4 py-2 btn-primary disabled:opacity-50 disabled:cursor-not-allowed text-sm font-bold rounded-lg transition-colors"
+                        >
+                            <Save size={16} /> Save Prompt
+                        </button>
+                    )}
                 </div>
             </div>
         </div>

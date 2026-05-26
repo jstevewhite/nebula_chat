@@ -3064,10 +3064,25 @@ async fn save_system_prompt(
     let mut settings = Settings::load_migrated(&settings_path);
 
     let new_id = id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    // Refuse to overwrite built-ins via this command — they'd be
+    // regenerated from the binary on next launch anyway, so the edit
+    // would silently disappear. UI should hide Save for built-ins;
+    // this is defense in depth.
+    if let Some(existing) = settings.system_prompts.iter().find(|p| p.id == new_id) {
+        if existing.built_in {
+            return Err(format!(
+                "'{}' is a built-in prompt and cannot be edited. Clone it to a new prompt instead.",
+                existing.name
+            ));
+        }
+    }
+
     let new_prompt = crate::mcp::config::SystemPrompt {
         id: new_id.clone(),
         name: name.clone(),
         content: content.clone(),
+        built_in: false,
     };
 
     if let Some(idx) = settings.system_prompts.iter().position(|p| p.id == new_id) {
@@ -3093,6 +3108,18 @@ async fn delete_system_prompt(app: tauri::AppHandle, id: String) -> Result<(), S
     let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     let settings_path = config_dir.join("settings.json");
     let mut settings = Settings::load_migrated(&settings_path);
+
+    // Refuse to delete built-ins — they'd be regenerated from the binary
+    // on next launch anyway. UI should hide the delete button for built-
+    // ins; this is defense in depth.
+    if let Some(existing) = settings.system_prompts.iter().find(|p| p.id == id) {
+        if existing.built_in {
+            return Err(format!(
+                "'{}' is a built-in prompt and cannot be deleted.",
+                existing.name
+            ));
+        }
+    }
 
     settings.system_prompts.retain(|p| p.id != id);
     if settings.active_system_prompt_id.as_deref() == Some(&id) {
@@ -3250,6 +3277,21 @@ pub fn run() {
             tauri::async_runtime::block_on(async move {
                 let config_dir = app_handle.path().app_config_dir().unwrap();
                 std::fs::create_dir_all(&config_dir).unwrap();
+
+                // 0. Materialise built-in system prompts. Binary is source
+                //    of truth (same policy as skills::builtins) — edits to
+                //    built-in prompts are overwritten on each launch.
+                {
+                    let settings_path = config_dir.join("settings.json");
+                    let mut settings = Settings::load_migrated(&settings_path);
+                    if settings.materialize_builtin_prompts() {
+                        if let Err(e) = settings.save(&settings_path) {
+                            tracing::warn!(
+                                "failed to save built-in system prompts: {e}"
+                            );
+                        }
+                    }
+                }
 
                 // 1. Librarian
                 let librarian = crate::memory::librarian::Librarian::new(&config_dir).unwrap();
