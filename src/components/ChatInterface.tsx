@@ -122,6 +122,9 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
     // Slash command suggestions
     const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
+    // Tracks the input value the user pressed Esc on, so we can hide the palette
+    // without clobbering their typed text. Cleared automatically when input changes.
+    const [slashDismissedFor, setSlashDismissedFor] = useState<string | null>(null);
 
 
     const [isDragging, setIsDragging] = useState(false);
@@ -493,12 +496,26 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         return commandSuggestions.map((c) => ({ kind: "command" as const, cmd: c }));
     }, [isSkillMode, skillItems, skillQuery, commandSuggestions]);
 
-    const showSlashSuggestions = activeSuggestions.length > 0 || (isSkillMode && loadingSkills);
+    // Show the palette whenever we're parsing a slash command, including the
+    // "no matches" empty state in skill mode. Dismissed when the user pressed
+    // Esc on this exact input — re-shown the moment they edit further.
+    const slashActive =
+        isSlashCommand(input) ||
+        isSkillMode ||
+        activeSuggestions.length > 0;
+    const showSlashSuggestions = slashActive && slashDismissedFor !== input;
 
     useEffect(() => {
         // Reset selection when the list changes
         setSlashSelectedIndex(0);
     }, [activeSuggestions.length]);
+
+    useEffect(() => {
+        // Clear the Esc-dismissal once the user edits past the dismissed value.
+        if (slashDismissedFor !== null && slashDismissedFor !== input) {
+            setSlashDismissedFor(null);
+        }
+    }, [input, slashDismissedFor]);
 
     useEffect(() => {
         if (selectedModel && availableModels.length > 0) {
@@ -1773,17 +1790,26 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                                             executeSlashCommandString(fullCommand); // fire-and-forget (onKeyDown handler is not async)
                                             setSlashSelectedIndex(0);
                                         } else {
-                                            // Regular command: prefill so user can add arguments
-                                            const cmdInput = `/${selected.cmd.name} `;
-                                            setInput(cmdInput);
+                                            const cmd = selected.cmd;
+                                            // Commands whose usage has no <arg> or [arg] placeholder
+                                            // are no-arg; execute them directly instead of prefilling.
+                                            const takesArgs = !cmd.usage
+                                                || cmd.usage.includes("<")
+                                                || cmd.usage.includes("[");
+                                            if (takesArgs) {
+                                                setInput(`/${cmd.name} `);
+                                            } else {
+                                                executeSlashCommandString(`/${cmd.name}`);
+                                                setSlashSelectedIndex(0);
+                                            }
                                         }
                                     }
                                     return;
                                 }
                                 if (e.key === "Escape") {
                                     e.preventDefault();
-                                    // Clear the / so it doesn't send as a command
-                                    setInput("");
+                                    // Close the palette without clobbering the user's typed text.
+                                    setSlashDismissedFor(input);
                                     return;
                                 }
                             }

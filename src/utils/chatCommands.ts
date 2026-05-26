@@ -15,9 +15,9 @@ export interface ChatCommand {
   handler: (args: string, ctx: CommandContext) => Promise<void> | void;
 }
 
-function createSystemNote(content: string): Message {
+function createSystemNote(content: string) {
   return {
-    role: "system",
+    role: "system" as const,
     content,
     created_at: Math.floor(Date.now() / 1000),
   };
