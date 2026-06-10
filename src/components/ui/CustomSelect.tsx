@@ -6,6 +6,7 @@ export interface SelectOption {
     label: string;
     value: string;
     icon?: React.ReactNode;
+    sublabel?: string;
 }
 
 interface CustomSelectProps {
@@ -64,7 +65,12 @@ export function CustomSelect({
         : options.filter((option) => {
               const label = option.label.toLowerCase();
               const valueStr = option.value.toLowerCase();
-              return label.includes(normalizedFilter) || valueStr.includes(normalizedFilter);
+              const sublabel = option.sublabel?.toLowerCase() ?? "";
+              return (
+                  label.includes(normalizedFilter) ||
+                  valueStr.includes(normalizedFilter) ||
+                  sublabel.includes(normalizedFilter)
+              );
           });
 
     // Cap rendered rows to avoid pathological layout cost on huge lists
@@ -95,6 +101,11 @@ export function CustomSelect({
                     <span className={`${!selectedOption ? "text-[var(--color-text-tertiary)]" : ""} truncate`}>
                         {selectedOption ? selectedOption.label : placeholder}
                     </span>
+                    {selectedOption?.sublabel && (
+                        <span className="text-[var(--color-text-tertiary)] text-xs truncate flex-shrink-0">
+                            · {selectedOption.sublabel}
+                        </span>
+                    )}
                 </div>
                 <ChevronDown size={16} className={`text-[var(--color-text-tertiary)] transition-transform ${isOpen ? "rotate-180" : ""}`} />
             </button>
@@ -148,9 +159,12 @@ export function CustomSelect({
                                 {option.icon && <span className="opacity-70 w-4 h-4 flex items-center justify-center">{option.icon}</span>}
                                 <span
                                     className="flex-1 whitespace-normal break-words"
-                                    title={option.label}
+                                    title={option.sublabel ? `${option.label} — ${option.sublabel}` : option.label}
                                 >
                                     {option.label}
+                                    {option.sublabel && (
+                                        <span className="text-[var(--color-text-tertiary)] text-xs"> · {option.sublabel}</span>
+                                    )}
                                 </span>
                                 {option.value === value && <Check size={14} className="flex-shrink-0" />}
                             </button>
