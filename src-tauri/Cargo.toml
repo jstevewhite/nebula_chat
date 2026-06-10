@@ -29,6 +29,7 @@ anyhow = "1"
 futures = "0.3"
 uuid = { version = "1.0", features = ["v4", "fast-rng", "macro-diagnostics"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
+base64 = "0.22"
 async-trait = "0.1"
 rusqlite = { version = "0.31", features = ["bundled"] }
 tantivy = "0.22"

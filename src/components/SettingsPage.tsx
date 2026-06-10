@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Server, Plus, Edit2, Book, Trash2, Palette, Brain, RefreshCw, Folder, Copy } from "lucide-react";
+import { Server, Plus, Edit2, Book, Trash2, Palette, Brain, RefreshCw, Folder, Copy, Image } from "lucide-react";
 import ProvidersSettings, { ProviderConfig } from "./ProvidersSettings";
 import PromptsSettings from "./PromptsSettings";
 import SkillsSettings from "./SkillsSettings";
@@ -84,6 +84,7 @@ export default function SettingsPage() {
     const [url, setUrl] = useState("");
     const [headersText, setHeadersText] = useState("");
     const [headersErrors, setHeadersErrors] = useState<string[]>([]);
+    const [newImageHost, setNewImageHost] = useState("");
     const [allowlist, setAllowlist] = useState("");
 
     const [denylist, setDenylist] = useState("");
@@ -302,6 +303,7 @@ export default function SettingsPage() {
                 context_uncompressed_msg_count: fullSettings.context_uncompressed_msg_count ?? latest.context_uncompressed_msg_count,
                 show_message_timestamps: fullSettings.show_message_timestamps ?? latest.show_message_timestamps,
                 disable_builtin_task_tool: fullSettings.disable_builtin_task_tool ?? latest.disable_builtin_task_tool,
+                image_proxy_allowlist: fullSettings.image_proxy_allowlist ?? latest.image_proxy_allowlist,
                 // Other settings this page may toggle in the future can be added here explicitly.
             };
 
@@ -1165,6 +1167,93 @@ export default function SettingsPage() {
                             />
                             Disabled
                         </label>
+                    </div>
+                </div>
+
+                <div className="mt-6 border-t border-[var(--color-border-secondary)] pt-4">
+                    <div className="mb-3">
+                        <label className="flex items-center gap-2 text-sm font-bold text-[var(--color-text-secondary)]">
+                            <Image className="w-4 h-4 text-blue-500" /> Image Display Allowlist
+                        </label>
+                        <p className="text-xs text-[var(--color-text-tertiary)] mt-1">
+                            Remote images (e.g. jina.ai screenshots) are fetched through the backend and shown
+                            inline only if their host is listed here. This prevents a malicious link from leaking
+                            data by loading a tracking image. Match is by host suffix (<code>jina.ai</code> covers
+                            <code>r.jina.ai</code>) with an optional path prefix
+                            (<code>storage.googleapis.com/reader-6b7dc.appspot.com/</code>). An empty list blocks all
+                            remote images.
+                        </p>
+                    </div>
+
+                    <div className="space-y-2">
+                        {(fullSettings.image_proxy_allowlist ?? []).length === 0 ? (
+                            <p className="text-xs text-[var(--color-text-tertiary)] italic">
+                                No hosts allowed — remote images will not be displayed.
+                            </p>
+                        ) : (
+                            (fullSettings.image_proxy_allowlist ?? []).map((host: string, idx: number) => (
+                                <div
+                                    key={idx}
+                                    className="flex items-center justify-between gap-2 bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded-lg px-3 py-2"
+                                >
+                                    <code className="text-xs text-[var(--color-text-primary)] break-all">{host}</code>
+                                    <button
+                                        onClick={() =>
+                                            setFullSettings({
+                                                ...fullSettings,
+                                                image_proxy_allowlist: (fullSettings.image_proxy_allowlist ?? []).filter(
+                                                    (_: string, i: number) => i !== idx
+                                                ),
+                                            })
+                                        }
+                                        className="text-[var(--color-text-tertiary)] hover:text-red-500 transition-colors shrink-0"
+                                        title="Remove host"
+                                    >
+                                        <Trash2 className="w-4 h-4" />
+                                    </button>
+                                </div>
+                            ))
+                        )}
+                    </div>
+
+                    <div className="flex gap-2 mt-3">
+                        <input
+                            type="text"
+                            value={newImageHost}
+                            onChange={(e) => setNewImageHost(e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    const host = newImageHost.trim();
+                                    if (!host) return;
+                                    const existing = fullSettings.image_proxy_allowlist ?? [];
+                                    if (existing.includes(host)) {
+                                        setNewImageHost("");
+                                        return;
+                                    }
+                                    setFullSettings({ ...fullSettings, image_proxy_allowlist: [...existing, host] });
+                                    setNewImageHost("");
+                                }
+                            }}
+                            placeholder="e.g. jina.ai or storage.googleapis.com/reader-6b7dc.appspot.com/"
+                            className="flex-1 bg-[var(--color-bg-primary)] border border-[var(--color-border-secondary)] rounded-lg px-3 py-2 text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)]"
+                        />
+                        <button
+                            onClick={() => {
+                                const host = newImageHost.trim();
+                                if (!host) return;
+                                const existing = fullSettings.image_proxy_allowlist ?? [];
+                                if (existing.includes(host)) {
+                                    setNewImageHost("");
+                                    return;
+                                }
+                                setFullSettings({ ...fullSettings, image_proxy_allowlist: [...existing, host] });
+                                setNewImageHost("");
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg btn-primary text-sm font-bold shrink-0"
+                        >
+                            <Plus className="w-4 h-4" /> Add
+                        </button>
                     </div>
                 </div>
 

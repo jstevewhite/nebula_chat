@@ -230,6 +230,72 @@ pub struct Settings {
     // If messages exceed this count, older ones are summarized.
     #[serde(default = "default_uncompressed_count")]
     pub context_uncompressed_msg_count: usize,
+
+    /// Hosts (optionally with a path prefix) that the in-app image proxy is
+    /// allowed to fetch remote images from. The CSP keeps `img-src` locked to
+    /// `'self' data:`; remote images render only by being proxied through the
+    /// backend, base64-encoded, and returned as a `data:` URI. This allowlist
+    /// is the anti-exfiltration control: an injected `![](url)` can only reach
+    /// hosts listed here. Entries match by host suffix (`jina.ai` matches
+    /// `r.jina.ai`) plus an optional path prefix (`storage.googleapis.com/bucket/`).
+    #[serde(default = "default_image_proxy_allowlist")]
+    pub image_proxy_allowlist: Vec<String>,
+}
+
+/// Jina's reader screenshots are served as signed Google Cloud Storage URLs
+/// under a specific bucket, so the default scopes `storage.googleapis.com` to
+/// that bucket prefix rather than allowing all of GCS.
+fn default_image_proxy_allowlist() -> Vec<String> {
+    vec![
+        "storage.googleapis.com/reader-6b7dc.appspot.com/".to_string(),
+        "jina.ai".to_string(),
+    ]
+}
+
+/// Returns true if `raw_url` is allowed to be fetched by the image proxy.
+///
+/// Rules:
+/// - scheme must be `https`
+/// - host matches an allowlist entry exactly or as a subdomain
+///   (`jina.ai` matches `jina.ai` and `r.jina.ai`, never `evil-jina.ai`)
+/// - if an entry includes a path prefix (`host/some/prefix`), the URL path
+///   must start with that prefix
+pub fn image_url_allowed(raw_url: &str, allowlist: &[String]) -> bool {
+    let url = match reqwest::Url::parse(raw_url) {
+        Ok(u) => u,
+        Err(_) => return false,
+    };
+    if url.scheme() != "https" {
+        return false;
+    }
+    let host = match url.host_str() {
+        Some(h) => h.to_ascii_lowercase(),
+        None => return false,
+    };
+    let path = url.path();
+
+    for entry in allowlist {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let (entry_host, entry_path) = match entry.find('/') {
+            Some(idx) => (&entry[..idx], &entry[idx..]),
+            None => (entry, ""),
+        };
+        let entry_host = entry_host.trim().to_ascii_lowercase();
+        if entry_host.is_empty() {
+            continue;
+        }
+        let host_ok = host == entry_host || host.ends_with(&format!(".{}", entry_host));
+        if !host_ok {
+            continue;
+        }
+        if entry_path.is_empty() || entry_path == "/" || path.starts_with(entry_path) {
+            return true;
+        }
+    }
+    false
 }
 
 fn default_auto_inject_budget() -> usize {
@@ -337,6 +403,18 @@ impl Settings {
     }
 
     // Helper for safe loading including migration from old format
+    /// `Settings::default()` with the curated image-proxy allowlist filled in.
+    /// Use this for fresh-start / legacy-migration paths where there is no prior
+    /// config to read the allowlist from. The normal deserialize path applies
+    /// the serde default instead (which lets an existing user keep an empty
+    /// allowlist they set on purpose).
+    fn fresh_default() -> Self {
+        Self {
+            image_proxy_allowlist: default_image_proxy_allowlist(),
+            ..Settings::default()
+        }
+    }
+
     pub fn load_migrated(path: &std::path::Path) -> Self {
         if path.exists() {
             let content = std::fs::read_to_string(path).unwrap_or_default();
@@ -362,7 +440,7 @@ impl Settings {
                     s.unwrap_or_default()
                 } else {
                     // Start fresh or migrate very old format
-                    let s = Settings::default();
+                    let s = Settings::fresh_default();
                     // ... (keep existing hardcoded migration logic if needed) ...
                     s
                 };
@@ -397,13 +475,13 @@ impl Settings {
                 eprintln!("Failed to parse settings.json as JSON value");
             }
         }
-        Settings::default()
+        Settings::fresh_default()
     }
 
     fn migrate_legacy_json(val: serde_json::Value) -> Settings {
         eprintln!("Migrating legacy settings JSON...");
         // Best effort migration from partial new or old state
-        let mut s = Settings::default();
+        let mut s = Settings::fresh_default();
 
         if let Some(providers) = val
             .get("providers")
@@ -641,5 +719,91 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         let back: Settings = serde_json::from_str(&json).unwrap();
         assert!(back.disable_builtin_task_tool);
+    }
+
+    #[test]
+    fn image_allowlist_missing_field_uses_default() {
+        // Existing settings file without the new key gets the curated default.
+        let back: Settings = serde_json::from_str("{\"providers\":{}}").unwrap();
+        assert!(back
+            .image_proxy_allowlist
+            .iter()
+            .any(|e| e.contains("reader-6b7dc.appspot.com")));
+    }
+
+    #[test]
+    fn image_allowlist_explicit_empty_is_preserved() {
+        // A user who clears the list keeps it cleared (no force-fill on the
+        // deserialize path).
+        let back: Settings =
+            serde_json::from_str("{\"providers\":{},\"image_proxy_allowlist\":[]}").unwrap();
+        assert!(back.image_proxy_allowlist.is_empty());
+    }
+
+    fn jina_list() -> Vec<String> {
+        default_image_proxy_allowlist()
+    }
+
+    #[test]
+    fn allows_exact_and_subdomain_host() {
+        let al = vec!["jina.ai".to_string()];
+        assert!(image_url_allowed("https://jina.ai/x.png", &al));
+        assert!(image_url_allowed("https://r.jina.ai/x.png", &al));
+        assert!(image_url_allowed("https://a.b.jina.ai/x.png", &al));
+    }
+
+    #[test]
+    fn rejects_lookalike_hosts() {
+        let al = vec!["jina.ai".to_string()];
+        // suffix-confusion / prefix-glue attacks must not match
+        assert!(!image_url_allowed("https://evil-jina.ai/x.png", &al));
+        assert!(!image_url_allowed("https://jina.ai.evil.com/x.png", &al));
+        assert!(!image_url_allowed("https://notjina.ai/x.png", &al));
+        assert!(!image_url_allowed("https://xjina.ai/x.png", &al));
+    }
+
+    #[test]
+    fn rejects_non_https_scheme() {
+        let al = vec!["jina.ai".to_string()];
+        assert!(!image_url_allowed("http://jina.ai/x.png", &al));
+        assert!(!image_url_allowed("file:///etc/passwd", &al));
+        assert!(!image_url_allowed("data:image/png;base64,AAAA", &al));
+    }
+
+    #[test]
+    fn enforces_path_prefix_for_shared_host() {
+        let al = jina_list();
+        // jina's bucket is reachable...
+        assert!(image_url_allowed(
+            "https://storage.googleapis.com/reader-6b7dc.appspot.com/screenshots/abc?X-Amz-Signature=z",
+            &al
+        ));
+        // ...but no other bucket on the shared GCS host is.
+        assert!(!image_url_allowed(
+            "https://storage.googleapis.com/attacker-bucket/secret?X-Amz-Signature=z",
+            &al
+        ));
+        assert!(!image_url_allowed(
+            "https://storage.googleapis.com/",
+            &al
+        ));
+    }
+
+    #[test]
+    fn empty_allowlist_blocks_everything() {
+        let al: Vec<String> = vec![];
+        assert!(!image_url_allowed("https://jina.ai/x.png", &al));
+        assert!(!image_url_allowed(
+            "https://storage.googleapis.com/reader-6b7dc.appspot.com/x",
+            &al
+        ));
+    }
+
+    #[test]
+    fn rejects_garbage_urls() {
+        let al = jina_list();
+        assert!(!image_url_allowed("not a url", &al));
+        assert!(!image_url_allowed("", &al));
+        assert!(!image_url_allowed("https://", &al));
     }
 }

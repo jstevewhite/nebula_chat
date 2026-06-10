@@ -1475,6 +1475,28 @@ async fn fetch_memory_doc(
     store.fetch(&id).await.map_err(|e| e.to_string())
 }
 
+/// Hybrid (cosine + BM25) search across memory docs. Exposed for the
+/// `/recall` slash command so the user can search directly without an
+/// LLM round-trip through the `memory_doc_recall` tool.
+#[tauri::command]
+async fn recall_memory_docs(
+    state: State<'_, AppState>,
+    query: String,
+    k: Option<usize>,
+) -> Result<crate::memory::docs::api::RecallOutput, String> {
+    let store = {
+        let slot = state.doc_store.lock().await;
+        slot.clone()
+    };
+    let store = store.ok_or_else(|| "Memory subsystem is not ready yet.".to_string())?;
+    let input = crate::memory::docs::api::RecallInput {
+        query,
+        k: k.unwrap_or(5),
+        tags: Vec::new(),
+    };
+    store.recall(input).await.map_err(|e| e.to_string())
+}
+
 #[derive(Clone, Serialize)]
 struct StoragePaths {
     config_dir: String,
@@ -2118,6 +2140,86 @@ async fn set_theme(app: tauri::AppHandle, theme: String) -> Result<(), String> {
     let mut settings = Settings::load_migrated(&settings_path);
     settings.theme = theme;
     settings.save(&settings_path).map_err(|e| e.to_string())
+}
+
+/// Fetches a remote image through the backend so the renderer never connects to
+/// the remote host directly (no IP/cookie leak) and arbitrary outbound requests
+/// are impossible (anti-exfiltration). The CSP keeps `img-src` at `'self' data:`;
+/// this returns a base64 `data:` URI the webview can render.
+///
+/// Security controls: the URL must pass `image_url_allowed` against the
+/// configured allowlist (https-only, host + optional path prefix), every
+/// redirect hop is re-validated against the same allowlist, the response must
+/// be `image/*`, and the payload is capped.
+#[tauri::command]
+async fn fetch_proxied_image(app: tauri::AppHandle, url: String) -> Result<String, String> {
+    use base64::Engine;
+
+    const MAX_BYTES: u64 = 10 * 1024 * 1024;
+
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let settings = Settings::load_migrated(&settings_path);
+    let allowlist = settings.image_proxy_allowlist;
+
+    if !crate::mcp::config::image_url_allowed(&url, &allowlist) {
+        return Err(format!("Image not allowed by proxy allowlist: {}", url));
+    }
+
+    // Re-validate the destination on every redirect hop: a 3xx must not be able
+    // to bounce the fetch to a non-allowlisted host (SSRF / exfiltration).
+    let redirect_allowlist = allowlist.clone();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+            if attempt.previous().len() > 5 {
+                attempt.error("too many redirects")
+            } else if crate::mcp::config::image_url_allowed(attempt.url().as_str(), &redirect_allowlist) {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        }))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("Image fetch failed: HTTP {}", resp.status()));
+    }
+
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    if !content_type.starts_with("image/") {
+        return Err(format!(
+            "Refusing to proxy non-image content (content-type: {})",
+            if content_type.is_empty() { "unknown" } else { &content_type }
+        ));
+    }
+
+    if let Some(len) = resp.content_length() {
+        if len > MAX_BYTES {
+            return Err("Image exceeds 10 MB proxy limit".to_string());
+        }
+    }
+
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX_BYTES {
+        return Err("Image exceeds 10 MB proxy limit".to_string());
+    }
+
+    let mime = content_type
+        .split(';')
+        .next()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("image/png");
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:{};base64,{}", mime, encoded))
 }
 
 #[tauri::command]
@@ -3450,6 +3552,7 @@ pub fn run() {
             get_theme,
             set_theme,
             fetch_models,
+            fetch_proxied_image,
             execute_tool,
             get_tool_execution,
             get_conversation_tasks,
@@ -3483,6 +3586,7 @@ pub fn run() {
             cleanup_invalid_tool_messages,
             list_memory_docs,
             fetch_memory_doc,
+            recall_memory_docs,
             get_storage_paths,
             extract_facts_from_text,
             extract_facts_for_message,

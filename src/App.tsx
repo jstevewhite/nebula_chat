@@ -70,6 +70,19 @@ export default function App() {
     }
   };
 
+  // Slash-command friendly variant: creates a conversation with a caller-
+  // supplied title and switches to it. Returns the new id (or null on error).
+  const handleCreateConversation = async (title: string): Promise<string | null> => {
+    try {
+      const id = await invoke<string>("create_conversation", { title });
+      handleSelectConversation(id);
+      return id;
+    } catch (e) {
+      console.error("create_conversation failed", e);
+      return null;
+    }
+  };
+
   // memory3 Phase 3: when leaving a conversation, ask the backend whether the
   // configured fact_extraction_policy wants a session-end pass. The backend
   // no-ops if the policy is not "session_end", so this is safe to fire on
@@ -143,7 +156,7 @@ export default function App() {
             onCreate={handleNewChat}
           />
           <div className="flex-1 flex flex-col h-full overflow-hidden">
-            <ChatInterface conversationId={activeConvId} />
+            <ChatInterface conversationId={activeConvId} onCreateConversation={handleCreateConversation} />
           </div>
         </div>
 

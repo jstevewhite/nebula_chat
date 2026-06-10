@@ -5,6 +5,18 @@ export interface CommandContext {
   setInput: (value: string) => void;
   setMessages: React.Dispatch<React.SetStateAction<any[]>>;
   addSystemNote: (content: string) => void;
+
+  // Optional extras for commands that need to reach beyond the chat thread.
+  // All are filled in by ChatInterface when constructing the context; commands
+  // that depend on them should null-check and surface a useful error.
+
+  /** Creates a new conversation (delegating to App.tsx) and switches to it. */
+  onCreateConversation?: (title: string) => Promise<string | null>;
+
+  /** Model dropdown state — for `/model`. ID format: `${providerId}::${modelId}`. */
+  availableModels?: Array<{ id: string; name: string; providerId: string; providerName?: string }>;
+  selectedModel?: string;
+  setSelectedModel?: (id: string) => void;
 }
 
 export interface ChatCommand {
@@ -60,8 +72,10 @@ const commands: ChatCommand[] = [
 
         output += `**${cat}**\n`;
         for (const cmd of cmds) {
-          const usage = cmd.usage ? ` \`${cmd.usage}\`` : "";
-          output += `- \`/${cmd.name}\`${usage} — ${cmd.description}\n`;
+          // `usage` already includes the leading slash + name (e.g. "/remember <text>").
+          // Fall back to "/name" for commands that didn't set a usage string.
+          const display = cmd.usage || `/${cmd.name}`;
+          output += `- \`${display}\` — ${cmd.description}\n`;
         }
         output += "\n";
       }
@@ -255,6 +269,135 @@ const commands: ChatCommand[] = [
     handler: (_args, ctx) => {
       ctx.setInput("");
       ctx.addSystemNote("Composer cleared.");
+    },
+  },
+
+  {
+    name: "new",
+    description: "Create a new conversation (optionally with a title)",
+    usage: "/new [title]",
+    category: "Meta",
+    handler: async (args, ctx) => {
+      ctx.setInput("");
+      if (!ctx.onCreateConversation) {
+        ctx.addSystemNote("/new is unavailable in this context.");
+        return;
+      }
+      const title = args.trim() || "New Chat";
+      try {
+        const id = await ctx.onCreateConversation(title);
+        if (id) {
+          // The conversation has already switched; this note will appear in
+          // the new (empty) conversation.
+          ctx.addSystemNote(`Started new conversation: **${title}**`);
+        } else {
+          ctx.addSystemNote("/new failed: no conversation id returned.");
+        }
+      } catch (e) {
+        ctx.addSystemNote(`/new failed: ${String(e)}`);
+      }
+    },
+  },
+
+  {
+    name: "model",
+    description: "List available models, or switch by name / id substring",
+    usage: "/model [name]",
+    category: "Meta",
+    handler: (args, ctx) => {
+      ctx.setInput("");
+      const models = ctx.availableModels || [];
+      if (models.length === 0) {
+        ctx.addSystemNote("No models available. Configure providers in Settings → Providers.");
+        return;
+      }
+
+      const query = args.trim().toLowerCase();
+
+      // No arg → list models grouped by provider, mark active.
+      if (!query) {
+        const byProvider = models.reduce<Record<string, typeof models>>((acc, m) => {
+          const key = m.providerName || m.providerId;
+          (acc[key] ||= []).push(m);
+          return acc;
+        }, {});
+        let output = "**Available models**\n\n";
+        for (const [provider, list] of Object.entries(byProvider)) {
+          output += `**${provider}**\n`;
+          for (const m of list) {
+            const fullId = `${m.providerId}::${m.id}`;
+            const active = fullId === ctx.selectedModel ? " ← active" : "";
+            output += `- \`${m.id}\` — ${m.name}${active}\n`;
+          }
+          output += "\n";
+        }
+        output += "_Switch with `/model <name>` (substring match against id or name)._";
+        ctx.addSystemNote(output);
+        return;
+      }
+
+      // Arg → fuzzy match by id or name (case-insensitive substring).
+      const matches = models.filter((m) =>
+        m.id.toLowerCase().includes(query) || m.name.toLowerCase().includes(query)
+      );
+      if (matches.length === 0) {
+        ctx.addSystemNote(`No model matched "${args.trim()}". Use \`/model\` to list available models.`);
+        return;
+      }
+      if (matches.length > 1) {
+        // Prefer an exact id match when ambiguous.
+        const exact = matches.find((m) => m.id.toLowerCase() === query);
+        if (!exact) {
+          let output = `Multiple models match "${args.trim()}":\n\n`;
+          for (const m of matches) {
+            output += `- \`${m.id}\` — ${m.name} (${m.providerName || m.providerId})\n`;
+          }
+          output += "\nUse a more specific query.";
+          ctx.addSystemNote(output);
+          return;
+        }
+        matches.splice(0, matches.length, exact);
+      }
+      const target = matches[0];
+      const fullId = `${target.providerId}::${target.id}`;
+      ctx.setSelectedModel?.(fullId);
+      ctx.addSystemNote(`Switched model → **${target.name}** (\`${target.id}\` via ${target.providerName || target.providerId})`);
+    },
+  },
+
+  {
+    name: "recall",
+    description: "Hybrid semantic + BM25 search across your memory docs",
+    usage: "/recall <query>",
+    category: "Memory",
+    handler: async (args, ctx) => {
+      const query = args.trim();
+      if (!query) {
+        ctx.addSystemNote("`/recall` requires a query. Example: `/recall how does MCP approval work`");
+        ctx.setInput("");
+        return;
+      }
+      ctx.setInput("");
+
+      try {
+        const out = await invoke<{ hits: any[] }>("recall_memory_docs", { query, k: 5 });
+        const hits = out.hits || [];
+        if (hits.length === 0) {
+          ctx.addSystemNote(`No memory-doc hits for: "${query}"`);
+          return;
+        }
+        let output = `**Recall results for "${query}"** (${hits.length})\n\n`;
+        for (const h of hits) {
+          const preview = (h.text || "").slice(0, 200).replace(/\n+/g, " ");
+          const trunc = (h.text || "").length > 200 ? "…" : "";
+          const score = typeof h.score === "number" ? h.score.toFixed(3) : "?";
+          output += `- **\`${h.doc_id}\`** (chunk ${h.ord}, score ${score})\n  ${preview}${trunc}\n\n`;
+        }
+        output += "_Open the Memory panel → Docs tab to read full bodies._";
+        ctx.addSystemNote(output);
+      } catch (e) {
+        ctx.addSystemNote(`/recall failed: ${String(e)}`);
+      }
     },
   },
 
