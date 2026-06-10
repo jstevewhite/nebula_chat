@@ -1,8 +1,9 @@
 import { Sun, Moon, Palette } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 
-// Pick a readable icon color for a swatch based on the swatch's luminance,
-// so light swatches get a dark icon and dark swatches get a light icon —
+// Pick a readable icon color for a swatch based on the swatch's luma
+// (Rec.601 perceived brightness), so light swatches get a dark icon and
+// dark swatches get a light icon —
 // regardless of whether the theme id contains "light".
 function isLightSwatch(hex: string): boolean {
   const c = hex.replace('#', '');
