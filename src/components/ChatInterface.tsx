@@ -93,6 +93,7 @@ interface ModelOption {
     name: string;
     providerId: string;
     providerType: string;
+    icon?: string;
     context_window?: number;
     supports_reasoning_effort?: boolean;
     supports_thinking_mode?: boolean;
@@ -657,6 +658,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                                     name: m.name || m.id,
                                     providerId: providerKey,
                                     providerType: config.provider_type, // Extract provider type
+                                    icon: config.icon, // user-chosen emoji override, if any
                                     context_window: m.context_window,
                                     supports_reasoning_effort: m.supports_reasoning_effort,
                                     supports_thinking_mode: m.supports_thinking_mode,
@@ -1439,7 +1441,8 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
                                 id: `${m.providerId}::${m.id}`,
                                 label: m.name,
                                 value: `${m.providerId}::${m.id}`,
-                                icon: getProviderIcon(m.providerType, m.providerId)
+                                sublabel: m.providerId,
+                                icon: getProviderIcon(m.providerType, m.providerId, m.icon)
                             }))}
                             placeholder={availableModels.length === 0 ? "No enabled models" : "Select Model"}
                             disabled={availableModels.length === 0}
