@@ -13,7 +13,7 @@ Add three warm "Ink" themes from the sibling Loom project to Nebula:
 
 Nebula's theming is a CSS-variable system:
 
-- Each theme is a `[data-theme="<id>"]` block in `src/themes.css` defining **22** `--color-*`
+- Each theme is a `[data-theme="<id>"]` block in `src/themes.css` defining **21** `--color-*`
   variables.
 - The active theme is applied by setting `data-theme` on `<html>` (`ThemeContext.tsx`)
   and the id is persisted as a free string in settings (`theme: String` in
@@ -22,7 +22,7 @@ Nebula's theming is a CSS-variable system:
   `src/components/ThemeSelector.tsx` (id, name, description, preview swatch, icon).
 
 Loom's themes use a **different, smaller** 12-variable vocabulary
-(`--bg-*`, `--border*`, `--text-*`). Porting = mapping those 12 onto Nebula's 22 and
+(`--bg-*`, `--border*`, `--text-*`). Porting = mapping those 12 onto Nebula's 21 and
 deriving the rest, then registering each theme in the picker.
 
 No mechanism changes are required. Two files change: `src/themes.css` and

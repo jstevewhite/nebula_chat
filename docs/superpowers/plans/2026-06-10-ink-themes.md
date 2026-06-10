@@ -4,7 +4,7 @@
 
 **Goal:** Add three warm "Ink" themes (`ink`, `ink-light`, `ink-medium`) ported from the Loom project to Nebula's theme picker.
 
-**Architecture:** Nebula themes are pure CSS — each is a `[data-theme="<id>"]` block of 22 `--color-*` variables in `src/themes.css`, registered as a card in the `themes` array in `src/components/ThemeSelector.tsx`. The theme id is a free string persisted to settings (no backend enum gate), so adding a theme requires no Rust changes. Loom's 12-variable palettes are mapped onto Nebula's 22-variable vocabulary, with a handful of values derived to stay in the warm Ink family.
+**Architecture:** Nebula themes are pure CSS — each is a `[data-theme="<id>"]` block of 21 `--color-*` variables in `src/themes.css`, registered as a card in the `themes` array in `src/components/ThemeSelector.tsx`. The theme id is a free string persisted to settings (no backend enum gate), so adding a theme requires no Rust changes. Loom's 12-variable palettes are mapped onto Nebula's 21-variable vocabulary, with a handful of values derived to stay in the warm Ink family.
 
 **Tech Stack:** CSS custom properties, React + TypeScript, Vite, lucide-react icons.
 
@@ -118,17 +118,17 @@ Paste the following three blocks into `src/themes.css`, immediately after the cl
 }
 ```
 
-- [ ] **Step 2: Verify each block defines all 22 variables**
+- [ ] **Step 2: Verify each block defines all 21 variables** (the same count every existing theme block defines)
 
 This awk counts `--color-` declarations from each block's opening selector until its
 closing `}` (robust against the blank lines inside the blocks):
 
 Run: `awk '/\[data-theme="ink"\]/{f=1} f&&/--color-/{c++} f&&/^}/{print c; exit}' src/themes.css`
-Expected: `22`
+Expected: `21`
 Run: `awk '/\[data-theme="ink-light"\]/{f=1} f&&/--color-/{c++} f&&/^}/{print c; exit}' src/themes.css`
-Expected: `22`
+Expected: `21`
 Run: `awk '/\[data-theme="ink-medium"\]/{f=1} f&&/--color-/{c++} f&&/^}/{print c; exit}' src/themes.css`
-Expected: `22`
+Expected: `21`
 
 - [ ] **Step 3: Verify the build still passes**
 
