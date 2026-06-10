@@ -101,3 +101,5 @@ settings_dump.json
 # (e.g. provider:model), which is illegal on Windows and breaks CI checkout.
 src-tauri/*:*.json
 src-tauri/*_dump_*.json
+.antigravitycli/
+src-tauri/.fastembed_cache
