@@ -107,7 +107,7 @@ function ProviderCard({ providerKey, config, onUpdate, onDelete, onFetch, loadin
                     {editingIcon ? (
                         <input
                             autoFocus
-                            maxLength={2}
+                            maxLength={8}
                             defaultValue={config.icon ?? ""}
                             placeholder={getProviderIcon(config.provider_type, providerKey)}
                             onBlur={(e) => {
