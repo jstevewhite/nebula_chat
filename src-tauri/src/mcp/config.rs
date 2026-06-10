@@ -94,6 +94,10 @@ pub struct ProviderConfig {
     pub api_key: Option<String>,
     #[serde(default)]
     pub models: Vec<ModelConfig>,
+    /// Optional user-chosen emoji/glyph that overrides the heuristic provider
+    /// icon in the UI. Presentation-only; never sent to any LLM.
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -592,6 +596,35 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_config_missing_icon_defaults_none() {
+        // An existing provider entry written before the `icon` field existed
+        // must still deserialize.
+        let back: ProviderConfig = serde_json::from_str(
+            r#"{"enabled":true,"provider_type":"OpenAICompatible","base_url":"http://x/v1","api_key":"k","models":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(back.icon, None);
+    }
+
+    #[test]
+    fn provider_config_icon_round_trips_via_serde() {
+        let cfg = ProviderConfig {
+            enabled: true,
+            provider_type: ProviderType::OpenAICompatible,
+            base_url: Some("http://x/v1".to_string()),
+            api_key: Some("k".to_string()),
+            models: vec![],
+            icon: Some("🦄".to_string()),
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        // Guard against a future `skip_serializing_if` silently dropping the
+        // key (which would make the round-trip below falsely pass via default).
+        assert!(json.contains(r#""icon":"🦄""#), "icon must be present in JSON: {json}");
+        let back: ProviderConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.icon.as_deref(), Some("🦄"));
+    }
 
     #[test]
     fn disable_builtin_task_tool_defaults_false() {
