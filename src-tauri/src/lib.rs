@@ -651,7 +651,22 @@ async fn send_message(
                                 Err(e) => {
                                     tracing::error!("Failed to save user message: {}", e);
                                 }
-                                Ok(_msg_id) => {
+                                Ok(msg_id) => {
+                                    // Tell the frontend the persisted id of the
+                                    // user message it just sent. Without this the
+                                    // message stays id=None in the UI, so a later
+                                    // Regenerate replays it id-less — defeating the
+                                    // `last.id.is_none()` guard above and inserting
+                                    // a duplicate user row on every regenerate.
+                                    use tauri::Emitter;
+                                    let _ = app_handle.emit(
+                                        "user-message-saved",
+                                        serde_json::json!({
+                                            "request_id": request_id,
+                                            "conversation_id": conv_id,
+                                            "message_id": msg_id,
+                                        }),
+                                    );
                                     // memory3 Phase 3: per-turn fact extraction
                                     // has been removed. Facts are now written
                                     // only via /remember, "Save as fact", the

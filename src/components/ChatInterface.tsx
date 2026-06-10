@@ -1027,6 +1027,35 @@ export default function ChatInterface({ conversationId, onCreateConversation }: 
 
             activeStreamRef.current = { requestId, tempMsgId, conversationId };
 
+            // Back-fill the persisted DB id onto the user message we just sent.
+            // The backend emits "user-message-saved" right after persisting it;
+            // without adopting that id the message stays id=undefined, and a later
+            // Regenerate replays it id-less — the backend then re-saves it, which
+            // duplicates the user turn on every regenerate (and the dupes survive
+            // a restart because they're real rows). Registered for both streaming
+            // and non-streaming sends; cleaned up via unlistenTransform below.
+            const unlistenUserSaved = await listen<{ request_id?: string; conversation_id?: string; message_id?: string }>(
+                "user-message-saved",
+                (event) => {
+                    const p = event.payload;
+                    if (p.request_id && p.request_id !== requestId) return;
+                    if (!p.message_id) return;
+                    setMessages(prev => {
+                        // Adopt the id on the most-recent user message that still
+                        // lacks one — the turn we just sent.
+                        for (let i = prev.length - 1; i >= 0; i--) {
+                            if (prev[i].role === "user" && !prev[i].id) {
+                                const next = [...prev];
+                                next[i] = { ...next[i], id: p.message_id };
+                                return next;
+                            }
+                        }
+                        return prev;
+                    });
+                }
+            );
+            unlistenTransform = () => unlistenUserSaved();
+
             // Setup Streaming Listener if enabled
             if (genSettings.stream) {
                 // Add placeholder message
@@ -1106,7 +1135,9 @@ export default function ChatInterface({ conversationId, onCreateConversation }: 
                 });
 
                 const origUnlisten = unlisten;
+                const prevUnlisten = unlistenTransform;
                 unlistenTransform = () => {
+                    prevUnlisten?.();
                     origUnlisten();
                     unlistenStats();
                 };
