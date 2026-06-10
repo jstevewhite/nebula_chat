@@ -1,7 +1,15 @@
 
 export type ProviderType = "OpenAI" | "Anthropic" | "Ollama" | "OpenAICompatible";
 
-export function getProviderIcon(type: ProviderType | string | undefined, providerId?: string): string {
+export function getProviderIcon(
+    type: ProviderType | string | undefined,
+    providerId?: string,
+    customIcon?: string,
+): string {
+    // A user-chosen emoji/glyph always wins over the heuristics below.
+    const trimmedCustom = customIcon?.trim();
+    if (trimmedCustom) return trimmedCustom;
+
     const normalizedId = providerId?.toLowerCase() || "";
     if (normalizedId.includes("openrouter")) return "⚡";
     if (normalizedId.includes("lmstudio") || normalizedId.includes("lm-studio")) return "🖥️";
