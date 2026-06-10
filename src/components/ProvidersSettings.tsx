@@ -27,6 +27,7 @@ export interface ProviderConfig {
     base_url?: string;
     api_key?: string;
     models: ModelConfig[];
+    icon?: string;
 }
 
 interface ProviderCardProps {
@@ -40,6 +41,7 @@ interface ProviderCardProps {
 
 function ProviderCard({ providerKey, config, onUpdate, onDelete, onFetch, loading }: ProviderCardProps) {
     const [searchQuery, setSearchQuery] = useState("");
+    const [editingIcon, setEditingIcon] = useState(false);
     const [editingModelId, setEditingModelId] = useState<string | null>(null);
     const [editContext, setEditContext] = useState<string>("");
     const [editReasoningEffort, setEditReasoningEffort] = useState<boolean | undefined>(undefined);
@@ -102,9 +104,33 @@ function ProviderCard({ providerKey, config, onUpdate, onDelete, onFetch, loadin
         <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border-primary)] rounded-xl p-4 transition-all hover:border-[var(--color-border-secondary)]">
             <div className="flex justify-between items-start mb-4">
                 <div className="flex items-center gap-3">
-                    <div className={`text-2xl`} title={config.enabled ? "Enabled" : "Disabled"}>
-                        {getProviderIcon(config.provider_type, providerKey)}
-                    </div>
+                    {editingIcon ? (
+                        <input
+                            autoFocus
+                            maxLength={2}
+                            defaultValue={config.icon ?? ""}
+                            placeholder={getProviderIcon(config.provider_type, providerKey)}
+                            onBlur={(e) => {
+                                const v = e.target.value.trim();
+                                onUpdate({ icon: v || undefined });
+                                setEditingIcon(false);
+                            }}
+                            onKeyDown={(e) => {
+                                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                                if (e.key === "Escape") setEditingIcon(false);
+                            }}
+                            className="w-10 text-2xl text-center bg-[var(--color-bg-primary)] border border-[var(--color-accent-primary)] rounded outline-none"
+                        />
+                    ) : (
+                        <button
+                            type="button"
+                            onClick={() => setEditingIcon(true)}
+                            className="text-2xl leading-none hover:bg-[var(--color-bg-tertiary)] rounded px-1 transition-colors"
+                            title="Click to set a custom emoji (clear to reset)"
+                        >
+                            {getProviderIcon(config.provider_type, providerKey, config.icon)}
+                        </button>
+                    )}
                     <div>
                         <h3 className={`font-bold text-lg capitalize ${!config.enabled && "text-[var(--color-text-tertiary)] line-through decoration-[var(--color-text-tertiary)]"}`}>{providerKey}</h3>
                     </div>
