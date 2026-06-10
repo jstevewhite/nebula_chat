@@ -1,6 +1,18 @@
 import { Sun, Moon, Palette } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 
+// Pick a readable icon color for a swatch based on the swatch's luma
+// (Rec.601 perceived brightness), so light swatches get a dark icon and
+// dark swatches get a light icon —
+// regardless of whether the theme id contains "light".
+function isLightSwatch(hex: string): boolean {
+  const c = hex.replace('#', '');
+  const r = parseInt(c.slice(0, 2), 16);
+  const g = parseInt(c.slice(2, 4), 16);
+  const b = parseInt(c.slice(4, 6), 16);
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.6;
+}
+
 export function ThemeSelector() {
   const { theme, setTheme } = useTheme();
 
@@ -47,6 +59,27 @@ export function ThemeSelector() {
       preview: '#f5f5f5',
       icon: Sun,
     },
+    {
+      id: 'ink' as const,
+      name: 'Ink',
+      description: 'Warm near-black with gold accent',
+      preview: '#0f0e0c',
+      icon: Moon,
+    },
+    {
+      id: 'ink-light' as const,
+      name: 'Ink Light',
+      description: 'Warm parchment, gold accent',
+      preview: '#f6f1e6',
+      icon: Sun,
+    },
+    {
+      id: 'ink-medium' as const,
+      name: 'Ink Medium',
+      description: 'Dimmed warm tan parchment',
+      preview: '#cdc5af',
+      icon: Palette,
+    },
   ];
 
   return (
@@ -83,7 +116,7 @@ export function ThemeSelector() {
                 <Icon
                   size={20}
                   className={
-                    themeOption.id.includes('light')
+                    isLightSwatch(themeOption.preview)
                       ? 'text-gray-700'
                       : 'text-gray-200'
                   }
