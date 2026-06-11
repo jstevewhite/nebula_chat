@@ -439,15 +439,24 @@ impl LlmProvider for OpenAiProvider {
         });
 
         if let Some(opts) = options {
-            if let Some(temp) = opts.temperature {
-                body.as_object_mut()
-                    .unwrap()
-                    .insert("temperature".to_string(), json!(temp));
-            }
-            if let Some(top_p) = opts.top_p {
-                body.as_object_mut()
-                    .unwrap()
-                    .insert("top_p".to_string(), json!(top_p));
+            // Anthropic-backed models (e.g. `claude-*` served through a
+            // LiteLLM/OpenAI-compatible proxy) reject `temperature` and `top_p`
+            // when both are present. The UI defaults both to non-None, so pick
+            // one — temperature wins, matching the Anthropic provider's
+            // `apply_sampling_options`. Sending only one is also OpenAI's own
+            // recommendation.
+            match (opts.temperature, opts.top_p) {
+                (Some(temp), _) => {
+                    body.as_object_mut()
+                        .unwrap()
+                        .insert("temperature".to_string(), json!(temp));
+                }
+                (None, Some(top_p)) => {
+                    body.as_object_mut()
+                        .unwrap()
+                        .insert("top_p".to_string(), json!(top_p));
+                }
+                (None, None) => {}
             }
             if let Some(max_tokens) = opts.max_tokens {
                 body.as_object_mut()
@@ -735,15 +744,24 @@ impl LlmProvider for OpenAiProvider {
         });
 
         if let Some(opts) = options {
-            if let Some(temp) = opts.temperature {
-                body.as_object_mut()
-                    .unwrap()
-                    .insert("temperature".to_string(), json!(temp));
-            }
-            if let Some(top_p) = opts.top_p {
-                body.as_object_mut()
-                    .unwrap()
-                    .insert("top_p".to_string(), json!(top_p));
+            // Anthropic-backed models (e.g. `claude-*` served through a
+            // LiteLLM/OpenAI-compatible proxy) reject `temperature` and `top_p`
+            // when both are present. The UI defaults both to non-None, so pick
+            // one — temperature wins, matching the Anthropic provider's
+            // `apply_sampling_options`. Sending only one is also OpenAI's own
+            // recommendation.
+            match (opts.temperature, opts.top_p) {
+                (Some(temp), _) => {
+                    body.as_object_mut()
+                        .unwrap()
+                        .insert("temperature".to_string(), json!(temp));
+                }
+                (None, Some(top_p)) => {
+                    body.as_object_mut()
+                        .unwrap()
+                        .insert("top_p".to_string(), json!(top_p));
+                }
+                (None, None) => {}
             }
             if let Some(max_tokens) = opts.max_tokens {
                 body.as_object_mut()
