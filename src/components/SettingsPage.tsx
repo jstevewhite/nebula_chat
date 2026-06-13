@@ -613,7 +613,8 @@ export default function SettingsPage() {
     return (
         <div className="p-6 bg-[var(--color-bg-primary)] h-full text-[var(--color-text-primary)] overflow-auto relative flex-1 w-full max-w-5xl mx-auto">
             <div className="mb-4 text-sm text-[var(--color-text-secondary)] font-mono">
-                Nebula version {pkg.version}
+                Nebula version {pkg.version} · build {__GIT_HASH__}
+                {__BUILD_DATE__ ? ` · ${new Date(__BUILD_DATE__).toLocaleString()}` : ""}
             </div>
             {/* Status Banner */}
             {status && (
