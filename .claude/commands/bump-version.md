@@ -1,6 +1,6 @@
 # Bump Nebula Version
 
-Bump the version to `$ARGUMENTS` across all four locations, regenerate the Cargo lockfile, sync the Tauri npm packages with the Rust crate version, commit, tag, and push. Pushing the tag triggers the `release` GitHub Actions workflow.
+First sweep the docs (write the changelog entry + correct stale docs), then bump the version to `$ARGUMENTS` across all four locations, regenerate the Cargo lockfile, sync the Tauri npm packages with the Rust crate version, commit, tag, and push. The doc sweep runs FIRST so it ships in the release. Pushing the tag triggers the `release` GitHub Actions workflow.
 
 ## Normalize the argument FIRST
 
@@ -22,18 +22,38 @@ For beta builds, you typically do NOT need to run this command — the `beta` wo
 | `package.json` | `"version": "X.Y.Z"` |
 | `README.md` | `**Current version:** \`vX.Y.Z\`` (around line 9) |
 
-**Do NOT touch** the `### What's new in vX.Y.Z` header in `README.md` — that line describes the contents of the previous release. Update it manually when you write the changelog entry for the new version.
+The version-bump edits below (Step 2) change **only** the `**Current version:**` line — they must **not** touch any `### What's new in ...` header. The new release's changelog entry is written separately in **Step 1 (doc sweep)**, which runs first; older `### What's new` entries are left untouched.
 
 ## Steps
 
-1. Edit all four files, replacing the old version. Use **`VERSION`** (bare, no `v`) in `Cargo.toml`, `tauri.conf.json`, and `package.json`. Use **`TAG`** (with one `v`) in `README.md`'s "Current version" line.
+1. **Doc sweep + changelog — do this FIRST, before the version bump, so it ships in the release.**
 
-2. Regenerate the Cargo lockfile:
+   a. Find the previous release tag and review what changed since:
+      ```
+      git describe --tags --abbrev=0        # previous tag, e.g. v0.8.1
+      git log --oneline <previous-tag>..HEAD
+      ```
+   b. Add a `### What's new in <TAG>` section to `README.md`, immediately above the previous release's `### What's new` entry. Summarize the user-facing changes from the commit log (group features first, then fixes); leave older entries untouched.
+   c. Sweep the **authoritative** docs for staleness introduced since the last release — the ones that describe current reality. Skip historical records (anything under `docs/superpowers/`, plus `*-fix.md` / `*-redesign.md` / `*_plan.md` notes):
+      - `README.md` "Key Features" — themes list, slash-command list, providers, MCP transports, and any new flagship feature that still has no bullet.
+      - `CLAUDE.md` — backend module list (`llm/`, `mcp/`, `memory/`, `skills/`, `tasks/`, `security/`), frontend component list, Data Flow, Memory System. Watch for modules/components that were removed or renamed.
+      - `docs/features.md` — mark now-shipped gaps and prune false "missing/broken" claims.
+
+      Verify each claim against the code — don't trust the prose. Common drift spots: the config-dir path uses the Tauri bundle identifier `com.stwhite.nebula`; the theme list lives in `src/components/ThemeSelector.tsx`; slash commands in `src/utils/chatCommands.ts`. Keep this **basic** — correct what's clearly wrong/missing; a deep audit isn't required on every bump.
+   d. Commit the doc updates on their own, separate from the version bump:
+      ```
+      git add README.md CLAUDE.md docs/features.md    # plus any other docs you touched
+      git commit -m "docs: changelog + sweep for <TAG>"
+      ```
+
+2. Edit all four files, replacing the old version. Use **`VERSION`** (bare, no `v`) in `Cargo.toml`, `tauri.conf.json`, and `package.json`. Use **`TAG`** (with one `v`) in `README.md`'s "Current version" line.
+
+3. Regenerate the Cargo lockfile:
    ```
    cd src-tauri && ~/.cargo/bin/cargo generate-lockfile
    ```
 
-3. **Sync the Tauri npm packages with the Rust `tauri` crate version.** Cargo's `generate-lockfile` quietly pulls in the latest 2.x of the `tauri` crate; if the npm `@tauri-apps/api` and `@tauri-apps/cli` lag a minor version, the `tauri build` script aborts with a "version mismatched Tauri packages" error and CI fails. To avoid that:
+4. **Sync the Tauri npm packages with the Rust `tauri` crate version.** Cargo's `generate-lockfile` quietly pulls in the latest 2.x of the `tauri` crate; if the npm `@tauri-apps/api` and `@tauri-apps/cli` lag a minor version, the `tauri build` script aborts with a "version mismatched Tauri packages" error and CI fails. To avoid that:
 
    ```
    # Read the resolved tauri crate minor (e.g. 2.11) from Cargo.lock.
@@ -49,20 +69,20 @@ For beta builds, you typically do NOT need to run this command — the `beta` wo
 
    Confirm the resolved versions match by spot-checking `package-lock.json` for `node_modules/@tauri-apps/api` and `node_modules/@tauri-apps/cli` — both should be at the same minor as the Rust `tauri` crate.
 
-4. Verify the build still passes locally before tagging:
+5. Verify the build still passes locally before tagging:
    ```
    cd src-tauri && cargo build && cd ..
    npm run build
    ```
 
-5. Stage and commit (use **`TAG`** in the commit message so the leading `v` is always present):
+6. Stage and commit (use **`TAG`** in the commit message so the leading `v` is always present):
    ```
    git add src-tauri/Cargo.toml src-tauri/tauri.conf.json src-tauri/Cargo.lock \
            package.json package-lock.json README.md
    git commit -m "chore: bump version to <TAG>"   # e.g. "chore: bump version to v0.7.1"
    ```
 
-6. Tag and push — the tag is exactly **`TAG`** (one `v`):
+7. Tag and push — the tag is exactly **`TAG`** (one `v`):
    ```
    git tag <TAG>          # e.g. git tag v0.7.1   — NEVER git tag vv0.7.1
    git push
