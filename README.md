@@ -109,7 +109,7 @@ The active system prompt is managed in *Settings → Prompts*. Nebula ships a bu
 - **Local-first**: your memory stays on your machine.
 - **Provider-agnostic**: unified interface for **OpenAI**, **Anthropic**, **Ollama**, and **OpenAI-Compatible** endpoints (LM Studio, OpenRouter, vLLM, etc.).
 - **Optional keychain**: API keys can live in the system keychain instead of `settings.json`.
-- **Model management**: toggle visibility for models, bulk enable/disable providers, **filter large model lists (typedown search)**, and **set a default model** for new chats.
+- **Model management**: toggle visibility for models, bulk enable/disable providers, **filter large model lists (typedown search)**, and **set a default model** for new chats. Give each provider a **custom emoji** (click-to-edit on the provider card); the model selector shows the provider name and emoji as a dimmed sublabel so same-named models from different providers are easy to tell apart.
 - **Smart chat management**: auto-titles conversations, allows renaming/deleting, and intelligently handles chat deletion without unnecessary empty chats.
 - **Searchable history**: filter conversations by title or search deep into message content directly from the sidebar.
 - **Rust core**: heavy lifting (storage, search, MCP, compaction) is done in optimized Rust.
@@ -120,15 +120,16 @@ The active system prompt is managed in *Settings → Prompts*. Nebula ships a bu
 - **Code highlighting**: syntax highlighting for code blocks with "Copy Code" functionality, styled to match the `vscDarkPlus` theme.
 - **Interactive messages**: edit, copy, delete, save-as-fact, and regenerate messages on the fly.
 - **Aesthetic UI**: polished, editor-like typography with custom scrollbars and clean spacing; configurable interface and chat fonts (family, size, weight).
-- **Themes**: Light, Dark, Solarized Light, Solarized Dark, Kimbie Dark, Quiet Light.
+- **Themes**: Light, Dark, Solarized Light, Solarized Dark, Kimbie Dark, Quiet Light, Ink, Ink Light, Ink Medium.
 - **File attachments**: support for generic file attachments (Text, Code, Images) with multi-modal LLM support.
+- **Secure inline images**: remote (`http(s)`) markdown images render through an allowlisted backend proxy instead of the webview, so the CSP stays locked to `img-src 'self' data:` and an injected image URL can't fire a request or leak data. The proxy re-validates every redirect hop (SSRF guard), requires an `image/*` content-type, and caps downloads at 10 MB. Manage the host allowlist in *Settings → Image Display Allowlist*.
 - **Generation settings**: real-time control over **Temperature**, **Top P**, **Streaming**, and (where supported) **reasoning effort** / **thinking** / **extended thinking** directly from the chat interface.
 - **Tokens-per-second**: live throughput display for streaming responses.
 - **Per-message timestamps**: optional, toggleable in Appearance settings.
 - **Stop generation**: instantly abort long-running LLM responses with a dedicated stop button.
 - **Right rail**: a single collapsible right-hand rail with **Tools** and **Memory** tabs (Memory shows the exact context being injected) plus a **Tasks** slab that auto-appears when the conversation has a checklist. Collapsed / active-tab state persists across sessions.
 - **Inline `<think>` parsing**: streamed `<think>...</think>` blocks are extracted into the reasoning channel automatically.
-- **Slash commands**: a client-side command palette opens when you type `/` in the composer (or press `/` while focused in the conversation list sidebar). Includes `/help` (lists every command), `/remember <text>` (explicit fact extraction), `/search <query>` (full-text search across all conversations), `/facts [entity]` (list user-profile facts or facts about a specific entity), `/skills [slug]` (browse the skill catalogue or read a single skill body), `/skill <slug>` (load a skill's body into the current conversation as context), and `/clear` (clear the composer). Results land as system notes in the chat — no LLM round-trip required.
+- **Slash commands**: a client-side command palette opens when you type `/` in the composer (or press `/` while focused in the conversation list sidebar). Includes `/help` (lists every command), `/new [title]` (start a new conversation), `/model [name]` (list models or switch by name / id substring), `/clear` (clear the composer), `/remember <text>` (explicit fact extraction), `/recall <query>` (hybrid semantic + BM25 search across your memory docs), `/facts [entity]` (list user-profile facts or facts about a specific entity), `/search <query>` (full-text search across all conversations), `/skills [slug]` (browse the skill catalogue or read a single skill body), and `/skill <slug>` (load a skill's body into the current conversation as context). Commands run client-side or against the local backend and never trigger an LLM round-trip.
 
 ## Architecture
 
@@ -206,7 +207,7 @@ These fixes are built into the binary, so DEB / RPM / AppImage packages work out
 
 ## Configuration
 
-Nebula uses a `settings.json` file stored in your system's app config directory (e.g. `~/.config/com.tauri-appnebula.app/settings.json` on Linux). You can configure providers, models, memory, MCP servers, skills, prompts, and appearance from the UI (recommended), or by editing the file directly. The Settings page surfaces the resolved paths to settings.json, the SQLite database, the full-text index, the docs store, and the skills directory.
+Nebula uses a `settings.json` file stored in your system's app config directory (e.g. `~/.config/com.stwhite.nebula/settings.json` on Linux). You can configure providers, models, memory, MCP servers, skills, prompts, and appearance from the UI (recommended), or by editing the file directly. The Settings page surfaces the resolved paths to settings.json, the SQLite database, the full-text index, the docs store, and the skills directory.
 
 Provider credentials can be set in `settings.json`, in the system keychain (when `enable_keychain` is true, the default), or via environment variables (`NEBULA_OPENAI_KEY`, `NEBULA_ANTHROPIC_KEY`).
 
@@ -292,6 +293,7 @@ Provider credentials can be set in `settings.json`, in the system keychain (when
 - `context_uncompressed_msg_count`: most recent N messages kept raw before older ones are summarized (default 20).
 - `disable_builtin_task_tool`: hides the built-in `update_tasks` tool from the LLM.
 - `memory_tools_auto_approve`: auto-approve `memory_doc_*` / `memory_fact_*` calls (default true).
+- `image_proxy_allowlist`: hosts whose remote images may be fetched and rendered (https-only host-suffix entries, with optional path prefix). Ships with a small curated default; manage it from *Settings → Image Display Allowlist*.
 - `mcp_servers.*.env`: optional environment variables for `Stdio` servers (same format as `process.env`).
 - `mcp_servers.*.headers`: optional HTTP headers for `Sse` and `StreamableHttp` servers (e.g. for `Authorization`).
 

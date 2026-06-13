@@ -63,8 +63,9 @@ This is a Tauri desktop application with a React + TypeScript/Vite frontend and 
     - sqlite_manager.rs: conversations/messages tables; stores full messages including tool_calls and tool_call_id; supports listing, renaming, deletion, and history retrieval.
     - tantivy_index.rs: full‑text index of message content; used to retrieve relevant snippets as context.
     - librarian.rs: orchestrates SQLite + Tantivy; provides save/search/list primitives used by Tauri commands and background pruning/summarization.
+    - docs/ (memory3): on-disk markdown doc store chunked + embedded for hybrid cosine/BM25 recall, plus a knowledge-graph facts layer and deterministic per-turn auto-injection (this replaced the older "Strategist" planner/synthesizer). Embeddings via local fastembed (ONNX bge-small-en-v1.5) or a remote OpenAI-compatible endpoint.
   - MCP integration (src-tauri/src/mcp):
-    - client.rs: JSON‑RPC over stdio to external MCP servers; async request/response handling.
+    - client.rs: JSON‑RPC over stdio, SSE, and StreamableHttp transports to external MCP servers; async request/response handling.
     - manager.rs: starts servers from Settings, performs initialize handshake, lists available tools, routes tool calls, and supports runtime restarts on config edits.
     - config.rs: Settings schema (providers, models, mcp_servers), ProviderType enum, migration/overrides.
 

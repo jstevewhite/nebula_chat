@@ -40,47 +40,61 @@ Nebula is an **Intelligent Orchestrator** built with Tauri v2 (Rust backend + Re
 
 **1. Rust Backend (`src-tauri/src/`)**
 
-The backend is organized into three main modules:
+The backend is organized into these modules:
 
 - **`llm/`** - Multi-provider LLM abstraction
   - `provider.rs`: Common `LlmProvider` trait and types (`Message`, `Attachment`, `ToolCall`)
-  - `openai.rs`, `anthropic.rs`, `ollama.rs`: Provider-specific implementations
+  - `openai.rs`, `anthropic.rs`, `ollama.rs`: Provider-specific implementations (OpenAI also covers OpenAI-compatible endpoints like LM Studio / OpenRouter)
+  - `factory.rs`: Builds the right provider from a `ProviderType`
+  - `capabilities.rs`: Per-model capability flags (tools, streaming tools, multimodal, reasoning/thinking)
   - `context.rs`: `ContextManager` handles conversation state and message flow
-  - `context_assembler.rs`: Secondary "Strategist" model that filters/summarizes memories before injection
+  - `compactor.rs`: Tool-call-aware summarization/compaction of older turns
+  - `tool_shaping.rs`: Normalizes tool schemas to each provider's format
+  - `think_tag.rs`: Parses/streams reasoning ("thinking") content
   - `tokenizer.rs`: Token counting utilities (tiktoken-rs)
 
 - **`mcp/`** - Model Context Protocol implementation (MCP Host)
   - `manager.rs`: `McpManager` orchestrates multiple MCP server connections
-  - `client.rs`: `McpClient` implements JSON-RPC 2.0 over stdio/SSE transports
-  - `config.rs`: Settings structures (`Settings`, `McpServerConfig`, `ProviderType`)
+  - `client.rs`: `McpClient` implements JSON-RPC 2.0 over stdio, SSE, and StreamableHttp transports
+  - `config.rs`: Settings structures (`Settings`, `McpServerConfig`, `McpTransport`, `ModelConfig`, `ProviderType`) and the `load_migrated` schema migrations
+  - `builtin_prompts.rs`: Built-in MCP prompts shipped with the app
 
-- **`memory/`** - Local memory sidecar (SQLite + Tantivy)
-  - `librarian.rs`: `Librarian` coordinates SQLite + Tantivy for conversation storage/retrieval
+- **`memory/`** - Local memory sidecar (see Memory System below)
+  - `librarian.rs`: `Librarian` coordinates SQLite + Tantivy for chat-message storage/retrieval
   - `sqlite_manager.rs`: Persistent storage for messages, conversations, and metadata
-  - `tantivy_index.rs`: Full-text search index for semantic memory retrieval
+  - `tantivy_index.rs`: BM25 keyword full-text index over messages (not semantic)
+  - `extraction.rs`: Fact extraction from messages
+  - `audit_logger.rs`: Records every tool execution in SQLite
+  - `docs/`: the **memory3** doc store — markdown docs chunked + embedded for hybrid (cosine + BM25) recall, a knowledge-graph facts layer, and deterministic per-turn auto-injection (`store.rs`, `retrieval.rs`, `chunker.rs`, `inject.rs`, `links.rs`, `tools.rs`, `watcher.rs`, `builtins.rs`, and `embedding/` with local fastembed + remote providers)
+
+- **`skills/`** - User-editable instruction bundles surfaced via the `use_skill` / `list_skills` tools (`store.rs`, `builtins.rs`, `tools.rs`, `watcher.rs`, `api.rs`)
+- **`tasks/`** - Per-conversation task checklists backing the `update_tasks` tool and the Tasks panel
+- **`security/`** - OS keychain integration (`keychain.rs`) for API-key storage
 
 **2. React Frontend (`src/`)**
 
 - **`App.tsx`**: Main application shell, routing between Chat and Settings
 - **`components/`**:
-  - `ChatInterface.tsx`: Main chat UI, message rendering, streaming state
+  - `ChatInterface.tsx`: Main chat UI, message rendering, streaming state; hosts the in-chat tool-approval prompt ("Allow/Deny/Always Allow") and the slash-command palette (`src/utils/chatCommands.ts`)
   - `ConversationList.tsx`: Sidebar for conversation management
   - `SettingsPage.tsx`: Unified settings page with MCP server management
-  - `ToolsPanel.tsx`: Tool execution approval UI ("Allow/Deny/Always Allow")
-  - `PromptsSettings.tsx`: System message (prompt) management
+  - `ToolsPanel.tsx`: Settings UI for per-server / per-tool auto-approve policy and tool enable/disable (not the runtime approval prompt — that lives in `ChatInterface.tsx`)
   - `ProvidersSettings.tsx`: LLM provider configuration
-  - `MemoryPanel.tsx`: Real-time display of memory context injected into conversation
+  - `PromptsSettings.tsx`: System message (prompt) management
+  - `SkillsSettings.tsx`: Skill management UI
+  - `ThemeSelector.tsx`: Theme picker
+  - `RightRail.tsx` / `TasksPanel.tsx` / `MemoryPanel.tsx`: Collapsible right rail — Tools/Memory tabs plus the auto-appearing Tasks checklist and the live memory-injection view
 
 ### Data Flow
 
 1. **User Message** → `ChatInterface.tsx` → Tauri IPC → `lib.rs` commands
 2. **Context Assembly**:
    - `ContextManager` retrieves conversation history from `Librarian`
-   - Optional: `ContextAssembler` uses a secondary model to filter/summarize memories
+   - The memory3 `DocStore` deterministically auto-injects the top-recall doc body plus top knowledge-graph facts (token-budgeted, score-floored; no secondary LLM call)
    - `McpManager` aggregates available tools from connected MCP servers
 3. **LLM Inference**: Provider-specific streaming via `LlmProvider` trait
 4. **Tool Execution**: If model requests tool call → `McpManager` → user approval (if needed) → execute via `McpClient`
-5. **Memory Storage**: All interactions saved via `Librarian` (SQLite + Tantivy indexing)
+5. **Memory Storage**: Chat messages are persisted via `Librarian` (SQLite + Tantivy); long-term memory docs and KG facts are persisted separately by the memory3 `DocStore`
 
 ### MCP Integration
 
@@ -111,18 +125,17 @@ Example MCP server configs:
 
 ### Settings Management
 
-- Location: Platform-specific config dir (`~/.config/nebula/settings.json` on Linux)
+- Location: Platform-specific config dir derived from the Tauri bundle identifier (`~/.config/com.stwhite.nebula/settings.json` on Linux)
 - Loaded via `Settings::load_migrated()` with automatic schema migrations
 - UI updates settings in real-time; Rust backend reloads on demand
 - **Critical**: The settings page has had bugs with MCP server initialization hanging. When modifying settings logic, ensure proper error handling and timeouts for MCP server connections.
 
 ### Memory System
 
-The **Memory Sidecar** runs in-process (not via MCP for performance):
-- **Librarian**: Dual storage (SQLite for structured data, Tantivy for full-text search)
-- Retrieval latency target: <100ms
-- Supports semantic search across conversation history
-- Automatic conversation summarization for context window management
+The **Memory Sidecar** runs in-process (not via MCP for performance) and has two layers:
+- **Chat history (`Librarian`)**: SQLite for structured data + a Tantivy **BM25 keyword** full-text index over messages. Retrieval latency target: <100ms.
+- **memory3 doc store (`memory/docs/`)**: markdown docs chunked and embedded — local `fastembed` (ONNX `bge-small-en-v1.5`, 384-dim) or a remote OpenAI-compatible endpoint — for **semantic** recall, fused with BM25. A knowledge-graph facts layer stores `(subject, predicate, object)` triples. Each turn a deterministic recall + KG-fact-prose block is auto-injected (token-budgeted, score-floored); this **replaced the older "Strategist" planner/synthesizer**.
+- Older turns are compacted/summarized via `llm/compactor.rs` while keeping the most recent N messages raw.
 
 ## Key Design Patterns
 

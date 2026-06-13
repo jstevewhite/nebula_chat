@@ -27,7 +27,7 @@
 ## 2.1 Goals
 
 1.  **Full MCP Host Implementation**
-    * Support `stdio` and `SSE` transport for MCP servers.
+    * Support `stdio` and `SSE` transport for MCP servers. *(As built, v0.9.0: a third `StreamableHttp` transport was also added.)*
     * Seamlessly translate MCP Tools into LLM function schemas (OpenAI/Anthropic formats).
     * UI for "Human-in-the-loop" tool approval (Allow/Deny/Always Allow).
 
@@ -165,6 +165,8 @@ trait LlmProvider {
 **Interaction with MCP:**
 The Memory Sidecar remains a dedicated internal module for now to ensure sub-100ms latency for retrieval. It is **not** accessed via MCP in the MVP.
 *Reasoning:* MCP JSON-RPC over stdio introduces overhead. The internal memory needs to be "hot" and extremely fast.
+
+> **As built (v0.9.0):** the original Librarian/Strategist design was superseded by **memory3** — an on-disk markdown doc store (chunked + embedded for hybrid cosine/BM25 recall) plus a knowledge-graph facts layer, with deterministic per-turn auto-injection replacing the Strategist planner/synthesizer.
 
 ---
 
