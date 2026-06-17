@@ -78,7 +78,7 @@ The backend is organized into these modules:
   - `ChatInterface.tsx`: Main chat UI, message rendering, streaming state; hosts the in-chat tool-approval prompt ("Allow/Deny/Always Allow") and the slash-command palette (`src/utils/chatCommands.ts`)
   - `ConversationList.tsx`: Sidebar for conversation management
   - `SettingsPage.tsx`: Unified settings page with MCP server management
-  - `ToolsPanel.tsx`: Settings UI for per-server / per-tool auto-approve policy and tool enable/disable (not the runtime approval prompt — that lives in `ChatInterface.tsx`)
+  - `ToolsPanel.tsx`: Settings UI for per-server / per-tool auto-approve policy and tool enable/disable (not the runtime approval prompt — that lives in `ChatInterface.tsx`); also hosts the prompt-cache controls — the global tool lock (`tools_locked`) and the Anthropic 1-hour-TTL toggle (`anthropic_cache_ttl_1h`)
   - `ProvidersSettings.tsx`: LLM provider configuration
   - `PromptsSettings.tsx`: System message (prompt) management
   - `SkillsSettings.tsx`: Skill management UI

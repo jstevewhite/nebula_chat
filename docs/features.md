@@ -79,7 +79,7 @@ Improvements:
 **✅ Shipped.** Anthropic streaming now reassembles tool calls like OpenAI does, and a provider **capability matrix** exists — `Capabilities` / `get_capabilities()` cover `supports_tools`, `supports_streaming_tools`, and `supports_multimodal` (`src-tauri/src/llm/capabilities.rs`).
 
 ### 9) More generation controls
-**Partially shipped.** `provider.rs` now carries `max_tokens`, `presence_penalty`, `frequency_penalty`, and `reasoning_effort` (`src-tauri/src/llm/provider.rs`), in addition to temperature/top_p/stream.
+**Partially shipped.** `provider.rs` now carries `max_tokens`, `presence_penalty`, `frequency_penalty`, and `reasoning_effort` (`src-tauri/src/llm/provider.rs`), in addition to temperature/top_p/stream. `reasoning_effort` is honored across providers — including Anthropic, where it drives adaptive extended thinking on 4.6+ models — and an unset ("Auto") `max_tokens` resolves to the model's real output ceiling rather than a fixed 4096.
 
 Still missing:
 - stop sequences

@@ -8,6 +8,15 @@ This code is mostly written by LLMs. See the HLD (`docs/nebula_hld_0.6.md`) for 
 
 **Current version:** `v0.9.0`
 
+### What's new in v0.9.5
+
+- **Prompt caching**: requests are now built for prompt caching — a byte-stable `tools → system → history` prefix with deterministic tool ordering, and volatile per-turn context (date/time, tasks, memory) moved to a trailing reminder so it no longer invalidates the cache. On Anthropic this adds explicit `cache_control` breakpoints (system, tools, and the conversation prefix); OpenAI/DeepSeek benefit automatically. In practice it sharply cuts input-token cost on multi-turn chats and large tool sets — a ~97% cache-read ratio is typical on Anthropic.
+- **Tool lock (preserves the prompt cache)**: a lock in the **Tools** panel freezes the enabled-tool set. Tools render first in the cached prefix, so an accidental toggle mid-conversation would reset the whole cache; locking prevents that, enforced in both the UI and the backend.
+- **1-hour cache TTL**: opt into a 1-hour Anthropic prompt-cache window (vs the 5-minute default) from the Tools panel — survives longer idle gaps, at a higher one-time write cost.
+- **Anthropic extended thinking**: picking a reasoning level now actually enables thinking on adaptive-era Claude models (Opus 4.6/4.7/4.8, Sonnet 4.6) via adaptive thinking + effort, with the reasoning summary shown in the reasoning pane.
+- **Model-aware "Auto" max tokens**: leaving Max Tokens on "Auto" now resolves to the model's real output ceiling (capped per request type) instead of a fixed 4096, so long answers — especially with thinking on — no longer truncate.
+- **Fix — newest Anthropic models**: Opus 4.7/4.8 and Fable/Mythos reject `temperature`/`top_p`; Nebula now omits those parameters for those models instead of erroring out.
+
 ### What's new in v0.9.0
 
 - **Slash commands with an interactive palette**: type `/` in the composer to open an autocomplete suggestions palette. Commands cover Meta (`/help`, `/new`, `/clear`, `/model`), Memory (`/remember`, `/recall`, `/facts`), Search (`/search`), and Skills (`/skills`, `/skill`) — e.g. `/model <name>` switches models by name or id substring, `/new [title]` spins up a fresh conversation, and `/recall <query>` runs a hybrid semantic + BM25 search over your memory docs.
@@ -112,6 +121,7 @@ The active system prompt is managed in *Settings → Prompts*. Nebula ships a bu
 - **Model management**: toggle visibility for models, bulk enable/disable providers, **filter large model lists (typedown search)**, and **set a default model** for new chats. Give each provider a **custom emoji** (click-to-edit on the provider card); the model selector shows the provider name and emoji as a dimmed sublabel so same-named models from different providers are easy to tell apart.
 - **Smart chat management**: auto-titles conversations, allows renaming/deleting, and intelligently handles chat deletion without unnecessary empty chats.
 - **Searchable history**: filter conversations by title or search deep into message content directly from the sidebar.
+- **Prompt caching**: the prompt is structured for caching (stable, deterministically-ordered prefix; volatile context moved to a trailing reminder), so repeated turns are billed at cache rates. Anthropic gets explicit `cache_control` breakpoints with a lockable tool set and an optional 1-hour TTL; OpenAI/DeepSeek auto-cache the stable prefix. Big input-token savings on long chats and large tool sets.
 - **Rust core**: heavy lifting (storage, search, MCP, compaction) is done in optimized Rust.
 
 ### Rich Chat Interface
