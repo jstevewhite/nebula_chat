@@ -216,6 +216,16 @@ impl LlmProvider for AnthropicProvider {
         let json: Value = resp.json().await?;
         // println!("Anthropic Response: {:?}", json);
 
+        // Surface prompt-cache usage so caching is observable from the dev console
+        // (cache_read > 0 means the prefix hit the cache on this request).
+        let usage = &json["usage"];
+        tracing::info!(
+            "🧊 Anthropic usage: input={} cache_read={} cache_write={}",
+            usage["input_tokens"].as_u64().unwrap_or(0),
+            usage["cache_read_input_tokens"].as_u64().unwrap_or(0),
+            usage["cache_creation_input_tokens"].as_u64().unwrap_or(0),
+        );
+
         // Parse response to Message
         let mut final_content = String::new();
         let mut tool_calls = Vec::new();
@@ -398,6 +408,19 @@ impl LlmProvider for AnthropicProvider {
                     };
 
                     match event_type {
+                        "message_start" => {
+                            // Surface prompt-cache usage so caching can be verified
+                            // from the dev console without a raw-response viewer:
+                            // cache_read > 0 on a repeat turn means the prefix hit
+                            // the cache; cache_write > 0 is the (one-time) cold write.
+                            let usage = &json["message"]["usage"];
+                            tracing::info!(
+                                "🧊 Anthropic usage: input={} cache_read={} cache_write={}",
+                                usage["input_tokens"].as_u64().unwrap_or(0),
+                                usage["cache_read_input_tokens"].as_u64().unwrap_or(0),
+                                usage["cache_creation_input_tokens"].as_u64().unwrap_or(0),
+                            );
+                        }
                         "content_block_start" => {
                             let index = json["index"].as_u64().unwrap_or(0);
                             let block = &json["content_block"];
