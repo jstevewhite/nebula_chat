@@ -782,65 +782,36 @@ async fn send_message(
         // Inject Context
         let mut final_messages = messages_for_context; // Use compacted messages
 
-        if !context_text.is_empty() {
-            let context_msg = Message {
-                id: None,
-                role: "system".to_string(),
-                content: Some(format!(
-                    "Long-term memory for this turn:\n\n{}",
-                    context_text
-                )),
-                reasoning_content: None,
-                tool_calls: None,
-                tool_call_id: None,
-                attachments: None,
-                created_at: None,
-            };
-            final_messages.insert(0, context_msg);
-        }
+        // === Stable system prefix (cacheable) — prompt-caching Phase 0b ===
+        // Stable system content (active system prompt + skills block) forms one
+        // contiguous block at the FRONT so the [tools + system + history] prefix is
+        // byte-stable across turns. Per-turn volatile content (datetime, task
+        // checklist, long-term memory) is appended AFTER the history as a trailing
+        // <system-reminder> instead (see below), so it never invalidates the cached
+        // prefix.
 
-        // Inject current task checklist (if any) so the model knows what's pending vs. done.
-        if let Some(conv_id) = &conversation_id {
-            let task_context = {
-                let lib = state.librarian.lock().await;
-                lib.format_tasks_for_context(conv_id)
-                    .unwrap_or(None)
-            };
-            if let Some(text) = task_context {
-                let task_msg = Message {
+        // Skills block (stable: changes only when a skill is added/removed). Only
+        // injected when skills exist (slug + description per skill — bodies are
+        // pulled on demand by the tool). Inserted before the system prompt so the
+        // final front order is [system-prompt, skills, ...history].
+        if let Some(skills_block) = state.skills.render_for_system_prompt().await {
+            final_messages.insert(
+                0,
+                Message {
                     id: None,
                     role: "system".to_string(),
-                    content: Some(text),
+                    content: Some(skills_block),
                     reasoning_content: None,
                     tool_calls: None,
                     tool_call_id: None,
                     attachments: None,
                     created_at: None,
-                };
-                final_messages.insert(0, task_msg);
-            }
+                },
+            );
         }
 
-        // Inject the list of available skills so the model knows what `use_skill`
-        // can be called with. Only injected when skills exist (and only the slug
-        // + description per skill — bodies are pulled on demand by the tool).
-        if let Some(skills_block) = state.skills.render_for_system_prompt().await {
-            let skills_msg = Message {
-                id: None,
-                role: "system".to_string(),
-                content: Some(skills_block),
-                reasoning_content: None,
-                tool_calls: None,
-                tool_call_id: None,
-                attachments: None,
-                created_at: None,
-            };
-            final_messages.insert(0, skills_msg);
-        }
-
-        // Inject System Prompt
+        // Active system prompt (stable). Inserted at 0 so it precedes the skills block.
         tracing::debug!("[DEBUG] Loading settings for system prompt...");
-
         if let Some(active_id) = &settings.active_system_prompt_id {
             if let Some(prompt) = settings.system_prompts.iter().find(|p| &p.id == active_id) {
                 tracing::debug!("[DEBUG] Injecting system prompt: {}", prompt.name);
@@ -860,43 +831,59 @@ async fn send_message(
             }
         }
 
-        // Inject Current Date/Time
-        // This replaces the per-message <timestamp: ...> prefix that was previously
-        // attached to each user message. The LLM uses this as the authoritative
-        // reference for "now" when answering time-relative questions.
+        // === Volatile trailing reminder (uncached) — prompt-caching Phase 0b ===
+        // Collect per-turn content and append it AFTER the history as a single
+        // role:"user" <system-reminder>. It MUST be role:"user": convert_messages
+        // (anthropic.rs) folds every role:"system" message into the flat system
+        // prefix regardless of position, which would pull this volatile content back
+        // into the cached prefix and defeat the split. Placing it after the history
+        // also reads more correctly — "now" is relative to the latest turn.
+        let mut volatile_sections: Vec<String> = Vec::new();
+
+        // Current date/time (always present). Replaces the per-message
+        // <timestamp: ...> prefix that was previously attached to each user message.
         let now = chrono::Local::now();
         let tz = now.format("%Z").to_string();
-        let date_msg = Message {
+        volatile_sections.push(format!(
+            "The current local date and time is {} ({}). \
+             Treat this as the authoritative reference for \"now\" when the user \
+             asks about today, yesterday, recent events, deadlines, or any other \
+             time-relative question. Prior messages in this conversation may have \
+             been sent at earlier times; if the exact timing of a previous message \
+             matters, ask the user to confirm rather than assuming it is current.",
+            now.format("%A, %B %d, %Y %H:%M:%S"),
+            tz,
+        ));
+
+        // Current task checklist (if any) so the model knows what's pending vs. done.
+        if let Some(conv_id) = &conversation_id {
+            let task_context = {
+                let lib = state.librarian.lock().await;
+                lib.format_tasks_for_context(conv_id).unwrap_or(None)
+            };
+            if let Some(text) = task_context {
+                volatile_sections.push(text);
+            }
+        }
+
+        // Long-term memory recall for this turn (if any).
+        if !context_text.is_empty() {
+            volatile_sections.push(format!("Long-term memory for this turn:\n\n{}", context_text));
+        }
+
+        final_messages.push(Message {
             id: None,
-            role: "system".to_string(),
+            role: "user".to_string(),
             content: Some(format!(
-                "The current local date and time is {} ({}). \
-                 Treat this as the authoritative reference for \"now\" when the user \
-                 asks about today, yesterday, recent events, deadlines, or any other \
-                 time-relative question. Prior messages in this conversation may have \
-                 been sent at earlier times; if the exact timing of a previous message \
-                 matters, ask the user to confirm rather than assuming it is current.",
-                now.format("%A, %B %d, %Y %H:%M:%S"),
-                tz,
+                "<system-reminder>\n{}\n</system-reminder>",
+                volatile_sections.join("\n\n")
             )),
             reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
             attachments: None,
             created_at: None,
-        };
-
-        let has_system_prompt = settings
-            .active_system_prompt_id
-            .as_ref()
-            .and_then(|id| settings.system_prompts.iter().find(|p| &p.id == id))
-            .is_some();
-
-        if has_system_prompt {
-            final_messages.insert(1, date_msg);
-        } else {
-            final_messages.insert(0, date_msg);
-        }
+        });
 
         tracing::debug!("[DEBUG] Getting tools from MCP Manager...");
         let all_tools = state.mcp_manager.get_all_tools().await;
@@ -935,6 +922,13 @@ async fn send_message(
                 }
             }
         }
+
+        // Deterministic tool order (prompt-caching Phase 0a). Sort AFTER the
+        // builtins are appended so the whole array is canonical. get_all_tools
+        // iterates a HashMap (unordered), so without this the tools block — which
+        // renders first in the prefix — never caches, and a later cache_control
+        // breakpoint on the last tool would land on a nondeterministic entry.
+        tools.sort_by(|a, b| a.name.cmp(&b.name));
 
         tracing::debug!("[DEBUG] Final tool count: {}", tools.len());
 

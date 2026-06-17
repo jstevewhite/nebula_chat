@@ -566,3 +566,66 @@ fn convert_messages(messages: Vec<Message>) -> (String, Vec<Value>) {
     (system_prompt, filtered_messages)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn msg(role: &str, content: &str) -> Message {
+        Message {
+            id: None,
+            role: role.to_string(),
+            content: Some(content.to_string()),
+            reasoning_content: None,
+            tool_calls: None,
+            tool_call_id: None,
+            attachments: None,
+            created_at: None,
+        }
+    }
+
+    // Locks the invariant prompt-caching Phase 0b depends on: every system-role
+    // message is folded into the flat system string regardless of its position in
+    // the vec — even one that sits *after* a user message. This is why the volatile
+    // trailing reminder must be role:"user"; a role:"system" reminder placed after
+    // the history would be pulled back into the (cached) system prefix.
+    #[test]
+    fn system_messages_are_folded_into_system_prefix_regardless_of_position() {
+        let (system_prompt, filtered) = convert_messages(vec![
+            msg("system", "STABLE PROMPT"),
+            msg("user", "hello"),
+            msg("system", "TRAILING SYSTEM"),
+        ]);
+
+        assert_eq!(system_prompt, "STABLE PROMPT\n\nTRAILING SYSTEM");
+        // Only the user turn survives in the messages array.
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0]["role"], "user");
+        // The trailing system content must NOT remain in the messages array.
+        assert!(!filtered
+            .iter()
+            .any(|m| m["content"].to_string().contains("TRAILING SYSTEM")));
+    }
+
+    // The Phase 0b trailing reminder (role:"user") stays in the messages array,
+    // after the history, and out of the cached system prefix.
+    #[test]
+    fn user_role_trailing_reminder_stays_in_messages() {
+        let reminder = "<system-reminder>\nThe current local date and time is ...\n</system-reminder>";
+        let (system_prompt, filtered) = convert_messages(vec![
+            msg("system", "STABLE PROMPT"),
+            msg("user", "what time is it?"),
+            msg("user", reminder),
+        ]);
+
+        // Volatile content is not in the cached prefix.
+        assert_eq!(system_prompt, "STABLE PROMPT");
+        assert!(!system_prompt.contains("system-reminder"));
+        // It is the last message, content preserved verbatim (plain user messages
+        // serialize content as a string, not a text-block array).
+        assert_eq!(filtered.len(), 2);
+        let last = filtered.last().unwrap();
+        assert_eq!(last["role"], "user");
+        assert_eq!(last["content"], reminder);
+    }
+}
+
