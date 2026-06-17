@@ -29,6 +29,8 @@ pub struct AnthropicProvider {
     api_key: String,
     base_url: String,
     model: String,
+    /// Prompt-cache TTL: false = 5-minute ephemeral (default), true = 1-hour.
+    cache_ttl_1h: bool,
 }
 
 impl AnthropicProvider {
@@ -38,12 +40,104 @@ impl AnthropicProvider {
             api_key,
             base_url: sanitize_anthropic_base_url(base_url),
             model,
+            cache_ttl_1h: false,
         }
+    }
+
+    /// Opt into a 1-hour prompt-cache TTL (default is 5 minutes). Builder-style so
+    /// the common call sites that don't care keep using `new` unchanged.
+    pub fn with_cache_ttl_1h(mut self, enabled: bool) -> Self {
+        self.cache_ttl_1h = enabled;
+        self
     }
 
     fn messages_url(&self) -> String {
         format!("{}/v1/messages", self.base_url)
     }
+}
+
+/// The `cache_control` value for the configured TTL. 5-minute ephemeral is the
+/// default; `ttl: "1h"` opts into the 1-hour cache (no beta header required).
+fn cache_control_value(ttl_1h: bool) -> Value {
+    if ttl_1h {
+        json!({ "type": "ephemeral", "ttl": "1h" })
+    } else {
+        json!({ "type": "ephemeral" })
+    }
+}
+
+/// Attach `cache_control` to a message's last content block, normalizing a bare
+/// string `content` into a single text block first (cache_control attaches to a
+/// content block, never to a raw string).
+fn attach_cache_control(msg: &mut Value, cc: &Value) {
+    let Some(obj) = msg.as_object_mut() else {
+        return;
+    };
+    match obj.get_mut("content") {
+        Some(Value::String(s)) => {
+            let text = std::mem::take(s);
+            obj.insert(
+                "content".to_string(),
+                json!([{ "type": "text", "text": text, "cache_control": cc }]),
+            );
+        }
+        Some(Value::Array(arr)) => {
+            if let Some(block) = arr.last_mut().and_then(|b| b.as_object_mut()) {
+                block.insert("cache_control".to_string(), cc.clone());
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Build the `system` / `tools` / `messages` JSON for a request, applying up to
+/// three prompt-cache breakpoints (Anthropic allows 4):
+///   1. the single stable system text block,
+///   2. the last tool (caches the whole tools block, which renders first), and
+///   3. the last conversation message *before* the trailing volatile
+///      `<system-reminder>` — which therefore stays uncached.
+///
+/// `system`/`tools` are `None` when empty so the caller can skip the field.
+///
+/// The messages breakpoint relies on the assembly contract (lib.rs Phase 0b):
+/// the final message is always the volatile reminder, so the prefix boundary is
+/// the second-to-last message. If a caller sends no trailing reminder (e.g. a
+/// one-shot utility call), the worst case is that the genuine last message is
+/// left uncached — a missed optimization, never an incorrect prompt.
+fn build_cached_request_parts(
+    system_prompt: String,
+    anthropic_tools: Vec<Value>,
+    mut filtered_messages: Vec<Value>,
+    ttl_1h: bool,
+) -> (Option<Value>, Option<Value>, Vec<Value>) {
+    let cc = cache_control_value(ttl_1h);
+
+    let system = if system_prompt.is_empty() {
+        None
+    } else {
+        Some(json!([{
+            "type": "text",
+            "text": system_prompt,
+            "cache_control": cc,
+        }]))
+    };
+
+    let tools = if anthropic_tools.is_empty() {
+        None
+    } else {
+        let mut tools = anthropic_tools;
+        if let Some(last) = tools.last_mut().and_then(|t| t.as_object_mut()) {
+            last.insert("cache_control".to_string(), cc.clone());
+        }
+        Some(json!(tools))
+    };
+
+    if filtered_messages.len() >= 2 {
+        let idx = filtered_messages.len() - 2;
+        attach_cache_control(&mut filtered_messages[idx], &cc);
+    }
+
+    (system, tools, filtered_messages)
 }
 
 #[async_trait]
@@ -65,27 +159,38 @@ impl LlmProvider for AnthropicProvider {
             })
             .collect();
 
-        // Convert messages to Anthropic format using the helper function
+        // Convert messages to Anthropic format, then apply prompt-cache breakpoints.
         let (system_prompt, filtered_messages) = convert_messages(messages);
+        let (system_val, tools_val, messages_val) = build_cached_request_parts(
+            system_prompt,
+            anthropic_tools,
+            filtered_messages,
+            self.cache_ttl_1h,
+        );
 
+        // "Auto" default when the user leaves max_tokens unset. Non-streaming caps
+        // at 16K to stay under SDK HTTP timeouts; an explicit value (applied in
+        // apply_sampling_options) overrides this.
+        let default_max =
+            crate::llm::capabilities::anthropic_max_output_tokens(&self.model).min(16_384);
         let mut body = json!({
             "model": self.model,
-            "max_tokens": 4096,
-            "messages": filtered_messages,
+            "max_tokens": default_max,
+            "messages": messages_val,
         });
 
-        apply_sampling_options(&mut body, options.as_ref());
+        apply_sampling_options(&mut body, options.as_ref(), &self.model);
 
-        if !system_prompt.is_empty() {
+        if let Some(system_val) = system_val {
             body.as_object_mut()
                 .unwrap()
-                .insert("system".to_string(), json!(system_prompt));
+                .insert("system".to_string(), system_val);
         }
 
-        if !anthropic_tools.is_empty() {
+        if let Some(tools_val) = tools_val {
             body.as_object_mut()
                 .unwrap()
-                .insert("tools".to_string(), json!(anthropic_tools));
+                .insert("tools".to_string(), tools_val);
         }
 
         // DEBUG LOGGING
@@ -115,6 +220,17 @@ impl LlmProvider for AnthropicProvider {
 
         let json: Value = resp.json().await?;
         // println!("Anthropic Response: {:?}", json);
+
+        // Surface prompt-cache usage so caching is observable from the dev console
+        // (cache_read > 0 means the prefix hit the cache on this request).
+        // debug-level: run with RUST_LOG=tauri_appnebula_lib::llm::anthropic=debug
+        let usage = &json["usage"];
+        tracing::debug!(
+            "🧊 Anthropic usage: input={} cache_read={} cache_write={}",
+            usage["input_tokens"].as_u64().unwrap_or(0),
+            usage["cache_read_input_tokens"].as_u64().unwrap_or(0),
+            usage["cache_creation_input_tokens"].as_u64().unwrap_or(0),
+        );
 
         // Parse response to Message
         let mut final_content = String::new();
@@ -185,28 +301,39 @@ impl LlmProvider for AnthropicProvider {
             })
             .collect();
 
-        // Convert messages to Anthropic format using the helper function
+        // Convert messages to Anthropic format, then apply prompt-cache breakpoints.
         let (system_prompt, filtered_messages) = convert_messages(messages);
+        let (system_val, tools_val, messages_val) = build_cached_request_parts(
+            system_prompt,
+            anthropic_tools,
+            filtered_messages,
+            self.cache_ttl_1h,
+        );
 
+        // "Auto" default when max_tokens is unset. Streaming can give the model
+        // room (no HTTP-timeout concern); cap at 64K per Anthropic guidance. An
+        // explicit value overrides this in apply_sampling_options.
+        let default_max =
+            crate::llm::capabilities::anthropic_max_output_tokens(&self.model).min(64_000);
         let mut body = json!({
             "model": self.model,
-            "max_tokens": 4096,
-            "messages": filtered_messages,
+            "max_tokens": default_max,
+            "messages": messages_val,
             "stream": true,
         });
 
-        apply_sampling_options(&mut body, options.as_ref());
+        apply_sampling_options(&mut body, options.as_ref(), &self.model);
 
-        if !system_prompt.is_empty() {
+        if let Some(system_val) = system_val {
             body.as_object_mut()
                 .unwrap()
-                .insert("system".to_string(), json!(system_prompt));
+                .insert("system".to_string(), system_val);
         }
 
-        if !anthropic_tools.is_empty() {
+        if let Some(tools_val) = tools_val {
             body.as_object_mut()
                 .unwrap()
-                .insert("tools".to_string(), json!(anthropic_tools));
+                .insert("tools".to_string(), tools_val);
         }
 
         let resp = self
@@ -292,6 +419,19 @@ impl LlmProvider for AnthropicProvider {
                     };
 
                     match event_type {
+                        "message_start" => {
+                            // Surface prompt-cache usage so caching can be verified
+                            // from the dev console without a raw-response viewer:
+                            // cache_read > 0 on a repeat turn means the prefix hit
+                            // the cache; cache_write > 0 is the (one-time) cold write.
+                            let usage = &json["message"]["usage"];
+                            tracing::debug!(
+                                "🧊 Anthropic usage: input={} cache_read={} cache_write={}",
+                                usage["input_tokens"].as_u64().unwrap_or(0),
+                                usage["cache_read_input_tokens"].as_u64().unwrap_or(0),
+                                usage["cache_creation_input_tokens"].as_u64().unwrap_or(0),
+                            );
+                        }
                         "content_block_start" => {
                             let index = json["index"].as_u64().unwrap_or(0);
                             let block = &json["content_block"];
@@ -419,24 +559,43 @@ impl LlmProvider for AnthropicProvider {
 ///
 /// `presence_penalty`, `frequency_penalty`, and `reasoning_effort` are
 /// OpenAI-only and silently ignored here.
-fn apply_sampling_options(body: &mut Value, options: Option<&GenerationOptions>) {
+fn apply_sampling_options(body: &mut Value, options: Option<&GenerationOptions>, model: &str) {
     let Some(opts) = options else {
         return;
     };
     let obj = body.as_object_mut().expect("body must be a JSON object");
 
-    match (opts.temperature, opts.top_p) {
-        (Some(temp), _) => {
-            obj.insert("temperature".to_string(), json!(temp));
+    // Newer Anthropic models (Opus 4.7/4.8, Fable/Mythos 5) reject temperature /
+    // top_p with a 400. Only send sampling params to models that accept them.
+    if !crate::llm::capabilities::anthropic_rejects_sampling_params(model) {
+        match (opts.temperature, opts.top_p) {
+            (Some(temp), _) => {
+                obj.insert("temperature".to_string(), json!(temp));
+            }
+            (None, Some(top_p)) => {
+                obj.insert("top_p".to_string(), json!(top_p));
+            }
+            (None, None) => {}
         }
-        (None, Some(top_p)) => {
-            obj.insert("top_p".to_string(), json!(top_p));
-        }
-        (None, None) => {}
     }
 
     if let Some(max_tokens) = opts.max_tokens {
         obj.insert("max_tokens".to_string(), json!(max_tokens));
+    }
+
+    // Extended thinking. The reasoning-level dropdown sends `reasoning_effort` for
+    // models flagged `supports_extended_thinking`; honor it via adaptive thinking
+    // plus the `effort` knob. `display: "summarized"` so the reasoning pane gets
+    // non-empty text (the default is "omitted" on Opus 4.7/4.8/Fable). Adaptive
+    // era only; older models would need `thinking: {type: "enabled", budget_tokens}`.
+    if let Some(effort) = opts.reasoning_effort.as_deref() {
+        if crate::llm::capabilities::anthropic_supports_adaptive_thinking(model) {
+            obj.insert(
+                "thinking".to_string(),
+                json!({ "type": "adaptive", "display": "summarized" }),
+            );
+            obj.insert("output_config".to_string(), json!({ "effort": effort }));
+        }
     }
 }
 
@@ -566,3 +725,237 @@ fn convert_messages(messages: Vec<Message>) -> (String, Vec<Value>) {
     (system_prompt, filtered_messages)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn msg(role: &str, content: &str) -> Message {
+        Message {
+            id: None,
+            role: role.to_string(),
+            content: Some(content.to_string()),
+            reasoning_content: None,
+            tool_calls: None,
+            tool_call_id: None,
+            attachments: None,
+            created_at: None,
+        }
+    }
+
+    // Locks the invariant prompt-caching Phase 0b depends on: every system-role
+    // message is folded into the flat system string regardless of its position in
+    // the vec — even one that sits *after* a user message. This is why the volatile
+    // trailing reminder must be role:"user"; a role:"system" reminder placed after
+    // the history would be pulled back into the (cached) system prefix.
+    #[test]
+    fn system_messages_are_folded_into_system_prefix_regardless_of_position() {
+        let (system_prompt, filtered) = convert_messages(vec![
+            msg("system", "STABLE PROMPT"),
+            msg("user", "hello"),
+            msg("system", "TRAILING SYSTEM"),
+        ]);
+
+        assert_eq!(system_prompt, "STABLE PROMPT\n\nTRAILING SYSTEM");
+        // Only the user turn survives in the messages array.
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0]["role"], "user");
+        // The trailing system content must NOT remain in the messages array.
+        assert!(!filtered
+            .iter()
+            .any(|m| m["content"].to_string().contains("TRAILING SYSTEM")));
+    }
+
+    // The Phase 0b trailing reminder (role:"user") stays in the messages array,
+    // after the history, and out of the cached system prefix.
+    #[test]
+    fn user_role_trailing_reminder_stays_in_messages() {
+        let reminder =
+            "<system-reminder>\nThe current local date and time is ...\n</system-reminder>";
+        let (system_prompt, filtered) = convert_messages(vec![
+            msg("system", "STABLE PROMPT"),
+            msg("user", "what time is it?"),
+            msg("user", reminder),
+        ]);
+
+        // Volatile content is not in the cached prefix.
+        assert_eq!(system_prompt, "STABLE PROMPT");
+        assert!(!system_prompt.contains("system-reminder"));
+        // It is the last message, content preserved verbatim (plain user messages
+        // serialize content as a string, not a text-block array).
+        assert_eq!(filtered.len(), 2);
+        let last = filtered.last().unwrap();
+        assert_eq!(last["role"], "user");
+        assert_eq!(last["content"], reminder);
+    }
+
+    fn tool(name: &str) -> Value {
+        json!({ "name": name, "description": "", "input_schema": {} })
+    }
+
+    // Phase 1a: system is emitted as a text-block array with cache_control on the
+    // single stable block.
+    #[test]
+    fn system_block_is_cached_array() {
+        let (system, _tools, _msgs) =
+            build_cached_request_parts("STABLE".to_string(), vec![], vec![], false);
+        let system = system.expect("system present");
+        assert_eq!(system[0]["type"], "text");
+        assert_eq!(system[0]["text"], "STABLE");
+        assert_eq!(system[0]["cache_control"], json!({ "type": "ephemeral" }));
+    }
+
+    #[test]
+    fn empty_system_and_tools_are_none() {
+        let (system, tools, _msgs) =
+            build_cached_request_parts(String::new(), vec![], vec![], false);
+        assert!(system.is_none());
+        assert!(tools.is_none());
+    }
+
+    // Phase 1b: only the LAST tool carries cache_control (caches the whole block).
+    #[test]
+    fn only_last_tool_is_cached() {
+        let (_system, tools, _msgs) = build_cached_request_parts(
+            String::new(),
+            vec![tool("a_tool"), tool("b_tool"), tool("c_tool")],
+            vec![],
+            false,
+        );
+        let tools = tools.expect("tools present");
+        assert!(tools[0].get("cache_control").is_none());
+        assert!(tools[1].get("cache_control").is_none());
+        assert_eq!(tools[2]["cache_control"], json!({ "type": "ephemeral" }));
+    }
+
+    // Phase 1b: the conversation prefix is cached at the second-to-last message
+    // (the real latest turn); the trailing volatile reminder stays uncached.
+    #[test]
+    fn history_breakpoint_skips_volatile_reminder() {
+        let (_system, _tools, msgs) = build_cached_request_parts(
+            String::new(),
+            vec![],
+            vec![
+                json!({ "role": "user", "content": "real turn" }),
+                json!({ "role": "user", "content": "<system-reminder>now</system-reminder>" }),
+            ],
+            false,
+        );
+        // Second-to-last (the real turn) is normalized to a block array + cached.
+        assert_eq!(msgs[0]["content"][0]["type"], "text");
+        assert_eq!(msgs[0]["content"][0]["text"], "real turn");
+        assert_eq!(
+            msgs[0]["content"][0]["cache_control"],
+            json!({ "type": "ephemeral" })
+        );
+        // The volatile reminder is untouched (still a bare string, no breakpoint).
+        assert_eq!(msgs[1]["content"], "<system-reminder>now</system-reminder>");
+    }
+
+    // A single-message request (no trailing reminder) gets no message breakpoint
+    // and does not panic.
+    #[test]
+    fn single_message_gets_no_history_breakpoint() {
+        let (_system, _tools, msgs) = build_cached_request_parts(
+            String::new(),
+            vec![],
+            vec![json!({ "role": "user", "content": "hi" })],
+            false,
+        );
+        assert_eq!(msgs[0]["content"], "hi");
+    }
+
+    // Phase 1c: the 1-hour opt-in stamps ttl on every breakpoint.
+    #[test]
+    fn ttl_1h_is_applied_to_all_breakpoints() {
+        let (system, tools, msgs) = build_cached_request_parts(
+            "STABLE".to_string(),
+            vec![tool("only")],
+            vec![
+                json!({ "role": "user", "content": "turn" }),
+                json!({ "role": "user", "content": "reminder" }),
+            ],
+            true,
+        );
+        let expected = json!({ "type": "ephemeral", "ttl": "1h" });
+        assert_eq!(system.unwrap()[0]["cache_control"], expected);
+        assert_eq!(tools.unwrap()[0]["cache_control"], expected);
+        assert_eq!(msgs[0]["content"][0]["cache_control"], expected);
+    }
+
+    // cache_control attaches to the last block of an already-array message
+    // (e.g. a tool_result) without clobbering existing blocks.
+    #[test]
+    fn cached_array_message_keeps_existing_blocks() {
+        let cc = cache_control_value(false);
+        let mut msg = json!({
+            "role": "user",
+            "content": [
+                { "type": "tool_result", "tool_use_id": "t1", "content": "ok" }
+            ]
+        });
+        attach_cache_control(&mut msg, &cc);
+        assert_eq!(msg["content"][0]["type"], "tool_result");
+        assert_eq!(msg["content"][0]["cache_control"], cc);
+    }
+
+    fn gen_opts(temperature: Option<f32>, reasoning_effort: Option<&str>) -> GenerationOptions {
+        GenerationOptions {
+            temperature,
+            top_p: None,
+            stream: false,
+            max_tokens: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            reasoning_effort: reasoning_effort.map(|s| s.to_string()),
+        }
+    }
+
+    // A reasoning level enables adaptive thinking + effort on adaptive-era models,
+    // with display:summarized so the reasoning pane gets text.
+    #[test]
+    fn reasoning_effort_enables_adaptive_thinking() {
+        let mut body = json!({ "messages": [] });
+        let opts = gen_opts(None, Some("high"));
+        apply_sampling_options(&mut body, Some(&opts), "claude-opus-4-8");
+
+        assert_eq!(body["thinking"]["type"], "adaptive");
+        assert_eq!(body["thinking"]["display"], "summarized");
+        assert_eq!(body["output_config"]["effort"], "high");
+    }
+
+    // Opus 4.8 rejects temperature/top_p with a 400 — it must be suppressed.
+    #[test]
+    fn sampling_params_suppressed_on_opus_4_8() {
+        let mut body = json!({ "messages": [] });
+        let opts = gen_opts(Some(0.7), None);
+        apply_sampling_options(&mut body, Some(&opts), "claude-opus-4-8");
+
+        assert!(body.get("temperature").is_none());
+        assert!(body.get("thinking").is_none()); // no reasoning level → no thinking
+    }
+
+    // Sonnet 4.6 accepts temperature; a reasoning level still adds adaptive thinking.
+    #[test]
+    fn sampling_params_kept_on_sonnet_4_6_with_thinking() {
+        let mut body = json!({ "messages": [] });
+        let opts = gen_opts(Some(0.5), Some("medium"));
+        apply_sampling_options(&mut body, Some(&opts), "claude-sonnet-4-6");
+
+        assert_eq!(body["temperature"], 0.5);
+        assert_eq!(body["thinking"]["type"], "adaptive");
+        assert_eq!(body["output_config"]["effort"], "medium");
+    }
+
+    // Non-adaptive model (Sonnet 4.5): a reasoning level does NOT emit adaptive
+    // thinking (would need budget_tokens — out of scope), and sampling is kept.
+    #[test]
+    fn non_adaptive_model_skips_adaptive_thinking() {
+        let mut body = json!({ "messages": [] });
+        // 0.5 is exactly representable as both f32 and f64, avoiding round-trip skew.
+        let opts = gen_opts(Some(0.5), Some("high"));
+        apply_sampling_options(&mut body, Some(&opts), "claude-sonnet-4-5");
+
+        assert!(body.get("thinking").is_none());
+        assert_eq!(body["temperature"], 0.5);
+    }
+}

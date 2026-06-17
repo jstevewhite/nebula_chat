@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Wrench, CheckCircle2, XCircle, RefreshCw, Search, ChevronDown, ChevronRight, CheckSquare, Square } from "lucide-react";
+import { Wrench, CheckCircle2, XCircle, RefreshCw, Search, ChevronDown, ChevronRight, CheckSquare, Square, Lock, Unlock, Clock } from "lucide-react";
 
 interface ToolStatus {
     name: String;
@@ -22,6 +22,10 @@ export default function ToolsPanel() {
     const [expandedServers, setExpandedServers] = useState<Set<string>>(new Set());
     const [serverPolicies, setServerPolicies] = useState<Record<string, boolean>>({});
     const [toolPolicies, setToolPolicies] = useState<Record<string, boolean>>({});
+    // Prompt-cache controls (Phase 2): freezing the tool set protects the cache;
+    // the 1h TTL is an Anthropic-only knob.
+    const [locked, setLocked] = useState(false);
+    const [cacheTtl1h, setCacheTtl1h] = useState(false);
 
     const loadTools = async () => {
         setLoading(true);
@@ -47,6 +51,8 @@ export default function ToolsPanel() {
                     });
                 }
                 setServerPolicies(policies);
+                setLocked(!!settings?.tools_locked);
+                setCacheTtl1h(!!settings?.anthropic_cache_ttl_1h);
             } catch (e) {
                 console.warn("Failed to load server policies", e);
             }
@@ -82,7 +88,37 @@ export default function ToolsPanel() {
         }
     };
 
+    // Update a single boolean setting via read-modify-write (matches the pattern
+    // used elsewhere, e.g. ChatInterface's memory toggle).
+    const updateSetting = async (key: string, value: boolean) => {
+        const current: any = await invoke("get_settings");
+        await invoke("save_settings", { settings: { ...current, [key]: value } });
+    };
+
+    const toggleLock = async () => {
+        const next = !locked;
+        setLocked(next); // optimistic
+        try {
+            await updateSetting("tools_locked", next);
+        } catch (e) {
+            console.error(e);
+            setLocked(!next); // revert
+        }
+    };
+
+    const toggleCacheTtl = async () => {
+        const next = !cacheTtl1h;
+        setCacheTtl1h(next); // optimistic
+        try {
+            await updateSetting("anthropic_cache_ttl_1h", next);
+        } catch (e) {
+            console.error(e);
+            setCacheTtl1h(!next); // revert
+        }
+    };
+
     const toggleTool = async (name: string, enabled: boolean) => {
+        if (locked) return;
         setTools(tools.map(t => t.name === name ? { ...t, enabled } : t));
         try {
             await invoke("toggle_tool", { toolName: name, enabled });
@@ -121,6 +157,7 @@ export default function ToolsPanel() {
     };
 
     const toggleServerTools = async (_server: string, serverTools: ToolStatus[], enable: boolean) => {
+        if (locked) return;
         const toolNames = serverTools.map(t => t.name as string);
 
         // Optimistic Update
@@ -160,6 +197,34 @@ export default function ToolsPanel() {
                     title="Refresh Tools"
                 >
                     <RefreshCw size={14} />
+                </button>
+            </div>
+
+            {/* Prompt-cache controls (Phase 2) */}
+            <div className="px-3 py-2 border-b border-[var(--color-border-primary)] space-y-1.5">
+                <button
+                    onClick={toggleLock}
+                    className={`w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg text-xs transition-colors ${locked ? "bg-amber-500/10 text-amber-400 hover:bg-amber-500/20" : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-secondary)]"}`}
+                    title={locked
+                        ? "Tools are locked — preserves the prompt cache. Click to unlock and allow tool changes."
+                        : "Lock tools to preserve the prompt cache. Tools render first in the cached prefix, so toggling one mid-conversation resets the whole cache."}
+                >
+                    <span className="flex items-center gap-2">
+                        {locked ? <Lock size={14} /> : <Unlock size={14} />}
+                        <span className="font-medium">{locked ? "Tools locked" : "Lock tools"}</span>
+                    </span>
+                    <span className="text-[10px] text-[var(--color-text-tertiary)]">preserves prompt cache</span>
+                </button>
+                <button
+                    onClick={toggleCacheTtl}
+                    className={`w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg text-xs transition-colors ${cacheTtl1h ? "bg-blue-500/10 text-blue-400 hover:bg-blue-500/20" : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-secondary)]"}`}
+                    title="Anthropic only: use a 1-hour prompt-cache TTL instead of the 5-minute default. Survives longer idle gaps but doubles the cache-write cost."
+                >
+                    <span className="flex items-center gap-2">
+                        <Clock size={14} />
+                        <span className="font-medium">1-hour cache TTL</span>
+                    </span>
+                    <span className="text-[10px] text-[var(--color-text-tertiary)]">{cacheTtl1h ? "on" : "off"} · Anthropic</span>
                 </button>
             </div>
 
@@ -221,8 +286,9 @@ export default function ToolsPanel() {
                                             e.stopPropagation();
                                             toggleServerTools(server, serverTools, !allEnabled);
                                         }}
-                                        className={`p-1 mr-1 hover:text-[var(--color-text-primary)] transition-colors ${allEnabled ? "text-green-500" : someEnabled ? "text-green-500/50" : "text-gray-600"}`}
-                                        title={allEnabled ? "Disable All" : "Enable All"}
+                                        disabled={locked}
+                                        className={`p-1 mr-1 hover:text-[var(--color-text-primary)] transition-colors ${allEnabled ? "text-green-500" : someEnabled ? "text-green-500/50" : "text-gray-600"} ${locked ? "opacity-40 cursor-not-allowed hover:text-current" : ""}`}
+                                        title={locked ? "Tools locked — unlock to change" : allEnabled ? "Disable All" : "Enable All"}
                                     >
                                         {allEnabled ? <CheckSquare size={14} /> : someEnabled ? <CheckSquare size={14} className="opacity-50" /> : <Square size={14} />}
                                     </button>
@@ -242,7 +308,9 @@ export default function ToolsPanel() {
                                             >
                                                 <button
                                                     onClick={() => toggleTool(tool.name as string, !tool.enabled)}
-                                                    className={`mt-0.5 shrink-0 transition-colors ${tool.enabled ? "text-green-500 hover:text-green-400" : "text-gray-600 hover:text-[var(--color-text-secondary)]"}`}
+                                                    disabled={locked}
+                                                    title={locked ? "Tools locked — unlock to change" : tool.enabled ? "Disable tool" : "Enable tool"}
+                                                    className={`mt-0.5 shrink-0 transition-colors ${tool.enabled ? "text-green-500 hover:text-green-400" : "text-gray-600 hover:text-[var(--color-text-secondary)]"} ${locked ? "opacity-40 cursor-not-allowed" : ""}`}
                                                 >
                                                     {tool.enabled ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
                                                 </button>

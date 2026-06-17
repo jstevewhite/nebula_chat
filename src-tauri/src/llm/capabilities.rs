@@ -152,6 +152,48 @@ pub fn supports_extended_thinking(model: &str) -> bool {
         || m.contains("claude-4.5")
 }
 
+/// Anthropic models that use *adaptive* extended thinking
+/// (`thinking: {type: "adaptive"}` + `output_config.effort`): Opus 4.6/4.7/4.8,
+/// Sonnet 4.6, Fable/Mythos 5. Older Claude 4.x (Sonnet 4.5, Opus 4.5/4.1/4.0,
+/// 3.7) instead use `thinking: {type: "enabled", budget_tokens}` — not handled
+/// here (we only run adaptive-era models). Revisit when adding newer Opus tiers.
+pub fn anthropic_supports_adaptive_thinking(model: &str) -> bool {
+    let m = model.to_lowercase();
+    m.contains("opus-4-6")
+        || m.contains("opus-4-7")
+        || m.contains("opus-4-8")
+        || m.contains("sonnet-4-6")
+        || m.contains("fable")
+        || m.contains("mythos")
+}
+
+/// Anthropic models that reject `temperature`/`top_p`/`top_k` with a 400:
+/// Opus 4.7/4.8 and Fable/Mythos 5. Earlier Claude 4.x still accept them.
+pub fn anthropic_rejects_sampling_params(model: &str) -> bool {
+    let m = model.to_lowercase();
+    m.contains("opus-4-7") || m.contains("opus-4-8") || m.contains("fable") || m.contains("mythos")
+}
+
+/// Maximum output tokens a known Anthropic model supports. Used to pick the
+/// "Auto" (unset `max_tokens`) default — the request still caps this per path
+/// (streaming vs not). Unknown/older models fall back to 4096, preserving prior
+/// behavior so we never exceed a model's real limit (which would 400).
+pub fn anthropic_max_output_tokens(model: &str) -> u32 {
+    let m = model.to_lowercase();
+    if m.contains("opus-4-6")
+        || m.contains("opus-4-7")
+        || m.contains("opus-4-8")
+        || m.contains("fable")
+        || m.contains("mythos")
+    {
+        128_000
+    } else if m.contains("sonnet-4-6") || m.contains("haiku-4-5") {
+        64_000
+    } else {
+        4_096
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,5 +319,39 @@ mod tests {
         assert!(supports_extended_thinking("claude-4.5-sonnet"));
         assert!(!supports_extended_thinking("claude-3-5-sonnet"));
         assert!(!supports_extended_thinking("gpt-4"));
+    }
+
+    #[test]
+    fn adaptive_thinking_for_4_6_plus() {
+        assert!(anthropic_supports_adaptive_thinking("claude-opus-4-6"));
+        assert!(anthropic_supports_adaptive_thinking("claude-opus-4-8"));
+        assert!(anthropic_supports_adaptive_thinking("claude-sonnet-4-6"));
+        assert!(anthropic_supports_adaptive_thinking("claude-fable-5"));
+        // Older Claude 4.x use budget_tokens, not adaptive.
+        assert!(!anthropic_supports_adaptive_thinking("claude-sonnet-4-5"));
+        assert!(!anthropic_supports_adaptive_thinking("claude-opus-4-1"));
+        assert!(!anthropic_supports_adaptive_thinking("gpt-4o"));
+    }
+
+    #[test]
+    fn sampling_params_rejected_by_newest_anthropic() {
+        assert!(anthropic_rejects_sampling_params("claude-opus-4-7"));
+        assert!(anthropic_rejects_sampling_params("claude-opus-4-8"));
+        assert!(anthropic_rejects_sampling_params("claude-fable-5"));
+        // 4.6 and older still accept temperature/top_p.
+        assert!(!anthropic_rejects_sampling_params("claude-opus-4-6"));
+        assert!(!anthropic_rejects_sampling_params("claude-sonnet-4-6"));
+        assert!(!anthropic_rejects_sampling_params("claude-sonnet-4-5"));
+    }
+
+    #[test]
+    fn anthropic_output_ceilings() {
+        assert_eq!(anthropic_max_output_tokens("claude-opus-4-8"), 128_000);
+        assert_eq!(anthropic_max_output_tokens("claude-fable-5"), 128_000);
+        assert_eq!(anthropic_max_output_tokens("claude-sonnet-4-6"), 64_000);
+        assert_eq!(anthropic_max_output_tokens("claude-haiku-4-5"), 64_000);
+        // Unknown/older models keep the conservative 4096 fallback.
+        assert_eq!(anthropic_max_output_tokens("claude-sonnet-4-5"), 4_096);
+        assert_eq!(anthropic_max_output_tokens("claude-3-5-sonnet"), 4_096);
     }
 }
