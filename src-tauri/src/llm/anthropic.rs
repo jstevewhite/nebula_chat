@@ -218,8 +218,9 @@ impl LlmProvider for AnthropicProvider {
 
         // Surface prompt-cache usage so caching is observable from the dev console
         // (cache_read > 0 means the prefix hit the cache on this request).
+        // debug-level: run with RUST_LOG=tauri_appnebula_lib::llm::anthropic=debug
         let usage = &json["usage"];
-        tracing::info!(
+        tracing::debug!(
             "🧊 Anthropic usage: input={} cache_read={} cache_write={}",
             usage["input_tokens"].as_u64().unwrap_or(0),
             usage["cache_read_input_tokens"].as_u64().unwrap_or(0),
@@ -414,7 +415,7 @@ impl LlmProvider for AnthropicProvider {
                             // cache_read > 0 on a repeat turn means the prefix hit
                             // the cache; cache_write > 0 is the (one-time) cold write.
                             let usage = &json["message"]["usage"];
-                            tracing::info!(
+                            tracing::debug!(
                                 "🧊 Anthropic usage: input={} cache_read={} cache_write={}",
                                 usage["input_tokens"].as_u64().unwrap_or(0),
                                 usage["cache_read_input_tokens"].as_u64().unwrap_or(0),
