@@ -147,6 +147,13 @@ pub struct Settings {
     #[serde(default = "default_false_bool")]
     pub disable_builtin_task_tool: bool,
 
+    /// When true, Anthropic prompt-cache breakpoints use a 1-hour TTL instead of
+    /// the 5-minute default. 1h doubles the cache-write cost but survives idle
+    /// gaps > 5 min — useful for bursty desktop sessions. Only affects the
+    /// Anthropic provider (OpenAI/DeepSeek auto-cache has no TTL knob).
+    #[serde(default = "default_false_bool")]
+    pub anthropic_cache_ttl_1h: bool,
+
     /// When true, all `memory_doc_*` and `memory_fact_*` tools skip the
     /// per-call approval popup and execute immediately. Default true: tool
     /// calls only touch local audit-visible markdown docs and the KG, and

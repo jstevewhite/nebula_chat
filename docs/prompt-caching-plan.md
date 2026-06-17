@@ -1,7 +1,7 @@
 # Prompt Caching Plan
 
-Status: **Phase 0 implemented** (branch `feat/prompt-cache-phase0`); Phases 1–2 not
-yet started. Target: `master` (v0.9.0).
+Status: **Phases 0 + 1 implemented** (branch `feat/prompt-cache-phase0`); Phase 2
+(global tool lock) not yet started. Target: `master` (v0.9.0).
 
 Goal: enable LLM prompt caching (Anthropic explicit `cache_control`; OpenAI/DeepSeek
 automatic) to cut token cost. Modeled on the same change shipped in the sibling

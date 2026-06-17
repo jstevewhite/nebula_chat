@@ -32,11 +32,10 @@ pub fn create_provider(
         ProviderType::Anthropic => {
             let key = config.api_key.clone().unwrap_or_default();
             let base_url = config.base_url.clone();
-            Box::new(AnthropicProvider::new(
-                key,
-                base_url,
-                model_name.to_string(),
-            ))
+            Box::new(
+                AnthropicProvider::new(key, base_url, model_name.to_string())
+                    .with_cache_ttl_1h(settings.anthropic_cache_ttl_1h),
+            )
         }
         ProviderType::Ollama => {
             let base_url = config

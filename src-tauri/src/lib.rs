@@ -1159,7 +1159,8 @@ async fn send_message(
             ProviderType::Anthropic => {
                 let api_key = provider_config.api_key.clone().unwrap_or_default();
                 let base_url = provider_config.base_url.clone();
-                let provider = AnthropicProvider::new(api_key, base_url, model.clone());
+                let provider = AnthropicProvider::new(api_key, base_url, model.clone())
+                    .with_cache_ttl_1h(settings.anthropic_cache_ttl_1h);
 
                 if effective_stream {
                     provider
