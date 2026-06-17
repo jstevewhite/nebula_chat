@@ -168,9 +168,14 @@ impl LlmProvider for AnthropicProvider {
             self.cache_ttl_1h,
         );
 
+        // "Auto" default when the user leaves max_tokens unset. Non-streaming caps
+        // at 16K to stay under SDK HTTP timeouts; an explicit value (applied in
+        // apply_sampling_options) overrides this.
+        let default_max =
+            crate::llm::capabilities::anthropic_max_output_tokens(&self.model).min(16_384);
         let mut body = json!({
             "model": self.model,
-            "max_tokens": 4096,
+            "max_tokens": default_max,
             "messages": messages_val,
         });
 
@@ -305,9 +310,14 @@ impl LlmProvider for AnthropicProvider {
             self.cache_ttl_1h,
         );
 
+        // "Auto" default when max_tokens is unset. Streaming can give the model
+        // room (no HTTP-timeout concern); cap at 64K per Anthropic guidance. An
+        // explicit value overrides this in apply_sampling_options.
+        let default_max =
+            crate::llm::capabilities::anthropic_max_output_tokens(&self.model).min(64_000);
         let mut body = json!({
             "model": self.model,
-            "max_tokens": 4096,
+            "max_tokens": default_max,
             "messages": messages_val,
             "stream": true,
         });

@@ -174,6 +174,26 @@ pub fn anthropic_rejects_sampling_params(model: &str) -> bool {
     m.contains("opus-4-7") || m.contains("opus-4-8") || m.contains("fable") || m.contains("mythos")
 }
 
+/// Maximum output tokens a known Anthropic model supports. Used to pick the
+/// "Auto" (unset `max_tokens`) default — the request still caps this per path
+/// (streaming vs not). Unknown/older models fall back to 4096, preserving prior
+/// behavior so we never exceed a model's real limit (which would 400).
+pub fn anthropic_max_output_tokens(model: &str) -> u32 {
+    let m = model.to_lowercase();
+    if m.contains("opus-4-6")
+        || m.contains("opus-4-7")
+        || m.contains("opus-4-8")
+        || m.contains("fable")
+        || m.contains("mythos")
+    {
+        128_000
+    } else if m.contains("sonnet-4-6") || m.contains("haiku-4-5") {
+        64_000
+    } else {
+        4_096
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -322,5 +342,16 @@ mod tests {
         assert!(!anthropic_rejects_sampling_params("claude-opus-4-6"));
         assert!(!anthropic_rejects_sampling_params("claude-sonnet-4-6"));
         assert!(!anthropic_rejects_sampling_params("claude-sonnet-4-5"));
+    }
+
+    #[test]
+    fn anthropic_output_ceilings() {
+        assert_eq!(anthropic_max_output_tokens("claude-opus-4-8"), 128_000);
+        assert_eq!(anthropic_max_output_tokens("claude-fable-5"), 128_000);
+        assert_eq!(anthropic_max_output_tokens("claude-sonnet-4-6"), 64_000);
+        assert_eq!(anthropic_max_output_tokens("claude-haiku-4-5"), 64_000);
+        // Unknown/older models keep the conservative 4096 fallback.
+        assert_eq!(anthropic_max_output_tokens("claude-sonnet-4-5"), 4_096);
+        assert_eq!(anthropic_max_output_tokens("claude-3-5-sonnet"), 4_096);
     }
 }
