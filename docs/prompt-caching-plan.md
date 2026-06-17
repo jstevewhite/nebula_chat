@@ -1,9 +1,18 @@
 # Prompt Caching Plan
 
-Status: **Phases 0 + 1 + 2 implemented** (branch `feat/prompt-cache-phase0`).
-Verified live on Anthropic: a repeat turn showed `cache_read=18874, input=166,
-cache_write=195` (~98% of the prompt served from cache). 2c reduced in scope —
-see the Phase 2 note below. Target: `master` (v0.9.0).
+Status: **Shipped** — all phases implemented and merged-ready on branch
+`feat/prompt-cache-phase0`. Verified live on Anthropic: the dashboard reports a
+**~97% cache-read ratio**, and a representative repeat turn showed
+`cache_read=18874, input=166, cache_write=195` (~98% of that prompt served from
+cache). 2c was reduced in scope — see the Phase 2 note. This doc is retained as
+the implementation record; per-turn behavior is in the code (`lib.rs` assembly,
+`anthropic.rs` breakpoints, `ToolsPanel` lock UI).
+
+Related change on the same branch (not part of the caching plan): the Anthropic
+provider now honors `reasoning_effort` via adaptive extended thinking and
+suppresses sampling params on models that reject them — see
+`anthropic.rs::apply_sampling_options` and the `anthropic_*` helpers in
+`capabilities.rs`.
 
 Goal: enable LLM prompt caching (Anthropic explicit `cache_control`; OpenAI/DeepSeek
 automatic) to cut token cost. Modeled on the same change shipped in the sibling
