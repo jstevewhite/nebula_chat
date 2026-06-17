@@ -154,6 +154,13 @@ pub struct Settings {
     #[serde(default = "default_false_bool")]
     pub anthropic_cache_ttl_1h: bool,
 
+    /// When true, enabling/disabling tools is frozen. The tool array renders
+    /// first in the cached prompt prefix, so an accidental toggle mid-conversation
+    /// resets the entire prompt cache; locking prevents that. Enforced both in the
+    /// UI (toggles disabled) and the backend (`toggle_tool*` commands reject).
+    #[serde(default = "default_false_bool")]
+    pub tools_locked: bool,
+
     /// When true, all `memory_doc_*` and `memory_fact_*` tools skip the
     /// per-call approval popup and execute immediately. Default true: tool
     /// calls only touch local audit-visible markdown docs and the KG, and

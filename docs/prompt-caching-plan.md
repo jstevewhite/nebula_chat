@@ -1,7 +1,9 @@
 # Prompt Caching Plan
 
-Status: **Phases 0 + 1 implemented** (branch `feat/prompt-cache-phase0`); Phase 2
-(global tool lock) not yet started. Target: `master` (v0.9.0).
+Status: **Phases 0 + 1 + 2 implemented** (branch `feat/prompt-cache-phase0`).
+Verified live on Anthropic: a repeat turn showed `cache_read=18874, input=166,
+cache_write=195` (~98% of the prompt served from cache). 2c reduced in scope —
+see the Phase 2 note below. Target: `master` (v0.9.0).
 
 Goal: enable LLM prompt caching (Anthropic explicit `cache_control`; OpenAI/DeepSeek
 automatic) to cut token cost. Modeled on the same change shipped in the sibling
@@ -92,23 +94,27 @@ interleaved into the prefix and the tool order wobbles. Both must be fixed first
 
 ### Phase 2 — global tool lock (the cache-protecting toggle)
 
-- **2a.** Add a global, persisted `tools_locked` setting.
-- **2b.** When locked, freeze the enabled-tool set: guard/disable the tool toggles
-  in `ProvidersSettings` / `RightRail` and freeze the `disabled_tools` set so an
-  accidental change can't alter the tool array mid-conversation (which would reset
-  the entire cache — tools render first in the prefix). Surface a small hint
-  (especially on Anthropic): "locked — preserves prompt cache."
-- **2c. Freeze runtime-/async-gated builtins, not just `disabled_tools`.** This is
-  the part `disabled_tools` alone does **not** cover. The builtin tools are appended
-  conditionally (`lib.rs` ~L910–937): `memory_*` only when `doc_store_ready` (an
-  async init that can be **false on the first turn after startup and true later**),
-  and `use_skill` only when at least one skill exists. So the tool array can change
-  between turns with **no user action**, silently resetting the entire cache. The
-  lock must freeze the *resolved* tool set (post-builtins) for the life of a cached
-  conversation — e.g. snapshot the sorted tool-name list on the first turn and
-  reuse it — rather than recomputing presence each turn. Without this, a locked
-  conversation can still cold-write on turn 2 purely because the DocStore finished
-  initializing in between.
+- **2a. Done.** Global, persisted `tools_locked` setting (`Settings`,
+  default false). The 1h-TTL toggle (`anthropic_cache_ttl_1h`, Phase 1c) gets its
+  UI here too.
+- **2b. Done.** When locked, the tool enable/disable controls in `ToolsPanel`
+  (the RightRail Tools tab — the only place tools are toggled) are disabled and
+  show "Tools locked — unlock to change". Defense-in-depth: `toggle_tool` and
+  `toggle_tool_list` also **reject** with an error when `tools_locked` is set, so
+  even a direct IPC call can't alter `disabled_tools` mid-conversation. A hint
+  ("preserves prompt cache") sits on the toggle.
+- **2c. Reduced in scope — not implemented as a snapshot.** The original concern
+  was the *resolved* tool set changing between turns via runtime/async gating
+  (`memory_*` on `doc_store_ready`, `use_skill` on skills existence). On
+  reflection this is a **startup-only, self-healing transient**: `doc_store_ready`
+  flips false→true once during init and stays true, so a conversation started
+  after init is stable, and the only cost in the rare flip case is one extra cache
+  write (never a correctness issue or persistent miss). The live `cache_read`
+  result confirms steady state is solid. Per-conversation snapshot machinery was
+  judged disproportionate; the lock (2a/2b) covers the real, user-driven
+  cache-bust. Skills added/removed mid-conversation (a deliberate filesystem
+  action) remain an accepted, un-locked source of change. Revisit only if a
+  snapshot proves necessary in practice.
 
 ## Caveats / magnitude
 

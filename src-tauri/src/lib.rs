@@ -3078,6 +3078,12 @@ async fn toggle_tool(
     let settings_path = config_dir.join("settings.json");
     let mut settings = Settings::load_migrated(&settings_path);
 
+    // Tools are locked to protect the prompt cache (the tool array renders first
+    // in the cached prefix). Reject the change instead of silently busting it.
+    if settings.tools_locked {
+        return Err("Tools are locked to preserve the prompt cache. Unlock in the Tools panel to change them.".to_string());
+    }
+
     if enabled {
         settings.disabled_tools.retain(|t| t != &tool_name);
     } else {
@@ -3135,6 +3141,11 @@ async fn toggle_tool_list(
     let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     let settings_path = config_dir.join("settings.json");
     let mut settings = Settings::load_migrated(&settings_path);
+
+    // See toggle_tool: locking freezes the tool array to protect the prompt cache.
+    if settings.tools_locked {
+        return Err("Tools are locked to preserve the prompt cache. Unlock in the Tools panel to change them.".to_string());
+    }
 
     for tool_name in tool_names {
         if enabled {
