@@ -174,7 +174,7 @@ impl LlmProvider for AnthropicProvider {
             "messages": messages_val,
         });
 
-        apply_sampling_options(&mut body, options.as_ref());
+        apply_sampling_options(&mut body, options.as_ref(), &self.model);
 
         if let Some(system_val) = system_val {
             body.as_object_mut()
@@ -312,7 +312,7 @@ impl LlmProvider for AnthropicProvider {
             "stream": true,
         });
 
-        apply_sampling_options(&mut body, options.as_ref());
+        apply_sampling_options(&mut body, options.as_ref(), &self.model);
 
         if let Some(system_val) = system_val {
             body.as_object_mut()
@@ -549,24 +549,43 @@ impl LlmProvider for AnthropicProvider {
 ///
 /// `presence_penalty`, `frequency_penalty`, and `reasoning_effort` are
 /// OpenAI-only and silently ignored here.
-fn apply_sampling_options(body: &mut Value, options: Option<&GenerationOptions>) {
+fn apply_sampling_options(body: &mut Value, options: Option<&GenerationOptions>, model: &str) {
     let Some(opts) = options else {
         return;
     };
     let obj = body.as_object_mut().expect("body must be a JSON object");
 
-    match (opts.temperature, opts.top_p) {
-        (Some(temp), _) => {
-            obj.insert("temperature".to_string(), json!(temp));
+    // Newer Anthropic models (Opus 4.7/4.8, Fable/Mythos 5) reject temperature /
+    // top_p with a 400. Only send sampling params to models that accept them.
+    if !crate::llm::capabilities::anthropic_rejects_sampling_params(model) {
+        match (opts.temperature, opts.top_p) {
+            (Some(temp), _) => {
+                obj.insert("temperature".to_string(), json!(temp));
+            }
+            (None, Some(top_p)) => {
+                obj.insert("top_p".to_string(), json!(top_p));
+            }
+            (None, None) => {}
         }
-        (None, Some(top_p)) => {
-            obj.insert("top_p".to_string(), json!(top_p));
-        }
-        (None, None) => {}
     }
 
     if let Some(max_tokens) = opts.max_tokens {
         obj.insert("max_tokens".to_string(), json!(max_tokens));
+    }
+
+    // Extended thinking. The reasoning-level dropdown sends `reasoning_effort` for
+    // models flagged `supports_extended_thinking`; honor it via adaptive thinking
+    // plus the `effort` knob. `display: "summarized"` so the reasoning pane gets
+    // non-empty text (the default is "omitted" on Opus 4.7/4.8/Fable). Adaptive
+    // era only; older models would need `thinking: {type: "enabled", budget_tokens}`.
+    if let Some(effort) = opts.reasoning_effort.as_deref() {
+        if crate::llm::capabilities::anthropic_supports_adaptive_thinking(model) {
+            obj.insert(
+                "thinking".to_string(),
+                json!({ "type": "adaptive", "display": "summarized" }),
+            );
+            obj.insert("output_config".to_string(), json!({ "effort": effort }));
+        }
     }
 }
 
@@ -867,5 +886,66 @@ mod tests {
         attach_cache_control(&mut msg, &cc);
         assert_eq!(msg["content"][0]["type"], "tool_result");
         assert_eq!(msg["content"][0]["cache_control"], cc);
+    }
+
+    fn gen_opts(temperature: Option<f32>, reasoning_effort: Option<&str>) -> GenerationOptions {
+        GenerationOptions {
+            temperature,
+            top_p: None,
+            stream: false,
+            max_tokens: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            reasoning_effort: reasoning_effort.map(|s| s.to_string()),
+        }
+    }
+
+    // A reasoning level enables adaptive thinking + effort on adaptive-era models,
+    // with display:summarized so the reasoning pane gets text.
+    #[test]
+    fn reasoning_effort_enables_adaptive_thinking() {
+        let mut body = json!({ "messages": [] });
+        let opts = gen_opts(None, Some("high"));
+        apply_sampling_options(&mut body, Some(&opts), "claude-opus-4-8");
+
+        assert_eq!(body["thinking"]["type"], "adaptive");
+        assert_eq!(body["thinking"]["display"], "summarized");
+        assert_eq!(body["output_config"]["effort"], "high");
+    }
+
+    // Opus 4.8 rejects temperature/top_p with a 400 — it must be suppressed.
+    #[test]
+    fn sampling_params_suppressed_on_opus_4_8() {
+        let mut body = json!({ "messages": [] });
+        let opts = gen_opts(Some(0.7), None);
+        apply_sampling_options(&mut body, Some(&opts), "claude-opus-4-8");
+
+        assert!(body.get("temperature").is_none());
+        assert!(body.get("thinking").is_none()); // no reasoning level → no thinking
+    }
+
+    // Sonnet 4.6 accepts temperature; a reasoning level still adds adaptive thinking.
+    #[test]
+    fn sampling_params_kept_on_sonnet_4_6_with_thinking() {
+        let mut body = json!({ "messages": [] });
+        let opts = gen_opts(Some(0.5), Some("medium"));
+        apply_sampling_options(&mut body, Some(&opts), "claude-sonnet-4-6");
+
+        assert_eq!(body["temperature"], 0.5);
+        assert_eq!(body["thinking"]["type"], "adaptive");
+        assert_eq!(body["output_config"]["effort"], "medium");
+    }
+
+    // Non-adaptive model (Sonnet 4.5): a reasoning level does NOT emit adaptive
+    // thinking (would need budget_tokens — out of scope), and sampling is kept.
+    #[test]
+    fn non_adaptive_model_skips_adaptive_thinking() {
+        let mut body = json!({ "messages": [] });
+        // 0.5 is exactly representable as both f32 and f64, avoiding round-trip skew.
+        let opts = gen_opts(Some(0.5), Some("high"));
+        apply_sampling_options(&mut body, Some(&opts), "claude-sonnet-4-5");
+
+        assert!(body.get("thinking").is_none());
+        assert_eq!(body["temperature"], 0.5);
     }
 }
