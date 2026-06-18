@@ -83,6 +83,7 @@ pub fn read_skill(path: &Path, built_in_flag: bool) -> Result<Skill> {
         body: body.trim_start_matches('\n').to_string(),
         built_in: built_in_flag || front.built_in,
         path: path.to_path_buf(),
+        origin: super::api::SkillOrigin::Native,
     })
 }
 
@@ -227,5 +228,14 @@ mod tests {
         assert_eq!(all.len(), 2);
         let two = all.iter().find(|s| s.slug == "two").unwrap();
         assert!(two.built_in);
+    }
+
+    #[test]
+    fn read_skill_defaults_origin_to_native() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("x.md");
+        fs::write(&path, "---\ndescription: d\n---\nbody\n").unwrap();
+        let s = read_skill(&path, false).unwrap();
+        assert_eq!(s.origin, crate::skills::SkillOrigin::Native);
     }
 }

@@ -21,7 +21,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::RwLock;
 
-pub use api::{Skill, SkillSummary};
+pub use api::{ClaudeSkillEntry, Skill, SkillOrigin, SkillSummary};
 
 pub struct SkillStore {
     skills_dir: PathBuf,
