@@ -87,6 +87,116 @@ pub fn read_skill(path: &Path, built_in_flag: bool) -> Result<Skill> {
     })
 }
 
+/// Accepts a YAML scalar string OR a sequence of strings (Claude's
+/// `allowed-tools` appears in both shapes across skills).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum StringOrVec {
+    One(String),
+    Many(Vec<String>),
+}
+
+fn normalize_tools(v: Option<StringOrVec>) -> Vec<String> {
+    match v {
+        None => Vec::new(),
+        Some(StringOrVec::One(s)) => s
+            .split(',')
+            .map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty())
+            .collect(),
+        Some(StringOrVec::Many(xs)) => xs
+            .into_iter()
+            .map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty())
+            .collect(),
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct ClaudeFrontmatter {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default, rename = "allowed-tools")]
+    allowed_tools: Option<StringOrVec>,
+}
+
+/// Parse one `<dir>/SKILL.md` into a `Skill` (origin = Claude) plus its
+/// normalized `allowed-tools` list. `slug` is the directory name and must be a
+/// valid slug.
+pub fn read_claude_skill(skill_dir: &Path) -> Result<(Skill, Vec<String>)> {
+    let slug = skill_dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| anyhow!("non-utf8 dir name {}", skill_dir.display()))?
+        .to_string();
+    if !super::is_valid_slug(&slug) {
+        return Err(anyhow!("invalid slug from dir name '{slug}'"));
+    }
+
+    let md_path = skill_dir.join("SKILL.md");
+    let raw = fs::read_to_string(&md_path).with_context(|| format!("read {}", md_path.display()))?;
+    let (front_str, body) = split_frontmatter(&raw);
+    let front: ClaudeFrontmatter = if front_str.trim().is_empty() {
+        ClaudeFrontmatter::default()
+    } else {
+        serde_yaml::from_str(front_str)
+            .with_context(|| format!("parse frontmatter in {}", md_path.display()))?
+    };
+
+    if front.description.trim().is_empty() {
+        return Err(anyhow!("claude skill {slug} is missing a description"));
+    }
+    let name = if front.name.is_empty() {
+        slug.clone()
+    } else {
+        front.name.clone()
+    };
+    let allowed_tools = normalize_tools(front.allowed_tools);
+
+    let skill = Skill {
+        slug,
+        name,
+        description: front.description,
+        body: body.trim_start_matches('\n').to_string(),
+        built_in: false,
+        path: md_path,
+        origin: super::api::SkillOrigin::Claude,
+    };
+    Ok((skill, allowed_tools))
+}
+
+/// Scan `dir` (e.g. `~/.claude/skills/`) for `<name>/SKILL.md` skills. Follows
+/// symlinks via canonicalize. Unparseable entries are logged and skipped so a
+/// single bad skill can't break discovery. Returns each skill with its
+/// `allowed-tools` list.
+pub fn scan_claude_skills(dir: &Path) -> Vec<(Skill, Vec<String>)> {
+    let mut out = Vec::new();
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return out, // missing/unreadable dir → empty, non-fatal
+    };
+    for entry in entries.flatten() {
+        // Canonicalize to resolve symlinks (most of ~/.claude/skills are links).
+        let path = match fs::canonicalize(entry.path()) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!("skip claude skill {}: {e}", entry.path().display());
+                continue;
+            }
+        };
+        if !path.is_dir() || !path.join("SKILL.md").is_file() {
+            continue;
+        }
+        match read_claude_skill(&path) {
+            Ok(found) => out.push(found),
+            Err(e) => tracing::warn!("skip claude skill {}: {e}", path.display()),
+        }
+    }
+    out
+}
+
 pub fn write_skill(
     path: &PathBuf,
     slug: &str,
@@ -237,5 +347,62 @@ mod tests {
         fs::write(&path, "---\ndescription: d\n---\nbody\n").unwrap();
         let s = read_skill(&path, false).unwrap();
         assert_eq!(s.origin, crate::skills::SkillOrigin::Native);
+    }
+
+    fn write_claude_skill(root: &Path, name: &str, frontmatter: &str, body: &str) {
+        let d = root.join(name);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("SKILL.md"), format!("---\n{frontmatter}\n---\n{body}\n")).unwrap();
+    }
+
+    #[test]
+    fn scan_claude_skills_reads_dir_based_skill() {
+        let root = TempDir::new().unwrap();
+        write_claude_skill(root.path(), "brainstorming", "name: Brainstorming\ndescription: explore ideas", "Do the thing.");
+        let found = scan_claude_skills(root.path());
+        assert_eq!(found.len(), 1);
+        let (skill, tools) = &found[0];
+        assert_eq!(skill.slug, "brainstorming");
+        assert_eq!(skill.name, "Brainstorming");
+        assert_eq!(skill.description, "explore ideas");
+        assert!(skill.body.contains("Do the thing"));
+        assert_eq!(skill.origin, crate::skills::SkillOrigin::Claude);
+        assert!(!skill.built_in);
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn scan_claude_skills_skips_dirs_without_skill_md() {
+        let root = TempDir::new().unwrap();
+        fs::create_dir_all(root.path().join("empty")).unwrap();
+        write_claude_skill(root.path(), "ok", "description: d", "b");
+        let found = scan_claude_skills(root.path());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0.slug, "ok");
+    }
+
+    #[test]
+    fn scan_claude_skills_skips_missing_description() {
+        let root = TempDir::new().unwrap();
+        write_claude_skill(root.path(), "nodesc", "name: No Desc", "b");
+        assert!(scan_claude_skills(root.path()).is_empty());
+    }
+
+    #[test]
+    fn scan_claude_skills_parses_allowed_tools_list_and_csv() {
+        let root = TempDir::new().unwrap();
+        write_claude_skill(root.path(), "listy", "description: d\nallowed-tools:\n  - Read\n  - Bash", "b");
+        write_claude_skill(root.path(), "csvy", "description: d\nallowed-tools: Read, Bash", "b");
+        let mut found = scan_claude_skills(root.path());
+        found.sort_by(|a, b| a.0.slug.cmp(&b.0.slug));
+        assert_eq!(found[0].1, vec!["Read".to_string(), "Bash".to_string()]); // csvy
+        assert_eq!(found[1].1, vec!["Read".to_string(), "Bash".to_string()]); // listy
+    }
+
+    #[test]
+    fn scan_claude_skills_missing_dir_is_empty() {
+        let root = TempDir::new().unwrap();
+        let missing = root.path().join("nope");
+        assert!(scan_claude_skills(&missing).is_empty());
     }
 }
