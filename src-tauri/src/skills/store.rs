@@ -123,16 +123,12 @@ struct ClaudeFrontmatter {
 }
 
 /// Parse one `<dir>/SKILL.md` into a `Skill` (origin = Claude) plus its
-/// normalized `allowed-tools` list. `slug` is the directory name and must be a
-/// valid slug.
-pub fn read_claude_skill(skill_dir: &Path) -> Result<(Skill, Vec<String>)> {
-    let slug = skill_dir
-        .file_name()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| anyhow!("non-utf8 dir name {}", skill_dir.display()))?
-        .to_string();
-    if !super::is_valid_slug(&slug) {
-        return Err(anyhow!("invalid slug from dir name '{slug}'"));
+/// normalized `allowed-tools` list. `slug` must be a valid slug and is the
+/// directory name as it appears in the scanned dir (the symlink/entry name),
+/// not derived from `skill_dir` (which may be a canonicalized symlink target).
+pub fn read_claude_skill(skill_dir: &Path, slug: &str) -> Result<(Skill, Vec<String>)> {
+    if !super::is_valid_slug(slug) {
+        return Err(anyhow!("invalid slug '{slug}'"));
     }
 
     let md_path = skill_dir.join("SKILL.md");
@@ -149,14 +145,14 @@ pub fn read_claude_skill(skill_dir: &Path) -> Result<(Skill, Vec<String>)> {
         return Err(anyhow!("claude skill {slug} is missing a description"));
     }
     let name = if front.name.is_empty() {
-        slug.clone()
+        slug.to_string()
     } else {
         front.name.clone()
     };
     let allowed_tools = normalize_tools(front.allowed_tools);
 
     let skill = Skill {
-        slug,
+        slug: slug.to_string(),
         name,
         description: front.description,
         body: body.trim_start_matches('\n').to_string(),
@@ -178,6 +174,7 @@ pub fn scan_claude_skills(dir: &Path) -> Vec<(Skill, Vec<String>)> {
         Err(_) => return out, // missing/unreadable dir → empty, non-fatal
     };
     for entry in entries.flatten() {
+        let slug = entry.file_name().to_string_lossy().into_owned();
         // Canonicalize to resolve symlinks (most of ~/.claude/skills are links).
         let path = match fs::canonicalize(entry.path()) {
             Ok(p) => p,
@@ -189,7 +186,7 @@ pub fn scan_claude_skills(dir: &Path) -> Vec<(Skill, Vec<String>)> {
         if !path.is_dir() || !path.join("SKILL.md").is_file() {
             continue;
         }
-        match read_claude_skill(&path) {
+        match read_claude_skill(&path, &slug) {
             Ok(found) => out.push(found),
             Err(e) => tracing::warn!("skip claude skill {}: {e}", path.display()),
         }
@@ -404,5 +401,22 @@ mod tests {
         let root = TempDir::new().unwrap();
         let missing = root.path().join("nope");
         assert!(scan_claude_skills(&missing).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_claude_skills_slug_from_symlink_name_not_target() {
+        // Target dir has a different basename than the symlink that points to it.
+        let target_root = TempDir::new().unwrap();
+        write_claude_skill(target_root.path(), "target-basename", "description: d", "b");
+        let scan_root = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(
+            target_root.path().join("target-basename"),
+            scan_root.path().join("nice-slug"),
+        )
+        .unwrap();
+        let found = scan_claude_skills(scan_root.path());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0.slug, "nice-slug");
     }
 }
