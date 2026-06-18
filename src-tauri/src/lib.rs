@@ -1600,6 +1600,27 @@ async fn reload_skills(state: State<'_, AppState>) -> Result<(), String> {
     state.skills.reload().await.map_err(|e| e.to_string())
 }
 
+/// Resolve `~/.claude/skills` and fold the relevant settings into a
+/// `ClaudeImportConfig`. Returns `None` only if the home dir can't be resolved.
+fn build_claude_import_config(
+    app: &tauri::AppHandle,
+    settings: &Settings,
+) -> Option<crate::skills::ClaudeImportConfig> {
+    let home = app.path().home_dir().ok()?;
+    Some(crate::skills::ClaudeImportConfig {
+        enabled: settings.import_claude_skills,
+        dir: home.join(".claude").join("skills"),
+        overrides: settings.claude_skill_overrides.clone(),
+    })
+}
+
+#[tauri::command]
+async fn list_claude_skills(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::skills::ClaudeSkillEntry>, String> {
+    Ok(state.skills.list_claude_skills().await)
+}
+
 #[derive(Clone, Serialize)]
 struct ExtractionResult {
     extracted: usize,
@@ -2129,14 +2150,28 @@ async fn get_settings(app: tauri::AppHandle) -> Result<Settings, String> {
 }
 
 #[tauri::command]
-async fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<(), String> {
+async fn save_settings(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    settings: Settings,
+) -> Result<(), String> {
     let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     let settings_path = config_dir.join("settings.json");
     settings.save(&settings_path).map_err(|e| e.to_string())?;
 
     use tauri::Emitter;
-    app.emit("settings-updated", ())
-        .map_err(|e| e.to_string())?;
+    app.emit("settings-updated", ()).map_err(|e| e.to_string())?;
+
+    // Reflect any change to the Claude-skills import toggle/overrides, then
+    // refresh the skills UI. set_claude_import is a no-op when unchanged.
+    if let Some(cfg) = build_claude_import_config(&app, &settings) {
+        state
+            .skills
+            .set_claude_import(cfg)
+            .await
+            .map_err(|e| e.to_string())?;
+        app.emit("skills-updated", ()).map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -3438,6 +3473,19 @@ pub fn run() {
                     }
                 }
 
+                // Apply the Claude-skills import config from settings (if the
+                // toggle is on). Must run AFTER start_watcher so the reload
+                // callback is registered for the ~/.claude/skills watcher.
+                {
+                    let settings_path = config_dir.join("settings.json");
+                    let settings = Settings::load_migrated(&settings_path);
+                    if let Some(cfg) = build_claude_import_config(&app_handle, &settings) {
+                        if let Err(e) = skills_store.set_claude_import(cfg).await {
+                            tracing::warn!("claude skills import failed at startup: {e}");
+                        }
+                    }
+                }
+
                 // 4. AppState
                 let state = AppState {
                     mcp_manager: mcp_manager.clone(),
@@ -3611,7 +3659,8 @@ pub fn run() {
             create_skill,
             update_skill,
             delete_skill,
-            reload_skills
+            reload_skills,
+            list_claude_skills
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
