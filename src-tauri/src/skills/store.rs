@@ -462,9 +462,14 @@ mod tests {
 
     #[test]
     fn heuristic_exec_allowed_tools_defaults_off() {
-        assert!(!claude_skill_default_enabled("guidance", &["Read".into(), "Bash".into()]));
-        assert!(!claude_skill_default_enabled("guidance", &["Write".into()]));
-        assert!(!claude_skill_default_enabled("guidance", &["Edit".into()]));
+        for tool in ["Bash", "Write", "Edit", "shell", "execute"] {
+            assert!(
+                !claude_skill_default_enabled("guidance", &[tool.into()]),
+                "exec tool {tool} should flip default OFF"
+            );
+        }
+        // A non-exec tool alone must NOT flip it off.
+        assert!(claude_skill_default_enabled("guidance", &["Read".into()]));
     }
 
     #[test]
