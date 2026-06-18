@@ -257,6 +257,40 @@ fn split_frontmatter(raw: &str) -> (&str, &str) {
     ("", raw)
 }
 
+/// Best-effort classification of a Claude skill as a self-sufficient
+/// instruction skill (default ON) vs a script/subagent launcher Nebula can't
+/// run (default OFF). Deliberately conservative toward inclusion: only a strong
+/// "this is a doer" signal flips it off. The Settings checklist is the user's
+/// authoritative override.
+pub fn claude_skill_default_enabled(body: &str, allowed_tools: &[String]) -> bool {
+    const EXEC_TOOLS: [&str; 5] = ["bash", "write", "edit", "shell", "execute"];
+    if allowed_tools.iter().any(|t| {
+        let t = t.to_ascii_lowercase();
+        EXEC_TOOLS.iter().any(|e| t.contains(e))
+    }) {
+        return false;
+    }
+
+    let lower = body.to_lowercase();
+
+    const SUBAGENT_MARKERS: [&str; 4] =
+        ["dispatch a subagent", "spawn ", "task tool", "subagent"];
+    if SUBAGENT_MARKERS.iter().any(|m| lower.contains(m)) {
+        return false;
+    }
+
+    // Script-execution imperative = a run verb AND a script extension present.
+    const RUN_VERBS: [&str; 4] = ["run ", "python ", "bash ", "./"];
+    const SCRIPT_EXT: [&str; 3] = [".py", ".sh", ".js"];
+    let mentions_script = SCRIPT_EXT.iter().any(|x| lower.contains(x));
+    let has_run_verb = RUN_VERBS.iter().any(|v| lower.contains(v));
+    if mentions_script && has_run_verb {
+        return false;
+    }
+
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,5 +452,38 @@ mod tests {
         let found = scan_claude_skills(scan_root.path());
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].0.slug, "nice-slug");
+    }
+
+    #[test]
+    fn heuristic_instruction_skill_defaults_on() {
+        let body = "Help the user explore ideas one question at a time. Present a design and get approval.";
+        assert!(claude_skill_default_enabled(body, &[]));
+    }
+
+    #[test]
+    fn heuristic_exec_allowed_tools_defaults_off() {
+        assert!(!claude_skill_default_enabled("guidance", &["Read".into(), "Bash".into()]));
+        assert!(!claude_skill_default_enabled("guidance", &["Write".into()]));
+        assert!(!claude_skill_default_enabled("guidance", &["Edit".into()]));
+    }
+
+    #[test]
+    fn heuristic_script_launcher_defaults_off() {
+        let body = "Run the sanitize.py script: `python sanitize.py input.txt`.";
+        assert!(!claude_skill_default_enabled(body, &[]));
+    }
+
+    #[test]
+    fn heuristic_subagent_skill_defaults_off() {
+        let body = "First, dispatch a subagent to gather context, then synthesize.";
+        assert!(!claude_skill_default_enabled(body, &[]));
+    }
+
+    #[test]
+    fn heuristic_bare_scripts_dir_mention_stays_on() {
+        // Mentioning a .md companion or having a scripts/ dir is NOT a run
+        // imperative — must stay ON (this is the `brainstorming` case).
+        let body = "If they accept, read visual-companion.md for the detailed guide.";
+        assert!(claude_skill_default_enabled(body, &[]));
     }
 }
