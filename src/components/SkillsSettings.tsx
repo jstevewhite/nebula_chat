@@ -106,6 +106,10 @@ export default function SkillsSettings() {
     const handleToggleClaudeSkill = async (entry: ClaudeSkillEntry) => {
         if (entry.shadowed_by_native) return;
         const next = !entry.effective_enabled;
+        // Optimistic: flip the row immediately; the skills-updated reload reconciles.
+        setClaudeSkills((prev) =>
+            prev.map((s) => (s.slug === entry.slug ? { ...s, effective_enabled: next } : s))
+        );
         try {
             await persistSettings((s) => {
                 const overrides = { ...(s.claude_skill_overrides ?? {}) };
@@ -114,6 +118,10 @@ export default function SkillsSettings() {
             });
         } catch (e) {
             console.error(e);
+            // Revert on failure.
+            setClaudeSkills((prev) =>
+                prev.map((s) => (s.slug === entry.slug ? { ...s, effective_enabled: !next } : s))
+            );
         }
     };
 
