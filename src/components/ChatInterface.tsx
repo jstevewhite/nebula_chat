@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, memo, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check, Pin, FileText, Book, Paperclip, X, Brain, Square, Sliders, Download, Eye, ChevronRight, ChevronDown } from "lucide-react";
+import { Send, Terminal, AlertTriangle, Copy, Edit2, Trash2, RefreshCw, Check, Pin, FileText, Book, Paperclip, X, Brain, Square, Sliders, Download, Eye, ChevronRight, ChevronDown, Info } from "lucide-react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile, readFile, readTextFile } from "@tauri-apps/plugin-fs";
 import ReactMarkdown from "react-markdown";
@@ -164,6 +164,8 @@ interface StreamStatsEvent {
     tokens_per_second: number;
     total_tokens: number;
     duration_ms: number;
+    model: string;
+    provider: string;
 }
 
 interface ChatInterfaceProps {
@@ -2200,6 +2202,51 @@ const ThinkingBlock = memo(({ content }: { content: string }) => {
     );
 });
 
+// Info icon shown on assistant messages; hover/focus reveals a small card with
+// the generation metadata (model, provider, speed, tokens, duration). Live-only:
+// rendered only when stream stats exist for the message.
+function GenerationInfo({ stats }: { stats: StreamStatsEvent }) {
+    const [open, setOpen] = useState(false);
+    const rows: [string, string][] = [
+        ["Model", stats.model || "—"],
+        ["Provider", stats.provider || "—"],
+        ["Speed", `${stats.tokens_per_second.toFixed(1)} tok/s`],
+        ["Tokens", `${stats.total_tokens}`],
+        ["Duration", `${(stats.duration_ms / 1000).toFixed(1)}s`],
+    ];
+    return (
+        <span
+            className="relative inline-flex items-center mr-1 outline-none"
+            tabIndex={0}
+            aria-label="Generation info"
+            onMouseEnter={() => setOpen(true)}
+            onMouseLeave={() => setOpen(false)}
+            onFocus={() => setOpen(true)}
+            onBlur={() => setOpen(false)}
+        >
+            <Info
+                size={13}
+                className="text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)] cursor-default"
+            />
+            {open && (
+                <span
+                    role="tooltip"
+                    className="pointer-events-none absolute bottom-full left-0 mb-1 z-50 whitespace-nowrap rounded-lg border border-[var(--color-border-primary)] bg-[var(--color-bg-secondary)] px-3 py-2 text-[11px] font-mono shadow-lg"
+                >
+                    <span className="flex flex-col gap-0.5">
+                        {rows.map(([label, value]) => (
+                            <span key={label} className="flex justify-between gap-4">
+                                <span className="text-[var(--color-text-tertiary)]">{label}</span>
+                                <span className="text-[var(--color-text-secondary)]">{value}</span>
+                            </span>
+                        ))}
+                    </span>
+                </span>
+            )}
+        </span>
+    );
+}
+
 const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRegenerate, onSaveAsFact, showTimestamp, genStats }: { message: Message, index: number, onCopy: any, onEdit: any, onDelete: any, onRegenerate: any, onSaveAsFact?: (id: string) => void, showTimestamp: boolean, genStats?: StreamStatsEvent }) => {
     const [isExpanded, setIsExpanded] = useState(m.role !== "tool");
     const [showRaw, setShowRaw] = useState(false);
@@ -2464,12 +2511,7 @@ const ChatMessage = memo(({ message: m, index: i, onCopy, onEdit, onDelete, onRe
                             </span>
                         )}
                         {m.role === "assistant" && genStats && (
-                            <span
-                                className="text-[var(--color-text-tertiary)] text-[11px] font-mono mr-1"
-                                title={`${genStats.total_tokens} tokens in ${(genStats.duration_ms / 1000).toFixed(1)}s`}
-                            >
-                                {genStats.tokens_per_second.toFixed(1)} tok/s
-                            </span>
+                            <GenerationInfo stats={genStats} />
                         )}
                         <button
                             onClick={() => setShowRaw(!showRaw)}
