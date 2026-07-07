@@ -138,6 +138,8 @@ struct StreamStatsEvent {
     tokens_per_second: f64,
     total_tokens: usize,
     duration_ms: u64,
+    model: String,
+    provider: String,
 }
 
 #[derive(serde::Serialize)]
@@ -1221,6 +1223,8 @@ async fn send_message(
                         tokens_per_second,
                         total_tokens: token_count,
                         duration_ms,
+                        model: model.clone(),
+                        provider: provider_id.clone(),
                     },
                 );
             }
