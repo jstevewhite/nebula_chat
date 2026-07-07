@@ -254,6 +254,19 @@ pub struct Settings {
     /// `r.jina.ai`) plus an optional path prefix (`storage.googleapis.com/bucket/`).
     #[serde(default = "default_image_proxy_allowlist")]
     pub image_proxy_allowlist: Vec<String>,
+
+    /// Master toggle for importing instruction skills from Claude Code's
+    /// `~/.claude/skills/`. Default false — while off, Nebula never scans or
+    /// watches `~/.claude`.
+    #[serde(default = "default_false_bool")]
+    pub import_claude_skills: bool,
+
+    /// Per-skill overrides for imported Claude skills, keyed by skill slug
+    /// (directory name). Presence = explicit user choice; absence = use the
+    /// classification heuristic's default. Stored as deviations only so the map
+    /// survives skills appearing/disappearing and heuristic changes.
+    #[serde(default)]
+    pub claude_skill_overrides: std::collections::HashMap<String, bool>,
 }
 
 /// Jina's reader screenshots are served as signed Google Cloud Storage URLs
@@ -756,6 +769,27 @@ mod tests {
 
     fn jina_list() -> Vec<String> {
         default_image_proxy_allowlist()
+    }
+
+    #[test]
+    fn settings_default_claude_import_fields() {
+        // An older settings.json with none of the new fields must load with
+        // import disabled and no overrides.
+        let json = r#"{ "providers": {}, "mcp_servers": {} }"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert!(!s.import_claude_skills);
+        assert!(s.claude_skill_overrides.is_empty());
+    }
+
+    #[test]
+    fn settings_roundtrip_claude_import_fields() {
+        let mut s = Settings::default();
+        s.import_claude_skills = true;
+        s.claude_skill_overrides.insert("brainstorming".into(), false);
+        let json = serde_json::to_string(&s).unwrap();
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert!(back.import_claude_skills);
+        assert_eq!(back.claude_skill_overrides.get("brainstorming"), Some(&false));
     }
 
     #[test]

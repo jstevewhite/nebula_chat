@@ -15,6 +15,23 @@ interface Skill extends SkillSummary {
     body: string;
 }
 
+interface ClaudeSkillEntry {
+    slug: string;
+    name: string;
+    description: string;
+    heuristic_default: boolean;
+    effective_enabled: boolean;
+    shadowed_by_native: boolean;
+}
+
+// Minimal shape of the parts of Settings this component reads/writes. The
+// backend's save_settings takes the full Settings object, so we load it whole,
+// mutate these fields, and save it back to avoid clobbering other settings.
+type Settings = Record<string, unknown> & {
+    import_claude_skills?: boolean;
+    claude_skill_overrides?: Record<string, boolean>;
+};
+
 export default function SkillsSettings() {
     const [skills, setSkills] = useState<SkillSummary[]>([]);
     const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
@@ -25,6 +42,8 @@ export default function SkillsSettings() {
     const [body, setBody] = useState("");
     const [builtIn, setBuiltIn] = useState(false);
     const [status, setStatus] = useState("");
+    const [importClaude, setImportClaude] = useState(false);
+    const [claudeSkills, setClaudeSkills] = useState<ClaudeSkillEntry[]>([]);
 
     const loadSkills = async () => {
         try {
@@ -35,18 +54,76 @@ export default function SkillsSettings() {
         }
     };
 
+    const loadClaudeImport = async () => {
+        try {
+            const settings = await invoke<Settings>("get_settings");
+            setImportClaude(!!settings.import_claude_skills);
+            if (settings.import_claude_skills) {
+                setClaudeSkills(await invoke<ClaudeSkillEntry[]>("list_claude_skills"));
+            } else {
+                setClaudeSkills([]);
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
     useEffect(() => {
         loadSkills();
+        loadClaudeImport();
         // The backend FS watcher emits `skills-updated` whenever a file under
-        // skills/ changes (debounced). Refresh the list so vim/git-pull edits
-        // surface here without a manual reload.
+        // skills/ (or, when enabled, ~/.claude/skills) changes, and after the
+        // import toggle/overrides are saved. Refresh both views.
         const unlisten = listen("skills-updated", () => {
             loadSkills();
+            loadClaudeImport();
         });
         return () => {
             unlisten.then((fn) => fn());
         };
     }, []);
+
+    const persistSettings = async (mutate: (s: Settings) => void) => {
+        const settings = await invoke<Settings>("get_settings");
+        mutate(settings);
+        await invoke("save_settings", { settings });
+        // save_settings emits skills-updated, which triggers loadClaudeImport.
+    };
+
+    const handleToggleImport = async () => {
+        const next = !importClaude;
+        setImportClaude(next); // optimistic
+        try {
+            await persistSettings((s) => {
+                s.import_claude_skills = next;
+            });
+        } catch (e) {
+            console.error(e);
+            setImportClaude(!next); // revert on failure
+        }
+    };
+
+    const handleToggleClaudeSkill = async (entry: ClaudeSkillEntry) => {
+        if (entry.shadowed_by_native) return;
+        const next = !entry.effective_enabled;
+        // Optimistic: flip the row immediately; the skills-updated reload reconciles.
+        setClaudeSkills((prev) =>
+            prev.map((s) => (s.slug === entry.slug ? { ...s, effective_enabled: next } : s))
+        );
+        try {
+            await persistSettings((s) => {
+                const overrides = { ...(s.claude_skill_overrides ?? {}) };
+                overrides[entry.slug] = next;
+                s.claude_skill_overrides = overrides;
+            });
+        } catch (e) {
+            console.error(e);
+            // Revert on failure.
+            setClaudeSkills((prev) =>
+                prev.map((s) => (s.slug === entry.slug ? { ...s, effective_enabled: !next } : s))
+            );
+        }
+    };
 
     const handleSelect = async (sum: SkillSummary) => {
         try {
@@ -151,6 +228,68 @@ export default function SkillsSettings() {
     const slugDisabled = selectedSlug !== null; // can't rename in place
 
     return (
+      <div className="space-y-4">
+        {/* Claude Code skills import */}
+        <div className="border border-[var(--color-border-primary)] rounded-xl bg-[var(--color-bg-secondary)] p-4 space-y-3">
+            <label className="flex items-center justify-between gap-3 cursor-pointer">
+                <span>
+                    <span className="font-bold text-sm text-[var(--color-text-primary)]">
+                        Import skills from Claude Code
+                    </span>
+                    <span className="block text-xs text-[var(--color-text-tertiary)] font-mono">
+                        ~/.claude/skills
+                    </span>
+                </span>
+                <input
+                    type="checkbox"
+                    checked={importClaude}
+                    onChange={handleToggleImport}
+                    className="h-4 w-4 shrink-0"
+                />
+            </label>
+
+            {importClaude && (
+                <div className="space-y-1 max-h-48 overflow-y-auto pt-1 border-t border-[var(--color-border-secondary)]">
+                    {claudeSkills.length === 0 && (
+                        <div className="text-center text-[var(--color-text-tertiary)] text-xs py-6">
+                            No Claude skills found in ~/.claude/skills.
+                        </div>
+                    )}
+                    {claudeSkills.map((c) => (
+                        <label
+                            key={c.slug}
+                            className={`flex items-start gap-2 p-2 rounded text-sm ${
+                                c.shadowed_by_native ? "opacity-50" : "hover:bg-[var(--color-bg-tertiary)] cursor-pointer"
+                            }`}
+                        >
+                            <input
+                                type="checkbox"
+                                checked={c.effective_enabled}
+                                disabled={c.shadowed_by_native}
+                                onChange={() => handleToggleClaudeSkill(c)}
+                                className="h-4 w-4 mt-0.5 shrink-0"
+                            />
+                            <span className="min-w-0">
+                                <span className="flex items-center gap-2">
+                                    <span className="truncate text-[var(--color-text-secondary)]">{c.name}</span>
+                                    <span className="shrink-0 text-[9px] uppercase tracking-wider bg-blue-500/20 text-blue-300 px-1 rounded">
+                                        from Claude Code
+                                    </span>
+                                </span>
+                                <span className="block text-xs text-[var(--color-text-tertiary)] truncate">
+                                    {c.shadowed_by_native
+                                        ? "Shadowed by a native skill"
+                                        : !c.heuristic_default && !c.effective_enabled
+                                        ? "Looks like it needs scripts — off by default"
+                                        : c.description}
+                                </span>
+                            </span>
+                        </label>
+                    ))}
+                </div>
+            )}
+        </div>
+
         <div className="flex h-[500px] border border-[var(--color-border-primary)] rounded-xl overflow-hidden bg-[var(--color-bg-secondary)]">
             {/* Sidebar List */}
             <div className="w-1/3 border-r border-[var(--color-border-primary)] flex flex-col">
@@ -278,5 +417,6 @@ export default function SkillsSettings() {
                 )}
             </div>
         </div>
+          </div>
     );
 }

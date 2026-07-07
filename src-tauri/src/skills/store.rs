@@ -83,7 +83,115 @@ pub fn read_skill(path: &Path, built_in_flag: bool) -> Result<Skill> {
         body: body.trim_start_matches('\n').to_string(),
         built_in: built_in_flag || front.built_in,
         path: path.to_path_buf(),
+        origin: super::api::SkillOrigin::Native,
     })
+}
+
+/// Accepts a YAML scalar string OR a sequence of strings (Claude's
+/// `allowed-tools` appears in both shapes across skills).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum StringOrVec {
+    One(String),
+    Many(Vec<String>),
+}
+
+fn normalize_tools(v: Option<StringOrVec>) -> Vec<String> {
+    match v {
+        None => Vec::new(),
+        Some(StringOrVec::One(s)) => s
+            .split(',')
+            .map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty())
+            .collect(),
+        Some(StringOrVec::Many(xs)) => xs
+            .into_iter()
+            .map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty())
+            .collect(),
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct ClaudeFrontmatter {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default, rename = "allowed-tools")]
+    allowed_tools: Option<StringOrVec>,
+}
+
+/// Parse one `<dir>/SKILL.md` into a `Skill` (origin = Claude) plus its
+/// normalized `allowed-tools` list. `slug` must be a valid slug and is the
+/// directory name as it appears in the scanned dir (the symlink/entry name),
+/// not derived from `skill_dir` (which may be a canonicalized symlink target).
+pub fn read_claude_skill(skill_dir: &Path, slug: &str) -> Result<(Skill, Vec<String>)> {
+    if !super::is_valid_slug(slug) {
+        return Err(anyhow!("invalid slug '{slug}'"));
+    }
+
+    let md_path = skill_dir.join("SKILL.md");
+    let raw = fs::read_to_string(&md_path).with_context(|| format!("read {}", md_path.display()))?;
+    let (front_str, body) = split_frontmatter(&raw);
+    let front: ClaudeFrontmatter = if front_str.trim().is_empty() {
+        ClaudeFrontmatter::default()
+    } else {
+        serde_yaml::from_str(front_str)
+            .with_context(|| format!("parse frontmatter in {}", md_path.display()))?
+    };
+
+    if front.description.trim().is_empty() {
+        return Err(anyhow!("claude skill {slug} is missing a description"));
+    }
+    let name = if front.name.is_empty() {
+        slug.to_string()
+    } else {
+        front.name.clone()
+    };
+    let allowed_tools = normalize_tools(front.allowed_tools);
+
+    let skill = Skill {
+        slug: slug.to_string(),
+        name,
+        description: front.description,
+        body: body.trim_start_matches('\n').to_string(),
+        built_in: false,
+        path: md_path,
+        origin: super::api::SkillOrigin::Claude,
+    };
+    Ok((skill, allowed_tools))
+}
+
+/// Scan `dir` (e.g. `~/.claude/skills/`) for `<name>/SKILL.md` skills. Follows
+/// symlinks via canonicalize. Unparseable entries are logged and skipped so a
+/// single bad skill can't break discovery. Returns each skill with its
+/// `allowed-tools` list.
+pub fn scan_claude_skills(dir: &Path) -> Vec<(Skill, Vec<String>)> {
+    let mut out = Vec::new();
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return out, // missing/unreadable dir → empty, non-fatal
+    };
+    for entry in entries.flatten() {
+        let slug = entry.file_name().to_string_lossy().into_owned();
+        // Canonicalize to resolve symlinks (most of ~/.claude/skills are links).
+        let path = match fs::canonicalize(entry.path()) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!("skip claude skill {}: {e}", entry.path().display());
+                continue;
+            }
+        };
+        if !path.is_dir() || !path.join("SKILL.md").is_file() {
+            continue;
+        }
+        match read_claude_skill(&path, &slug) {
+            Ok(found) => out.push(found),
+            Err(e) => tracing::warn!("skip claude skill {}: {e}", path.display()),
+        }
+    }
+    out
 }
 
 pub fn write_skill(
@@ -147,6 +255,40 @@ fn split_frontmatter(raw: &str) -> (&str, &str) {
         from = line_end + 1;
     }
     ("", raw)
+}
+
+/// Best-effort classification of a Claude skill as a self-sufficient
+/// instruction skill (default ON) vs a script/subagent launcher Nebula can't
+/// run (default OFF). Deliberately conservative toward inclusion: only a strong
+/// "this is a doer" signal flips it off. The Settings checklist is the user's
+/// authoritative override.
+pub fn claude_skill_default_enabled(body: &str, allowed_tools: &[String]) -> bool {
+    const EXEC_TOOLS: [&str; 5] = ["bash", "write", "edit", "shell", "execute"];
+    if allowed_tools.iter().any(|t| {
+        let t = t.to_ascii_lowercase();
+        EXEC_TOOLS.iter().any(|e| t.contains(e))
+    }) {
+        return false;
+    }
+
+    let lower = body.to_lowercase();
+
+    const SUBAGENT_MARKERS: [&str; 4] =
+        ["dispatch a subagent", "spawn ", "task tool", "subagent"];
+    if SUBAGENT_MARKERS.iter().any(|m| lower.contains(m)) {
+        return false;
+    }
+
+    // Script-execution imperative = a run verb AND a script extension present.
+    const RUN_VERBS: [&str; 4] = ["run ", "python ", "bash ", "./"];
+    const SCRIPT_EXT: [&str; 3] = [".py", ".sh", ".js"];
+    let mentions_script = SCRIPT_EXT.iter().any(|x| lower.contains(x));
+    let has_run_verb = RUN_VERBS.iter().any(|v| lower.contains(v));
+    if mentions_script && has_run_verb {
+        return false;
+    }
+
+    true
 }
 
 #[cfg(test)]
@@ -227,5 +369,126 @@ mod tests {
         assert_eq!(all.len(), 2);
         let two = all.iter().find(|s| s.slug == "two").unwrap();
         assert!(two.built_in);
+    }
+
+    #[test]
+    fn read_skill_defaults_origin_to_native() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("x.md");
+        fs::write(&path, "---\ndescription: d\n---\nbody\n").unwrap();
+        let s = read_skill(&path, false).unwrap();
+        assert_eq!(s.origin, crate::skills::SkillOrigin::Native);
+    }
+
+    fn write_claude_skill(root: &Path, name: &str, frontmatter: &str, body: &str) {
+        let d = root.join(name);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("SKILL.md"), format!("---\n{frontmatter}\n---\n{body}\n")).unwrap();
+    }
+
+    #[test]
+    fn scan_claude_skills_reads_dir_based_skill() {
+        let root = TempDir::new().unwrap();
+        write_claude_skill(root.path(), "brainstorming", "name: Brainstorming\ndescription: explore ideas", "Do the thing.");
+        let found = scan_claude_skills(root.path());
+        assert_eq!(found.len(), 1);
+        let (skill, tools) = &found[0];
+        assert_eq!(skill.slug, "brainstorming");
+        assert_eq!(skill.name, "Brainstorming");
+        assert_eq!(skill.description, "explore ideas");
+        assert!(skill.body.contains("Do the thing"));
+        assert_eq!(skill.origin, crate::skills::SkillOrigin::Claude);
+        assert!(!skill.built_in);
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn scan_claude_skills_skips_dirs_without_skill_md() {
+        let root = TempDir::new().unwrap();
+        fs::create_dir_all(root.path().join("empty")).unwrap();
+        write_claude_skill(root.path(), "ok", "description: d", "b");
+        let found = scan_claude_skills(root.path());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0.slug, "ok");
+    }
+
+    #[test]
+    fn scan_claude_skills_skips_missing_description() {
+        let root = TempDir::new().unwrap();
+        write_claude_skill(root.path(), "nodesc", "name: No Desc", "b");
+        assert!(scan_claude_skills(root.path()).is_empty());
+    }
+
+    #[test]
+    fn scan_claude_skills_parses_allowed_tools_list_and_csv() {
+        let root = TempDir::new().unwrap();
+        write_claude_skill(root.path(), "listy", "description: d\nallowed-tools:\n  - Read\n  - Bash", "b");
+        write_claude_skill(root.path(), "csvy", "description: d\nallowed-tools: Read, Bash", "b");
+        let mut found = scan_claude_skills(root.path());
+        found.sort_by(|a, b| a.0.slug.cmp(&b.0.slug));
+        assert_eq!(found[0].1, vec!["Read".to_string(), "Bash".to_string()]); // csvy
+        assert_eq!(found[1].1, vec!["Read".to_string(), "Bash".to_string()]); // listy
+    }
+
+    #[test]
+    fn scan_claude_skills_missing_dir_is_empty() {
+        let root = TempDir::new().unwrap();
+        let missing = root.path().join("nope");
+        assert!(scan_claude_skills(&missing).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_claude_skills_slug_from_symlink_name_not_target() {
+        // Target dir has a different basename than the symlink that points to it.
+        let target_root = TempDir::new().unwrap();
+        write_claude_skill(target_root.path(), "target-basename", "description: d", "b");
+        let scan_root = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(
+            target_root.path().join("target-basename"),
+            scan_root.path().join("nice-slug"),
+        )
+        .unwrap();
+        let found = scan_claude_skills(scan_root.path());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0.slug, "nice-slug");
+    }
+
+    #[test]
+    fn heuristic_instruction_skill_defaults_on() {
+        let body = "Help the user explore ideas one question at a time. Present a design and get approval.";
+        assert!(claude_skill_default_enabled(body, &[]));
+    }
+
+    #[test]
+    fn heuristic_exec_allowed_tools_defaults_off() {
+        for tool in ["Bash", "Write", "Edit", "shell", "execute"] {
+            assert!(
+                !claude_skill_default_enabled("guidance", &[tool.into()]),
+                "exec tool {tool} should flip default OFF"
+            );
+        }
+        // A non-exec tool alone must NOT flip it off.
+        assert!(claude_skill_default_enabled("guidance", &["Read".into()]));
+    }
+
+    #[test]
+    fn heuristic_script_launcher_defaults_off() {
+        let body = "Run the sanitize.py script: `python sanitize.py input.txt`.";
+        assert!(!claude_skill_default_enabled(body, &[]));
+    }
+
+    #[test]
+    fn heuristic_subagent_skill_defaults_off() {
+        let body = "First, dispatch a subagent to gather context, then synthesize.";
+        assert!(!claude_skill_default_enabled(body, &[]));
+    }
+
+    #[test]
+    fn heuristic_bare_scripts_dir_mention_stays_on() {
+        // Mentioning a .md companion or having a scripts/ dir is NOT a run
+        // imperative — must stay ON (this is the `brainstorming` case).
+        let body = "If they accept, read visual-companion.md for the detailed guide.";
+        assert!(claude_skill_default_enabled(body, &[]));
     }
 }
